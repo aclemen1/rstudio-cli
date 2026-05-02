@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, env, exec, raw, schema_cmd, term};
+use crate::commands::{console, editor, env, exec, raw, schema_cmd, term, view};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -69,6 +69,10 @@ enum Command {
     #[command(subcommand)]
     Env(env::EnvCmd),
 
+    /// Panneaux Viewer / Files / Markers (HTML, navigation, feedback linter).
+    #[command(subcommand)]
+    View(view::ViewCmd),
+
     /// Catalogue auto-descriptif des commandes (drill-down 3 niveaux).
     Schema(schema_cmd::SchemaCmd),
 
@@ -131,6 +135,11 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
             env::run(&cmd, &rpc)
+        }
+        Command::View(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            view::run(&cmd, &rpc)
         }
         Command::Schema(cmd) => schema_cmd::run(&cmd),
         Command::Rpc(cmd) => {
