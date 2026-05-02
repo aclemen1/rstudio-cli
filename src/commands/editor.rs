@@ -312,6 +312,212 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
+        name: "new",
+        summary: "Create a new untitled document with given text and type.",
+        description: "Wraps rstudioapi::documentNew(text, type, position, execute). Returns \
+                      the new document's id. Useful to spawn a scratch buffer programmatically.",
+        params: &[
+            ParamSpec {
+                name: "text",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Initial contents of the new document.",
+            },
+            ParamSpec {
+                name: "--type",
+                kind: ParamKind::Enum,
+                required: false,
+                default: Some("r"),
+                allowed: &["r", "rmarkdown", "sql"],
+                description: "Document type.",
+            },
+            ParamSpec {
+                name: "--execute",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "If true, the text is executed in the console after the document is created.",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor new 'plot(rnorm(100))' --type r --execute",
+            explanation: "Create a new R document with that text, then execute it.",
+        }],
+        returns: "{id: string, type: string}",
+        errors: &[],
+        rstudioapi_fn: Some("documentNew"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "active-id",
+        summary: "Return the id of the active document.",
+        description: "Wraps rstudioapi::documentId(allowConsole). When --no-console is \
+                      passed, returns null if the active document is the R console.",
+        params: &[ParamSpec {
+            name: "--no-console",
+            kind: ParamKind::Bool,
+            required: false,
+            default: Some("false"),
+            allowed: &[],
+            description: "Exclude the R console from the result (return null if it's active).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor active-id",
+            explanation: "Returns the id of whatever has focus (Source pane tab or '#console').",
+        }],
+        returns: "{id: string|null}",
+        errors: &[],
+        rstudioapi_fn: Some("documentId"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "path",
+        summary: "Return the path of a document by id (or the active one if --id absent).",
+        description: "Wraps rstudioapi::documentPath(id). Returns null for unsaved documents.",
+        params: &[ParamSpec {
+            name: "--id",
+            kind: ParamKind::String,
+            required: false,
+            default: None,
+            allowed: &[],
+            description: "Document id (defaults to the active document).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor path --id 719092EF",
+            explanation: "Returns {path: '~/projects/.../Cargo.toml'}.",
+        }],
+        returns: "{path: string|null}",
+        errors: &[],
+        rstudioapi_fn: Some("documentPath"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "set-contents",
+        summary: "Replace the entire contents of a document (DESTRUCTIVE).",
+        description: "Wraps rstudioapi::setDocumentContents(text, id). The full buffer \
+                      is replaced; previous unsaved content is lost. If --id is omitted \
+                      the active document is targeted.",
+        params: &[
+            ParamSpec {
+                name: "text",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "New full content of the document.",
+            },
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Target document id (defaults to active).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor set-contents 'x <- 1\\n' --id 947E7AED",
+            explanation: "Replace the full content of doc 947E7AED.",
+        }],
+        returns: "void",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Unknown id.",
+        }],
+        rstudioapi_fn: Some("setDocumentContents"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "modify-range",
+        summary: "Replace text within a range (insert/delete/replace).",
+        description: "Wraps rstudioapi::modifyRange(location, text, id). The given range \
+                      is replaced by `text`. If `text` is empty the range is deleted; if \
+                      the range is zero-width (start == end), `text` is inserted at that \
+                      position. Range format: 'L1:C1-L2:C2' (1-based, inclusive of start, \
+                      exclusive of end as per RStudio convention).",
+        params: &[
+            ParamSpec {
+                name: "range",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Range to replace, format 'L1:C1-L2:C2'.",
+            },
+            ParamSpec {
+                name: "text",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Replacement text.",
+            },
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Target document id (defaults to active).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor modify-range 1:1-1:6 'NEW' --id 947E7AED",
+            explanation: "Replace columns 1-5 of line 1 with 'NEW'.",
+        }],
+        returns: "void",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Invalid range format.",
+        }],
+        rstudioapi_fn: Some("modifyRange"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "set-cursor",
+        summary: "Move the cursor to a position in a document.",
+        description: "Wraps rstudioapi::setCursorPosition(position, id). The cursor moves \
+                      with no selection. Same as `editor select L:C` but more explicit.",
+        params: &[
+            ParamSpec {
+                name: "position",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Position 'L:C', 1-based.",
+            },
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Target document id (defaults to active).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor set-cursor 10:1",
+            explanation: "Move the cursor to line 10, column 1, in the active document.",
+        }],
+        returns: "void",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Invalid position format.",
+        }],
+        rstudioapi_fn: Some("setCursorPosition"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
         name: "list",
         summary: "List every document currently open in the Source pane.",
         description: "RStudio's rsession exposes no RPC method to enumerate open documents \
@@ -451,6 +657,48 @@ pub enum EditorCmd {
     SaveAll,
     /// List every document currently open in the Source pane.
     List,
+    /// Create a new untitled document.
+    New {
+        text: String,
+        /// Document type.
+        #[arg(long, default_value = "r")]
+        r#type: String,
+        /// Execute the text in the console after creation.
+        #[arg(long)]
+        execute: bool,
+    },
+    /// Return the id of the active document.
+    ActiveId {
+        /// Exclude the R console (return null if it's active).
+        #[arg(long)]
+        no_console: bool,
+    },
+    /// Return the path of a document by id (or the active one).
+    Path {
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Replace the entire contents of a document.
+    SetContents {
+        text: String,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Replace text within a range.
+    ModifyRange {
+        /// Range 'L1:C1-L2:C2'.
+        range: String,
+        text: String,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Move the cursor to a position.
+    SetCursor {
+        /// Position 'L:C'.
+        position: String,
+        #[arg(long)]
+        id: Option<String>,
+    },
 }
 
 pub fn run(
@@ -479,6 +727,16 @@ pub fn run(
         EditorCmd::Save { id } => save(rpc, id.as_deref()),
         EditorCmd::SaveAll => save_all(rpc),
         EditorCmd::List => list_open(rpc, session),
+        EditorCmd::New {
+            text,
+            r#type,
+            execute,
+        } => new_doc(rpc, text, r#type, *execute),
+        EditorCmd::ActiveId { no_console } => active_id(rpc, *no_console),
+        EditorCmd::Path { id } => path_of(rpc, id.as_deref()),
+        EditorCmd::SetContents { text, id } => set_contents(rpc, text, id.as_deref()),
+        EditorCmd::ModifyRange { range, text, id } => modify_range(rpc, range, text, id.as_deref()),
+        EditorCmd::SetCursor { position, id } => set_cursor(rpc, position, id.as_deref()),
     }
 }
 
@@ -677,6 +935,127 @@ fn save(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliError
 
 fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     r_eval::run_silent(rpc, ".rs.api.documentSaveAll()")?;
+    Ok(None)
+}
+
+fn new_doc(
+    rpc: &RpcClient<'_>,
+    text: &str,
+    doc_type: &str,
+    execute: bool,
+) -> Result<Option<Value>, CliError> {
+    if !["r", "rmarkdown", "sql"].contains(&doc_type) {
+        return Err(CliError::user(format!(
+            "invalid --type '{doc_type}'. Expected: r, rmarkdown, sql."
+        )));
+    }
+    let exec_arg = if execute { "TRUE" } else { "FALSE" };
+    let r_code = format!(
+        r#"local({{
+  .__id <- rstudioapi::documentNew(text = {text_q}, type = {type_q}, execute = {exec_arg})
+  cat(jsonlite::toJSON(list(id = .__id, type = {type_q}), auto_unbox = TRUE, null = "null"))
+}})"#,
+        text_q = r_quote(text),
+        type_q = r_quote(doc_type),
+    );
+    let raw = r_eval::run(rpc, &r_code)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("editor new: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn active_id(rpc: &RpcClient<'_>, no_console: bool) -> Result<Option<Value>, CliError> {
+    let allow_console = if no_console { "FALSE" } else { "TRUE" };
+    let r_code = format!(
+        r#"local({{
+  .__id <- rstudioapi::documentId(allowConsole = {allow_console})
+  if (is.null(.__id)) cat("{{\"id\":null}}")
+  else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
+}})"#
+    );
+    let raw = r_eval::run(rpc, &r_code)?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("editor active-id: invalid JSON: {e}; raw: {raw}"))
+    })?;
+    Ok(Some(parsed))
+}
+
+fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliError> {
+    let id_arg = match id {
+        Some(s) => r_quote(s),
+        None => "NULL".into(),
+    };
+    let r_code = format!(
+        r#"local({{
+  .__p <- rstudioapi::documentPath({id_arg})
+  if (is.null(.__p)) cat("{{\"path\":null}}")
+  else cat(jsonlite::toJSON(list(path = .__p), auto_unbox = TRUE))
+}})"#
+    );
+    let raw = r_eval::run(rpc, &r_code)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("editor path: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn set_contents(
+    rpc: &RpcClient<'_>,
+    text: &str,
+    id: Option<&str>,
+) -> Result<Option<Value>, CliError> {
+    let id_arg = match id {
+        Some(s) => r_quote(s),
+        None => "NULL".into(),
+    };
+    let r_code = format!(
+        "rstudioapi::setDocumentContents(text = {}, id = {id_arg})",
+        r_quote(text)
+    );
+    r_eval::run_silent(rpc, &r_code)?;
+    Ok(None)
+}
+
+fn modify_range(
+    rpc: &RpcClient<'_>,
+    range: &str,
+    text: &str,
+    id: Option<&str>,
+) -> Result<Option<Value>, CliError> {
+    let ((l1, c1), (l2, c2)) = parse_range(range)
+        .ok_or_else(|| CliError::user(format!("invalid range '{range}'. Expected 'L1:C1-L2:C2'.")))?;
+    let id_arg = match id {
+        Some(s) => r_quote(s),
+        None => "NULL".into(),
+    };
+    let r_code = format!(
+        "rstudioapi::modifyRange(\
+           location = rstudioapi::document_range(\
+             rstudioapi::document_position({l1}L, {c1}L), \
+             rstudioapi::document_position({l2}L, {c2}L)), \
+           text = {}, id = {id_arg})",
+        r_quote(text)
+    );
+    r_eval::run_silent(rpc, &r_code)?;
+    Ok(None)
+}
+
+fn set_cursor(
+    rpc: &RpcClient<'_>,
+    position: &str,
+    id: Option<&str>,
+) -> Result<Option<Value>, CliError> {
+    let (line, col) = parse_line_col(position)
+        .ok_or_else(|| CliError::user(format!("invalid position '{position}'. Expected 'L:C'.")))?;
+    let id_arg = match id {
+        Some(s) => r_quote(s),
+        None => "NULL".into(),
+    };
+    let r_code = format!(
+        "rstudioapi::setCursorPosition(\
+           position = rstudioapi::document_position({line}L, {col}L), \
+           id = {id_arg})"
+    );
+    r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }
 
