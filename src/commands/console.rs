@@ -71,7 +71,6 @@ pub fn run(
 }
 
 
-
 fn history(rpc: &RpcClient<'_>, limit: u32) -> Result<Option<Value>, CliError> {
     if limit == 0 {
         return Err(CliError::user("--limit must be > 0"));

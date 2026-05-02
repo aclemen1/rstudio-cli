@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, exec, raw};
+use crate::commands::{console, editor, exec, raw, term};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -61,6 +61,10 @@ enum Command {
     #[command(subcommand)]
     Console(console::ConsoleCmd),
 
+    /// Manipulation du panneau Terminal RStudio (shells live).
+    #[command(subcommand)]
+    Term(term::TermCmd),
+
     /// Appel JSON-RPC brut (échappatoire pour méthodes non encore wrappées).
     Rpc(raw::RpcCmd),
 
@@ -110,6 +114,11 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
             console::run(&cmd, &rpc, &session)
+        }
+        Command::Term(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            term::run(&cmd, &rpc)
         }
         Command::Rpc(cmd) => {
             let session = Session::detect(overrides)?;
