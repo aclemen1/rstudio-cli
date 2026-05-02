@@ -40,6 +40,11 @@ Run `rstudio schema` for the auto-generated catalog of every action.
 
 ## AI-native pattern
 
+This CLI follows the [AI-native CLI](https://github.com/aclemen1/ai-native-cli)
+pattern — embedded skill, schema drill-down, JSON envelope. The
+design rationale and the wider landscape (Google Workspace CLI,
+Linearis, prior writings on the term) live in the spec.
+
 The CLI ships an embedded skill markdown. An LLM agent loads only the
 skill, then discovers the surface on demand:
 
