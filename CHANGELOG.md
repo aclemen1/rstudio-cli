@@ -4,6 +4,42 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-02
+
+Polishes the output contract for the three meta-CLI commands so they're
+human-friendly out of the box without compromising the AI-native JSON
+envelope used by every action command.
+
+### Changed — meta-CLI commands default to plain text
+
+- `rstudio version` defaults to plain `0.5.1\n` instead of the JSON
+  envelope. Pass `--format json` to opt back into `{"ok":true,"result":
+  {"version":"0.5.1"}}`.
+- `rstudio skill show` defaults to raw markdown stdout (pipeable into
+  `less`, `glow`, etc.). The trailing `{"ok":true}` envelope is gone.
+  Pass `--format json` to wrap the markdown in the envelope.
+- `rstudio skill install` defaults to a one-line human status:
+  `✓ created  ./path/to/SKILL.md (v0.5.1)` (or `updated` / `unchanged`).
+  The `✓`/`✗` marks and ANSI colors light up only when stdout/stderr is
+  a TTY; piped output dégrades gracefully to ASCII `OK`/`FAIL`. Pass
+  `--format json` for the structured `{path, action, version}` payload
+  scripts may want.
+
+### Changed — error output in text mode
+
+- Errors in `--format text` now print `✗ <message>` on stderr (TTY-aware,
+  same color rule). Previously: `error (UserError): <message>`. The JSON
+  envelope contract on stderr/stdout for `--format json` is unchanged
+  (still includes `kind` and `code`).
+
+### Implementation note
+
+The global `--format` flag changed from a `default_value = "json"` to an
+unset `Option<Format>`. Action commands resolve `None` to JSON (the
+AI-native default), the three meta-CLI commands resolve it to text. No
+breaking change for explicit `--format json`/`--format text` callers,
+and agents that don't pass `--format` still get JSON for every action.
+
 ## [0.5.0] — 2026-05-02
 
 Adds RStudio Desktop support on macOS, ships the Homebrew install path, and

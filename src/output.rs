@@ -1,3 +1,4 @@
+use std::io::{IsTerminal, stderr, stdout};
 use std::str::FromStr;
 
 use serde_json::{Value, json};
@@ -19,6 +20,32 @@ impl FromStr for Format {
             "text" => Ok(Self::Text),
             other => Err(format!("unknown format: {other} (expected: json|text)")),
         }
+    }
+}
+
+/// Outcome of a successful command dispatch.
+///
+/// `Wrapped` is the AI-native default contract: a JSON envelope
+/// `{"ok": true, "result": ...}` (or its text-mode pretty-printed
+/// equivalent) used by every command that talks to the rsession.
+///
+/// `Adaptive` is reserved for "meta-CLI" commands that don't talk to
+/// the rsession (`version`, `skill show`, `skill install`): JSON mode
+/// keeps the envelope, text mode prints `text` raw — so `rstudio
+/// version` outputs `0.5.0` and `rstudio skill show` outputs the
+/// markdown clean enough to pipe.
+pub enum Reply {
+    Wrapped(Option<Value>),
+    Adaptive { value: Value, text: String },
+}
+
+pub fn print_reply(reply: Reply, format: Option<Format>) {
+    match reply {
+        Reply::Wrapped(value) => print_ok(value, format.unwrap_or(Format::Json)),
+        Reply::Adaptive { value, text } => match format.unwrap_or(Format::Text) {
+            Format::Json => print_ok(Some(value), Format::Json),
+            Format::Text => print!("{text}"),
+        },
     }
 }
 
@@ -49,7 +76,8 @@ pub fn print_err(err: &CliError, format: Format) {
             println!("{}", serde_json::to_string(&envelope).unwrap());
         }
         Format::Text => {
-            eprintln!("error ({:?}): {}", err.kind, err.message);
+            let mark = fail_mark(stderr().is_terminal());
+            eprintln!("{mark} {}", err.message);
         }
     }
 }
@@ -85,4 +113,20 @@ fn print_value_as_text(v: Option<&Value>) {
         }
         Some(other) => println!("{}", serde_json::to_string_pretty(other).unwrap()),
     }
+}
+
+/// Green check mark in ANSI when the target stream is a TTY,
+/// plain ASCII fallback otherwise.
+pub fn ok_mark(tty: bool) -> &'static str {
+    if tty { "\x1b[32m✓\x1b[0m" } else { "OK" }
+}
+
+/// Red cross mark in ANSI when the target stream is a TTY,
+/// plain ASCII fallback otherwise.
+pub fn fail_mark(tty: bool) -> &'static str {
+    if tty { "\x1b[31m✗\x1b[0m" } else { "FAIL" }
+}
+
+pub fn stdout_is_tty() -> bool {
+    stdout().is_terminal()
 }

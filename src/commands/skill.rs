@@ -3,10 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::VERSION;
 use crate::error::CliError;
+use crate::output::{Reply, ok_mark, stdout_is_tty};
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
 const SKILL_NAME: &str = "rstudio";
@@ -101,11 +102,16 @@ pub enum SkillCmd {
     },
 }
 
-pub fn run(cmd: &SkillCmd) -> Result<Option<Value>, CliError> {
+pub fn run(cmd: &SkillCmd) -> Result<Reply, CliError> {
     match cmd {
         SkillCmd::Show => {
-            print!("{}", rendered_template());
-            Ok(None)
+            // Text mode: raw markdown to stdout (pipeable).
+            // JSON mode: envelope wrapping the markdown as a string.
+            let md = rendered_template();
+            Ok(Reply::Adaptive {
+                value: json!(md),
+                text: md,
+            })
         }
         SkillCmd::Install { force, target } => install(*force, target.as_deref()),
     }
@@ -116,7 +122,7 @@ pub fn rendered_template() -> String {
     SKILL_TEMPLATE_RAW.replace(VERSION_PLACEHOLDER, VERSION)
 }
 
-fn install(force: bool, target: Option<&Path>) -> Result<Option<Value>, CliError> {
+fn install(force: bool, target: Option<&Path>) -> Result<Reply, CliError> {
     let skills_dir = match target {
         Some(p) => p.to_path_buf(),
         None => find_or_default_skills_dir()?,
@@ -153,11 +159,17 @@ fn install(force: bool, target: Option<&Path>) -> Result<Option<Value>, CliError
             .map_err(|e| CliError::internal(format!("write {}: {e}", target_file.display())))?;
     }
 
-    Ok(Some(json!({
+    let value = json!({
         "path": target_file.to_string_lossy(),
         "action": action,
         "version": VERSION,
-    })))
+    });
+    let mark = ok_mark(stdout_is_tty());
+    let text = format!(
+        "{mark} {action:<9} {} (v{VERSION})\n",
+        target_file.display()
+    );
+    Ok(Reply::Adaptive { value, text })
 }
 
 fn find_or_default_skills_dir() -> Result<PathBuf, CliError> {

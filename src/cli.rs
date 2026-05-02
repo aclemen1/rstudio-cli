@@ -2,14 +2,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::VERSION;
 use crate::commands::{
     console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, term, ui,
 };
 use crate::error::CliError;
-use crate::output::{Format, print_err, print_ok};
+use crate::output::{Format, Reply, print_err, print_reply};
 use crate::rpc::RpcClient;
 use crate::session::{Mode, Session, SessionOverrides};
 
@@ -55,9 +55,12 @@ struct Cli {
     #[arg(long, global = true)]
     state_path: Option<PathBuf>,
 
-    /// Output format.
-    #[arg(long, global = true, default_value = "json")]
-    format: Format,
+    /// Output format. Defaults to `json` for action commands (the AI-native
+    /// envelope contract), `text` for meta-CLI commands (`version`, `skill
+    /// show`, `skill install`) where plain output is more useful for humans
+    /// and Unix pipelines. Pass `--format json|text` to force one.
+    #[arg(long, global = true)]
+    format: Option<Format>,
 
     #[command(subcommand)]
     command: Command,
@@ -127,18 +130,21 @@ pub fn run() -> ExitCode {
     let format = cli.format;
 
     match dispatch(cli) {
-        Ok(value) => {
-            print_ok(value, format);
+        Ok(reply) => {
+            print_reply(reply, format);
             ExitCode::from(0)
         }
         Err(err) => {
-            print_err(&err, format);
+            // Errors default to JSON: the AI-native contract is uniform,
+            // and bad-arg errors fire before any command-specific default
+            // is known. Explicit --format text still pretty-prints.
+            print_err(&err, format.unwrap_or(Format::Json));
             ExitCode::from(1)
         }
     }
 }
 
-fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
+fn dispatch(cli: Cli) -> Result<Reply, CliError> {
     let mode = match cli.mode.as_str() {
         "auto" => None,
         "server" => Some(Mode::Server),
@@ -161,68 +167,74 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
         secret: cli.secret,
     };
     match cli.command {
-        Command::Version => Ok(Some(json!({ "version": VERSION }))),
+        // Meta-CLI carve-out: text mode prints "0.5.0\n" raw, no envelope.
+        Command::Version => Ok(Reply::Adaptive {
+            value: json!({ "version": VERSION }),
+            text: format!("{VERSION}\n"),
+        }),
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            editor::run(&cmd, &rpc, &session)
+            editor::run(&cmd, &rpc, &session).map(Reply::Wrapped)
         }
         Command::R(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            r::run(&cmd, &rpc)
+            r::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Console(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            console::run(&cmd, &rpc, &session)
+            console::run(&cmd, &rpc, &session).map(Reply::Wrapped)
         }
         Command::Term(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            term::run(&cmd, &rpc)
+            term::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Env(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            env::run(&cmd, &rpc)
+            env::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Pane(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            pane::run(&cmd, &rpc)
+            pane::run(&cmd, &rpc).map(Reply::Wrapped)
         }
+        // Skill returns Reply directly: 'show' is text-raw markdown,
+        // 'install' is human-friendly with ✓/✗ marks.
         Command::Skill(cmd) => skill::run(&cmd),
         Command::Session(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            session::run(&cmd, &rpc)
+            session::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Pref(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            pref::run(&cmd, &rpc)
+            pref::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Job(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            job::run(&cmd, &rpc)
+            job::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Ui(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            ui::run(&cmd, &rpc)
+            ui::run(&cmd, &rpc).map(Reply::Wrapped)
         }
-        Command::Schema(cmd) => schema_cmd::run(&cmd),
+        Command::Schema(cmd) => schema_cmd::run(&cmd).map(Reply::Wrapped),
         Command::Rpc(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            raw::run_rpc(&cmd, &rpc)
+            raw::run_rpc(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Postback(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            raw::run_postback(&cmd, &rpc)
+            raw::run_postback(&cmd, &rpc).map(Reply::Wrapped)
         }
     }
 }
