@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -14,21 +14,24 @@ const RPC_INVALID_CLIENT_ID: i32 = 4;
 
 pub struct RpcClient<'a> {
     session: &'a Session,
-    timeout: Duration,
+    timeout: Cell<Option<Duration>>,
     cached_client_id: RefCell<Option<String>>,
 }
 
 impl<'a> RpcClient<'a> {
     pub fn new(session: &'a Session) -> Self {
-        Self::with_timeout(session, DEFAULT_RPC_TIMEOUT)
-    }
-
-    pub fn with_timeout(session: &'a Session, timeout: Duration) -> Self {
         Self {
             session,
-            timeout,
+            timeout: Cell::new(Some(DEFAULT_RPC_TIMEOUT)),
             cached_client_id: RefCell::new(None),
         }
+    }
+
+    /// Set the read timeout used for subsequent calls. `None` disables the
+    /// timeout entirely — callers must ensure they're prepared to block
+    /// indefinitely. Returns the previous value.
+    pub fn set_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
+        self.timeout.replace(timeout)
     }
 
     fn auth_headers(&self, csrf: &str) -> [(String, String); 4] {
@@ -61,7 +64,7 @@ impl<'a> RpcClient<'a> {
             &path,
             &header_refs,
             body.as_bytes(),
-            self.timeout,
+            self.timeout.get(),
         )
         .map_err(|e| CliError::rpc(0, format!("socket error during postback {cmd}: {e:#}")))?;
 
@@ -138,7 +141,7 @@ impl<'a> RpcClient<'a> {
             &path,
             &header_refs,
             body.as_bytes(),
-            self.timeout,
+            self.timeout.get(),
         )
         .map_err(|e| CliError::rpc(0, format!("socket error during rpc {method}: {e:#}")))?;
 

@@ -27,11 +27,11 @@ pub fn request(
     path: &str,
     headers: &[(&str, &str)],
     body: &[u8],
-    read_timeout: Duration,
+    read_timeout: Option<Duration>,
 ) -> Result<HttpResponse> {
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("connect to {}", socket_path.display()))?;
-    stream.set_read_timeout(Some(read_timeout))?;
+    stream.set_read_timeout(read_timeout)?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     let mut req = Vec::with_capacity(512 + body.len());
