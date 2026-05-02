@@ -17,7 +17,7 @@ WIP, but covers a substantial slice of the IDE :
 
 | category | actions |
 |---|---|
-| `editor` | `open` (non-modal) `edit` (modal R `edit()`) `read` `context` `active-context` `insert` `select` |
+| `editor` | `open` (non-modal) `edit` (modal R `edit()`) `close` `save` `save-all` `read` `context` `active-context` `insert` `select` |
 | `r`      | `exec` (silent) `send` (visible) |
 | `console`| `history` (live) `actions` (snapshot) `context` (live) |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` |

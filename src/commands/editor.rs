@@ -234,6 +234,97 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
+        name: "close",
+        summary: "Close a document by id (Source pane).",
+        description: "Wraps .rs.api.documentClose(id, save). Goes through the C call \
+                      `rs_requestDocumentClose`, which actually unmounts the tab. Distinct \
+                      from the close_document RPC, which only enqueues a UI event that may \
+                      not be applied. --save controls what to do with unsaved changes: \
+                      true = save silently, false = discard, ask = prompt the user (modal).",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Document id (from `editor open` / `editor context`).",
+            },
+            ParamSpec {
+                name: "--save",
+                kind: ParamKind::Enum,
+                required: false,
+                default: Some("true"),
+                allowed: &["true", "false", "ask"],
+                description: "How to handle unsaved changes.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor close 947E7AED",
+                explanation: "Save unsaved changes silently and close.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor close 947E7AED --save false",
+                explanation: "Discard unsaved changes and close.",
+            },
+        ],
+        returns: "{id: string, saved: 'true'|'false'|'ask'}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Unknown id or .rs.api.documentClose error.",
+        }],
+        rstudioapi_fn: Some("documentClose"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "save",
+        summary: "Save a document by id (or the active one if --id is omitted).",
+        description: "Wraps .rs.api.documentSave(id). Returns the saved document's id.",
+        params: &[ParamSpec {
+            name: "--id",
+            kind: ParamKind::String,
+            required: false,
+            default: None,
+            allowed: &[],
+            description: "Document id; defaults to the active document (excluding the console).",
+        }],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor save",
+                explanation: "Save the active document.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor save --id 947E7AED",
+                explanation: "Save document 947E7AED.",
+            },
+        ],
+        returns: "{id: string}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Unknown id or write failure.",
+        }],
+        rstudioapi_fn: Some("documentSave"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "save-all",
+        summary: "Save every dirty document in the Source pane.",
+        description: "Wraps .rs.api.documentSaveAll().",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor save-all",
+            explanation: "Save every dirty buffer.",
+        }],
+        returns: "void",
+        errors: &[],
+        rstudioapi_fn: Some("documentSaveAll"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
         name: "select",
         summary: "Set the selection (or move the cursor) in the active document.",
         description: "Wraps rstudioapi::setSelectionRanges(). Range format: 'L:C' (cursor only, \
@@ -313,6 +404,20 @@ pub enum EditorCmd {
         /// Range: 'L:C' or 'L1:C1-L2:C2'.
         range: String,
     },
+    /// Close a document by id (true close, via .rs.api.documentClose).
+    Close {
+        id: String,
+        /// How to handle unsaved changes: true = save silently, false = discard, ask = prompt.
+        #[arg(long, default_value = "true")]
+        save: String,
+    },
+    /// Save a document by id (or the active document if --id is omitted).
+    Save {
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Save every dirty document in the Source pane.
+    SaveAll,
 }
 
 pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
@@ -333,6 +438,9 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
         }
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
         EditorCmd::Select { range } => select(rpc, range),
+        EditorCmd::Close { id, save } => close(rpc, id, save),
+        EditorCmd::Save { id } => save(rpc, id.as_deref()),
+        EditorCmd::SaveAll => save_all(rpc),
     }
 }
 
@@ -484,6 +592,53 @@ fn select(rpc: &RpcClient<'_>, range: &str) -> Result<Option<Value>, CliError> {
     };
     let r_code = format!("rstudioapi::setSelectionRanges(list({r_range}))");
     r_eval::run_silent(rpc, &r_code)?;
+    Ok(None)
+}
+
+fn close(rpc: &RpcClient<'_>, id: &str, save: &str) -> Result<Option<Value>, CliError> {
+    let save_arg = match save {
+        "true" => "TRUE",
+        "false" => "FALSE",
+        "ask" => "\"ask\"",
+        other => {
+            return Err(CliError::user(format!(
+                "invalid --save '{other}'. Expected: true, false, ask."
+            )));
+        }
+    };
+    let r_code = format!(
+        ".rs.api.documentClose(id = {}, save = {save_arg})",
+        r_quote(id)
+    );
+    r_eval::run_silent(rpc, &r_code)?;
+    Ok(Some(json!({
+        "id": id,
+        "saved": save,
+    })))
+}
+
+fn save(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliError> {
+    let id_arg = match id {
+        Some(s) => r_quote(s),
+        None => "NULL".into(),
+    };
+    let r_code = format!(
+        r#"local({{
+  .__id <- .rs.api.documentSave({id_arg})
+  if (is.null(.__id)) cat("null") else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
+}})"#
+    );
+    let raw = r_eval::run(rpc, &r_code)?;
+    if raw.trim() == "null" {
+        return Ok(Some(Value::Null));
+    }
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("editor save: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    r_eval::run_silent(rpc, ".rs.api.documentSaveAll()")?;
     Ok(None)
 }
 
