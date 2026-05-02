@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, exec, raw, term};
+use crate::commands::{console, editor, exec, raw, schema_cmd, term};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -65,6 +65,9 @@ enum Command {
     #[command(subcommand)]
     Term(term::TermCmd),
 
+    /// Catalogue auto-descriptif des commandes (drill-down 3 niveaux).
+    Schema(schema_cmd::SchemaCmd),
+
     /// Appel JSON-RPC brut (échappatoire pour méthodes non encore wrappées).
     Rpc(raw::RpcCmd),
 
@@ -120,6 +123,7 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let rpc = RpcClient::new(&session);
             term::run(&cmd, &rpc)
         }
+        Command::Schema(cmd) => schema_cmd::run(&cmd),
         Command::Rpc(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);

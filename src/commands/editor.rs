@@ -6,6 +6,63 @@ use serde_json::{Value, json};
 use crate::error::CliError;
 use crate::r_eval;
 use crate::rpc::{RpcClient, r_quote};
+use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+
+pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
+    category: "editor",
+    name: "open",
+    summary: "Ouvre un fichier dans l'éditeur RStudio.",
+    description: "Sans --line, utilise un postback editfile (non bloquant côté R). \
+                  Avec --line, route via rstudioapi::navigateToFile pour ouvrir ET \
+                  positionner le curseur en un seul appel.",
+    params: &[
+        ParamSpec {
+            name: "path",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Chemin du fichier (résolu en absolu via canonicalize).",
+        },
+        ParamSpec {
+            name: "--line",
+            kind: ParamKind::Integer,
+            required: false,
+            default: None,
+            allowed: &[],
+            description: "Ligne (1-based) où placer le curseur après ouverture.",
+        },
+        ParamSpec {
+            name: "--col",
+            kind: ParamKind::Integer,
+            required: false,
+            default: Some("1"),
+            allowed: &[],
+            description: "Colonne (1-based) ; nécessite --line.",
+        },
+    ],
+    examples: &[
+        ExampleSpec {
+            cmd: "rstudio editor open ~/code/aclemen1/rstudio-cli/Cargo.toml",
+            explanation: "Ouvre Cargo.toml sans changer la position du curseur.",
+        },
+        ExampleSpec {
+            cmd: "rstudio editor open src/main.rs --line 42",
+            explanation: "Ouvre src/main.rs et place le curseur en ligne 42, colonne 1.",
+        },
+    ],
+    returns: "{path: string, line: int|null, col: int|null}",
+    errors: &[
+        ErrorSpec {
+            kind: "user_error",
+            when: "Fichier introuvable (canonicalize fail).",
+        },
+        ErrorSpec {
+            kind: "r_error",
+            when: "rstudioapi::navigateToFile rejette le chemin avec --line.",
+        },
+    ],
+}];
 
 #[derive(Subcommand, Debug)]
 pub enum EditorCmd {

@@ -5,7 +5,66 @@ use serde_json::{Value, json};
 
 use crate::error::CliError;
 use crate::rpc::RpcClient;
+use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 use crate::session::Session;
+
+pub const ACTIONS: &[ActionSpec] = &[
+    ActionSpec {
+        category: "console",
+        name: "history",
+        summary: "Liste les dernières commandes saisies par l'user dans la console R.",
+        description: "Live (lit l'historique R en mémoire via get_recent_history).",
+        params: &[ParamSpec {
+            name: "--limit",
+            kind: ParamKind::Integer,
+            required: false,
+            default: Some("100"),
+            allowed: &[],
+            description: "Nombre maximum de commandes (les plus récentes). > 0.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio console history --limit 5",
+            explanation: "Retourne les 5 dernières commandes tapées.",
+        }],
+        returns: "{commands: [string]}",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "console",
+        name: "actions",
+        summary: "Lit le snapshot du buffer console (last suspend, pas live).",
+        description: "Décode suspended-session-data/console_actions {type, data}. \
+                      Codes type: 0=prompt, 1=input, 2=output, 3=error. \
+                      Vérifier last_modified_unix dans le retour pour juger de la fraîcheur.",
+        params: &[
+            ParamSpec {
+                name: "--limit",
+                kind: ParamKind::Integer,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Nombre maximum d'entrées (les plus récentes).",
+            },
+            ParamSpec {
+                name: "--types",
+                kind: ParamKind::Enum,
+                required: false,
+                default: None,
+                allowed: &["prompt", "input", "output", "error"],
+                description: "Filtre par type, multi-valué (séparé par virgule).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio console actions --types output --limit 10",
+            explanation: "10 derniers outputs du dernier snapshot.",
+        }],
+        returns: "{snapshot_path, last_modified_unix, is_live: false, entries: [{type, code, text}]}",
+        errors: &[ErrorSpec {
+            kind: "session_unavailable",
+            when: "Pas de fichier console_actions (session jamais suspendue).",
+        }],
+    },
+];
 
 #[derive(Subcommand, Debug)]
 pub enum ConsoleCmd {

@@ -4,6 +4,240 @@ use serde_json::{Value, json};
 use crate::error::CliError;
 use crate::r_eval;
 use crate::rpc::{RpcClient, r_quote};
+use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+
+pub const ACTIONS: &[ActionSpec] = &[
+    ActionSpec {
+        category: "term",
+        name: "list",
+        summary: "Liste les terminaux ouverts avec leur contexte complet.",
+        description: "Wrap rstudioapi::terminalList() + terminalContext() pour chaque id.",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term list",
+            explanation: "Retourne un tableau de terminaux, chacun avec id, caption, working_dir, shell, pid, busy, ...",
+        }],
+        returns: "{terminals: [{id, caption, title, working_dir, shell, running, busy, exit_code, pid, cols, rows, lines, connection}]}",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "buffer",
+        summary: "Lit le buffer (lignes) d'un terminal. Live.",
+        description: "rstudioapi::terminalBuffer(id, stripAnsi). \
+                      Strip les codes ANSI SGR (couleurs) par défaut, \
+                      garde les codes OSC (titres window etc.).",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Identifiant du terminal (8 hex chars, depuis term list).",
+            },
+            ParamSpec {
+                name: "--limit",
+                kind: ParamKind::Integer,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Nombre maximum de lignes (les plus récentes).",
+            },
+            ParamSpec {
+                name: "--ansi",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Préserver les codes ANSI SGR (default strippés).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term buffer 93555F0A --limit 20",
+            explanation: "Les 20 dernières lignes du terminal 93555F0A.",
+        }],
+        returns: "{id: string, lines: [string]}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Identifiant inconnu.",
+        }],
+    },
+    ActionSpec {
+        category: "term",
+        name: "context",
+        summary: "Retourne le contexte complet d'un terminal (metadata).",
+        description: "rstudioapi::terminalContext(id), tout le détail (handle, caption, pid, ...).",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Identifiant du terminal.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term context 93555F0A",
+            explanation: "Retourne handle, caption, working_dir, shell, pid, busy, exit_code, ...",
+        }],
+        returns: "{handle, caption, title, working_dir, shell, running, busy, exit_code, connection, sequence, lines, cols, rows, pid, full_screen, restarted}",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "create",
+        summary: "Crée un nouveau terminal et retourne son id.",
+        description: "rstudioapi::terminalCreate(caption, show, shellType). \
+                      show=FALSE par défaut pour ne pas perturber le focus.",
+        params: &[
+            ParamSpec {
+                name: "--name",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Caption visible dans le panneau Terminal.",
+            },
+            ParamSpec {
+                name: "--shell-type",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Type de shell (ex: bash, zsh, default). NULL = default.",
+            },
+            ParamSpec {
+                name: "--show",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Donner le focus au panneau Terminal après création.",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term create --name \"my-task\"",
+            explanation: "Crée un terminal nommé my-task, retourne {id: \"...\"}.",
+        }],
+        returns: "{id: string}",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "send",
+        summary: "Envoie du texte au terminal SANS Enter final (poked au prompt courant).",
+        description: "Piège : un term exec qui suit s'ajoute à la ligne courante. \
+                      Pour exécuter plusieurs commandes distinctes, préférer plusieurs term exec.",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Id du terminal.",
+            },
+            ParamSpec {
+                name: "text",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Texte à insérer.",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term send 93555F0A \"git status\"",
+            explanation: "Tape git status dans le terminal mais n'exécute pas.",
+        }],
+        returns: "void",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "exec",
+        summary: "Envoie du texte au terminal AVEC Enter final (exécute). Fire-and-forget.",
+        description: "N'attend pas la fin d'exécution. Lire term buffer <id> après pour le résultat.",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Id du terminal.",
+            },
+            ParamSpec {
+                name: "text",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Code à exécuter (un newline final est ajouté si absent).",
+            },
+        ],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term exec 93555F0A 'ls -la /tmp'",
+            explanation: "Tape et exécute ls -la /tmp dans le terminal.",
+        }],
+        returns: "void",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "kill",
+        summary: "Tue un terminal (le supprime du panneau).",
+        description: "rstudioapi::terminalKill(id).",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Id du terminal.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term kill 0ACC78A5",
+            explanation: "Termine et supprime le terminal 0ACC78A5.",
+        }],
+        returns: "void",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "clear",
+        summary: "Vide le buffer d'un terminal.",
+        description: "rstudioapi::terminalClear(id).",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Id du terminal.",
+        }],
+        examples: &[],
+        returns: "void",
+        errors: &[],
+    },
+    ActionSpec {
+        category: "term",
+        name: "activate",
+        summary: "Donne le focus au panneau Terminal et active ce terminal.",
+        description: "rstudioapi::terminalActivate(id). Visible côté user.",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Id du terminal.",
+        }],
+        examples: &[],
+        returns: "void",
+        errors: &[],
+    },
+];
 
 #[derive(Subcommand, Debug)]
 pub enum TermCmd {
