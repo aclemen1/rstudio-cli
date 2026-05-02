@@ -46,11 +46,12 @@ pub fn discover() -> Result<DesktopInfo, CliError> {
 /// Fill in port / launcher_token / shared_secret for a known PID.
 pub fn populate(pid: u32) -> Result<DesktopInfo, CliError> {
     let argv = read_argv(pid)?;
-    let port_str = lookup_argv(&argv, "--www-port").ok_or_else(|| {
-        CliError::session(format!("rsession pid {pid}: --www-port not in argv"))
-    })?;
+    let port_str = lookup_argv(&argv, "--www-port")
+        .ok_or_else(|| CliError::session(format!("rsession pid {pid}: --www-port not in argv")))?;
     let port: u16 = port_str.parse().map_err(|e| {
-        CliError::internal(format!("rsession pid {pid}: invalid --www-port {port_str:?}: {e}"))
+        CliError::internal(format!(
+            "rsession pid {pid}: invalid --www-port {port_str:?}: {e}"
+        ))
     })?;
     let launcher_token = lookup_argv(&argv, "--launcher-token").ok_or_else(|| {
         CliError::session(format!("rsession pid {pid}: --launcher-token not in argv"))
@@ -142,7 +143,9 @@ fn read_argv(pid: u32) -> Result<Vec<String>, CliError> {
     }
     let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if line.is_empty() {
-        return Err(CliError::session(format!("rsession pid {pid} has no command line")));
+        return Err(CliError::session(format!(
+            "rsession pid {pid} has no command line"
+        )));
     }
     Ok(line.split_whitespace().map(str::to_owned).collect())
 }
@@ -239,10 +242,7 @@ mod tests {
         ];
         let env = parse_environ(&toks);
         assert_eq!(env.get("USER"), Some(&"foo".to_string()));
-        assert_eq!(
-            env.get("RS_SHARED_SECRET"),
-            Some(&"2def-uuid".to_string())
-        );
+        assert_eq!(env.get("RS_SHARED_SECRET"), Some(&"2def-uuid".to_string()));
     }
 
     #[test]

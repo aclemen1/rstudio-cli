@@ -80,11 +80,13 @@ fn build_request(method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]
 }
 
 fn send_unix(path: &Path, request_bytes: &[u8], read_timeout: Option<Duration>) -> Result<Vec<u8>> {
-    let mut stream = UnixStream::connect(path)
-        .with_context(|| format!("connect to {}", path.display()))?;
+    let mut stream =
+        UnixStream::connect(path).with_context(|| format!("connect to {}", path.display()))?;
     stream.set_read_timeout(read_timeout)?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    stream.write_all(request_bytes).context("send HTTP request")?;
+    stream
+        .write_all(request_bytes)
+        .context("send HTTP request")?;
     stream.shutdown(Shutdown::Write).ok();
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).context("read HTTP response")?;
@@ -96,11 +98,13 @@ fn send_tcp(
     request_bytes: &[u8],
     read_timeout: Option<Duration>,
 ) -> Result<Vec<u8>> {
-    let mut stream =
-        TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).with_context(|| format!("connect to {addr}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        .with_context(|| format!("connect to {addr}"))?;
     stream.set_read_timeout(read_timeout)?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    stream.write_all(request_bytes).context("send HTTP request")?;
+    stream
+        .write_all(request_bytes)
+        .context("send HTTP request")?;
     stream.shutdown(Shutdown::Write).ok();
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).context("read HTTP response")?;

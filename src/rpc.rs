@@ -110,9 +110,7 @@ impl<'a> RpcClient<'a> {
     }
 
     fn client_id(&self, force_refresh: bool) -> Result<String, CliError> {
-        if !force_refresh
-            && let Some(id) = self.cached_client_id.borrow().clone()
-        {
+        if !force_refresh && let Some(id) = self.cached_client_id.borrow().clone() {
             return Ok(id);
         }
         let id = resolve_client_id(self.session)?;

@@ -202,7 +202,9 @@ fn detect_desktop(overrides: SessionOverrides) -> Result<Session, CliError> {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
 
     // Desktop uses the launcher-token as session id for on-disk paths.
-    let sources_dir = launcher_token.as_deref().and_then(client_id::sources_dir_for);
+    let sources_dir = launcher_token
+        .as_deref()
+        .and_then(client_id::sources_dir_for);
     // Desktop has no session-persistent-state file; state_path stays None and
     // client_id::read_active_client_id short-circuits in Desktop mode.
     Ok(Session {
@@ -219,8 +221,8 @@ fn detect_desktop(overrides: SessionOverrides) -> Result<Session, CliError> {
 fn resolve_user(user_override: Option<String>) -> Result<String, CliError> {
     match user_override {
         Some(u) => Ok(u),
-        None => env::var("USER").or_else(|_| env::var("LOGNAME")).map_err(|_| {
-            CliError::session("cannot determine user (set $USER or pass --user)")
-        }),
+        None => env::var("USER")
+            .or_else(|_| env::var("LOGNAME"))
+            .map_err(|_| CliError::session("cannot determine user (set $USER or pass --user)")),
     }
 }
