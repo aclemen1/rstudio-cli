@@ -4,10 +4,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::client_id::read_active_client_id;
+use crate::client_id::resolve_client_id;
 use crate::error::CliError;
-use crate::session::Session;
-use crate::socket::{HttpResponse, request};
+use crate::session::{Mode, Session};
+use crate::transport::{HttpResponse, request};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const RPC_INVALID_CLIENT_ID: i32 = 4;
@@ -34,8 +34,8 @@ impl<'a> RpcClient<'a> {
         self.timeout.replace(timeout)
     }
 
-    fn auth_headers(&self, csrf: &str) -> [(String, String); 4] {
-        [
+    fn auth_headers(&self, csrf: &str) -> Vec<(String, String)> {
+        let mut headers = vec![
             ("X-Session-Postback".into(), "1".into()),
             ("X-RStudioUserIdentity".into(), self.session.user.clone()),
             ("X-RS-CSRF-Token".into(), csrf.into()),
@@ -43,7 +43,16 @@ impl<'a> RpcClient<'a> {
                 "Cookie".into(),
                 format!("rs-csrf-token={csrf}; csrf-token={csrf}"),
             ),
-        ]
+        ];
+        // Desktop authenticates by shared secret instead of SO_PEERCRED. The
+        // header is the only thing the listener checks; the Server-style
+        // headers above are harmless on Desktop (the listener ignores them).
+        if self.session.mode == Mode::Desktop
+            && let Some(secret) = self.session.shared_secret.as_ref()
+        {
+            headers.push(("X-Shared-Secret".into(), secret.clone()));
+        }
+        headers
     }
 
     /// Postbacks don't carry a clientId — random CSRF is enough. They also don't
@@ -59,7 +68,7 @@ impl<'a> RpcClient<'a> {
 
         let path = format!("/rsession-local/postback/{cmd}");
         let resp = request(
-            self.session.socket(),
+            &self.session.transport,
             "POST",
             &path,
             &header_refs,
@@ -101,11 +110,12 @@ impl<'a> RpcClient<'a> {
     }
 
     fn client_id(&self, force_refresh: bool) -> Result<String, CliError> {
-        if !force_refresh && let Some(id) = self.cached_client_id.borrow().clone() {
+        if !force_refresh
+            && let Some(id) = self.cached_client_id.borrow().clone()
+        {
             return Ok(id);
         }
-        let state_path = self.session.require_state_path()?;
-        let id = read_active_client_id(state_path)?;
+        let id = resolve_client_id(self.session)?;
         *self.cached_client_id.borrow_mut() = Some(id.clone());
         Ok(id)
     }
@@ -134,7 +144,7 @@ impl<'a> RpcClient<'a> {
 
         let path = format!("/rpc/{method}");
         let resp = request(
-            self.session.socket(),
+            &self.session.transport,
             "POST",
             &path,
             &header_refs,
