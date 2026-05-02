@@ -4,5 +4,6 @@ pub mod env;
 pub mod exec;
 pub mod raw;
 pub mod schema_cmd;
+pub mod skill;
 pub mod term;
 pub mod view;

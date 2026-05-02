@@ -92,6 +92,10 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "view",
         description: "Panneaux Viewer / Files / Markers (HTML, navigation, feedback linter).",
     },
+    CategorySpec {
+        name: "skill",
+        description: "Gestion du skill Claude Code embarqué (show / install).",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -105,6 +109,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::term::ACTIONS,
         crate::commands::env::ACTIONS,
         crate::commands::view::ACTIONS,
+        crate::commands::skill::ACTIONS,
     ] {
         out.extend(slice.iter());
     }
