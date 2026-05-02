@@ -17,7 +17,7 @@ WIP, but covers a substantial slice of the IDE :
 
 | category | actions |
 |---|---|
-| `editor` | `open` `read` `context` `insert` `select` |
+| `editor` | `open` (non-modal) `edit` (modal R `edit()`) `read` `context` `insert` `select` |
 | `exec`   | `run` (silent) `send` (visible) |
 | `console`| `history` (live) `actions` (snapshot) |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` |
@@ -63,6 +63,19 @@ rstudio version                 # {"cli": "0.1.0", "skill": 1}
 cargo build --release
 ./target/release/rstudio version
 ```
+
+## Tests
+
+```sh
+cargo test               # unit tests, fast, no live session needed
+cargo test --test live -- --ignored   # integration tests against a live session
+```
+
+The integration tests skip silently (`SKIP: no live RStudio session
+available`) when no `rsession` socket is reachable, so the suite is safe
+to run anywhere. They never mutate the user's UI: read-only paths only
+(`exec run` round-trips, `editor read`, `env list`, `term list`, schema
+registry shape).
 
 ## Auto-detection
 
@@ -131,6 +144,20 @@ rstudio env list --pattern '^df_'
 rstudio env info mtcars
 rstudio env contents mtcars
 ```
+
+## Concurrency model
+
+R is single-threaded; the rsession serialises every `exec run` /
+`exec eval` style call into a FIFO. Two concurrent calls do **not** run
+in parallel — total wall time ≈ sum of per-call time. So:
+
+- `--timeout 0` on a long `exec run` blocks every subsequent `exec`-style
+  call until it returns. Use it deliberately.
+- For real parallelism (running shell commands or external processes),
+  use `term exec` — the Terminal pane spawns a separate pty/process,
+  not bound to the R FIFO.
+- Postbacks (`editor edit`) and `console_input` (`exec send`) don't go
+  through the R queue, so they aren't subject to the FIFO.
 
 ## Hard "do not"
 
