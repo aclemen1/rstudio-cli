@@ -106,6 +106,14 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "skill",
         description: "Manage the embedded Claude Code skill (show / install).",
     },
+    CategorySpec {
+        name: "session",
+        description: "Whole-session info and lifecycle (version, mode, project, restart).",
+    },
+    CategorySpec {
+        name: "pref",
+        description: "User and built-in RStudio preferences + persistent key/value store.",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -120,6 +128,8 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::env::ACTIONS,
         crate::commands::pane::ACTIONS,
         crate::commands::skill::ACTIONS,
+        crate::commands::session::ACTIONS,
+        crate::commands::pref::ACTIONS,
     ] {
         out.extend(slice.iter());
     }

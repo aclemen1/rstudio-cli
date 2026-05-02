@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, env, pane, r, raw, schema_cmd, skill, term};
+use crate::commands::{console, editor, env, pane, pref, r, raw, schema_cmd, session, skill, term};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -77,6 +77,14 @@ enum Command {
     #[command(subcommand)]
     Skill(skill::SkillCmd),
 
+    /// Whole-session info and lifecycle (version, project, restart).
+    #[command(subcommand)]
+    Session(session::SessionCmd),
+
+    /// User and built-in RStudio preferences + persistent key/value store.
+    #[command(subcommand)]
+    Pref(pref::PrefCmd),
+
     /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
 
@@ -143,6 +151,16 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             pane::run(&cmd, &rpc)
         }
         Command::Skill(cmd) => skill::run(&cmd),
+        Command::Session(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            session::run(&cmd, &rpc)
+        }
+        Command::Pref(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            pref::run(&cmd, &rpc)
+        }
         Command::Schema(cmd) => schema_cmd::run(&cmd),
         Command::Rpc(cmd) => {
             let session = Session::detect(overrides)?;
