@@ -16,8 +16,9 @@ without disrupting it.
 
 ## Status
 
-**v0.4.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 13 categories and 76 actions. Live-tested end-to-end.
+**v0.5.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 13 categories and 76 actions. Live-tested end-to-end on both
+**RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
 |---|---|---|
@@ -64,19 +65,38 @@ loaded for actions the agent never uses in a session.
 
 ## Requirements
 
-- Linux (RStudio Server only — RStudio Desktop is not supported)
-- A live RStudio Server session belonging to the same Unix user as the CLI
-- A browser tab attached to that session (the CLI reads the active
-  client id from the on-disk session state and **never** calls
-  `client_init`, which would invalidate that client)
+Either:
+
+- **RStudio Server** (Linux). Run the CLI inside a session's embedded
+  terminal — same Unix user as the `rsession` process. A browser tab
+  must be attached to the session (the CLI reads the active client id
+  from the on-disk session state and **never** calls `client_init`,
+  which would invalidate that client).
+- **RStudio Desktop** (macOS). Run the CLI in any terminal as the user
+  who launched RStudio. The CLI auto-discovers the running `rsession`
+  process (TCP port + shared secret from argv/environ); pass
+  `--port`/`--secret` to override.
+
+Linux Desktop and Windows are out of scope for v0.5.x.
 
 ## Install
 
-### From a release binary
+### Homebrew (macOS, Linuxbrew on Linux)
 
 ```sh
-# Replace VERSION and ARCH as needed
-curl -sL "https://github.com/aclemen1/rstudio-cli/releases/download/vVERSION/rstudio-cli-vVERSION-x86_64-unknown-linux-gnu.tar.gz" \
+brew install aclemen1/tap/rstudio-cli
+rstudio version
+```
+
+### From a release binary
+
+Builds are attached to each [GitHub Release](https://github.com/aclemen1/rstudio-cli/releases)
+for four targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin`, `aarch64-apple-darwin`.
+
+```sh
+# Replace VERSION and TARGET as needed
+curl -sL "https://github.com/aclemen1/rstudio-cli/releases/download/vVERSION/rstudio-cli-vVERSION-TARGET.tar.gz" \
   | tar -xzC ~/.local/bin
 chmod +x ~/.local/bin/rstudio
 rstudio version

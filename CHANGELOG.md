@@ -4,6 +4,65 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-02
+
+Adds RStudio Desktop support on macOS, ships the Homebrew install path, and
+keeps Server fully backward compatible.
+
+### Added — RStudio Desktop on macOS
+
+- New `--mode auto|server|desktop` global flag (default `auto`). Auto-detects
+  Server when an rsession Unix socket is reachable, Desktop when a local
+  rsession process is running.
+- `--port` / `--secret` global flags to override Desktop discovery (rare cases:
+  multiple rsessions, restricted process inspection).
+- TCP-loopback transport with `X-Shared-Secret` authentication. The Desktop
+  client id (`33e600bb-c1b1-46bf-b562-ab5cba070b0e`) is hardcoded — no
+  `client_init` ever, the blacklist stays.
+- `desktop_discovery` module reads the rsession process's argv (`--www-port`,
+  `--launcher-token`) and environment (`RS_SHARED_SECRET`) via `ps` on macOS
+  and `/proc/<pid>/{cmdline,environ}` on Linux.
+- `transport` module replaces `socket`. `Backend::{Unix, Tcp}` enum picks the
+  connection type at runtime.
+
+### Fixed — Desktop async-handle handling
+
+- `parse_rpc_envelope` now refuses queued `execute_r_code` responses with a
+  clean `kind=session_unavailable` naming the `asyncHandle`. Desktop's TCP
+  listener takes the async path under FIFO contention; without this guard,
+  the second concurrent `r exec` surfaced as `kind=internal` ("returned
+  non-string: null"). Server's Unix-socket listener never takes the async
+  path, so this branch is dead code on Server (verified by 21 unit + 7 live
+  Server tests + Step 6 ×3 still green).
+
+### Added — install paths
+
+- Homebrew formula on `aclemen1/homebrew-tap`:
+
+  ```sh
+  brew install aclemen1/tap/rstudio-cli
+  ```
+
+- GitHub Release artifacts for four targets:
+  - `x86_64-unknown-linux-gnu`
+  - `aarch64-unknown-linux-gnu`
+  - `x86_64-apple-darwin`
+  - `aarch64-apple-darwin`
+
+### Known limitation
+
+Concurrent `r exec` on Desktop returns `session_unavailable` for the second
+call (γ behaviour). The natural follow-up is the β path documented in
+`DESKTOP_TEST_RESULTS.md` § "B1 — spike β" — minting a per-invocation client
+id and polling the `kAsyncCompletion` event channel. Out of scope for 0.5.0.
+
+### Added documentation
+
+- `DESKTOP_FEASIBILITY.md` — architectural delta Server vs Desktop, recon, curl
+  round-trips proving each surface.
+- `DESKTOP_TEST_RESULTS.md` — end-to-end validation on macOS, B1 wire capture
+  and re-validation post-γ.
+
 ## [0.4.0] — 2026-05-02
 
 This release rounds out the rstudioapi surface, ships the AI-native
