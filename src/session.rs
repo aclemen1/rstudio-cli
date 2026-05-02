@@ -13,6 +13,10 @@ pub struct Session {
     /// Path to the session-persistent-state file holding `active-client-id`.
     /// `None` until first needed by an RPC call (postbacks don't require it).
     pub state_path: Option<PathBuf>,
+    /// Path to the session directory under
+    /// `~/.local/share/rstudio/sessions/active/session-<id>`. Same `None`
+    /// caveat as `state_path` — only resolved when we know the session id.
+    pub session_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -56,19 +60,27 @@ impl Session {
             )));
         }
 
-        let state_path = if let Some(explicit) = overrides.state_path {
-            Some(explicit)
-        } else {
-            let session_id = overrides
-                .session_id
-                .or_else(client_id::detect_session_id);
-            session_id.and_then(|id| client_id::state_path_for(&id))
+        let session_id = overrides
+            .session_id
+            .clone()
+            .or_else(client_id::detect_session_id);
+
+        let state_path = match overrides.state_path {
+            Some(explicit) => Some(explicit),
+            None => session_id
+                .as_deref()
+                .and_then(client_id::state_path_for),
         };
+
+        let session_dir = session_id
+            .as_deref()
+            .and_then(client_id::session_dir_for);
 
         Ok(Self {
             socket_path,
             user,
             state_path,
+            session_dir,
         })
     }
 
@@ -82,6 +94,15 @@ impl Session {
                 "Cannot locate the RStudio session state file. \
                  Set $RSTUDIO_SESSION_ID, pass --session-id, or --state-path. \
                  Open RStudio in your browser first.",
+            )
+        })
+    }
+
+    pub fn require_session_dir(&self) -> Result<&Path, CliError> {
+        self.session_dir.as_deref().ok_or_else(|| {
+            CliError::session(
+                "Cannot locate the RStudio session directory. \
+                 Set $RSTUDIO_SESSION_ID or pass --session-id.",
             )
         })
     }

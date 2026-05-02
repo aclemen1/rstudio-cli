@@ -41,6 +41,11 @@ pub fn state_path_for(session_id: &str) -> Option<PathBuf> {
     Some(dir.join(format!("session-{session_id}")).join(STATE_FILENAME))
 }
 
+pub fn session_dir_for(session_id: &str) -> Option<PathBuf> {
+    let dir = sessions_dir()?;
+    Some(dir.join(format!("session-{session_id}")))
+}
+
 pub fn read_active_client_id(state_path: &Path) -> Result<String, CliError> {
     let content = fs::read_to_string(state_path).map_err(|e| {
         CliError::session(format!(

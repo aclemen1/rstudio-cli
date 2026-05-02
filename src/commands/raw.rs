@@ -21,7 +21,18 @@ pub struct PostbackCmd {
     pub body: String,
 }
 
+/// Methods that must never be invoked through the raw escape hatch — calling
+/// them invalidates the user's browser client and forces a session reload.
+const FORBIDDEN_METHODS: &[&str] = &["client_init"];
+
 pub fn run_rpc(cmd: &RpcCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    if FORBIDDEN_METHODS.contains(&cmd.method.as_str()) {
+        return Err(CliError::user(format!(
+            "rpc method '{}' is blacklisted: it would invalidate the active browser client \
+             and reset the user's RStudio session. There is no diagnostic value in calling it.",
+            cmd.method
+        )));
+    }
     let params: Value = serde_json::from_str(&cmd.params)
         .map_err(|e| CliError::user(format!("--params is not valid JSON: {e}")))?;
     let params = match params {
