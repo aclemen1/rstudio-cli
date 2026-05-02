@@ -84,6 +84,10 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "term",
         description: "Manipulation du panneau Terminal RStudio (shells live, lecture du buffer).",
     },
+    CategorySpec {
+        name: "env",
+        description: "Inspection de l'environnement R actif (variables, contenus, métadonnées).",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -95,6 +99,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::exec::ACTIONS,
         crate::commands::console::ACTIONS,
         crate::commands::term::ACTIONS,
+        crate::commands::env::ACTIONS,
     ] {
         out.extend(slice.iter());
     }
