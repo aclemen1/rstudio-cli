@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_with_limit_injects_setTimeLimit() {
+    fn wrapper_with_limit_injects_set_time_limit() {
         let wrapped = wrap_for_eval("Sys.sleep(5)", EvalTimeout::Limit(10.0));
         assert!(wrapped.contains("setTimeLimit(elapsed = 10, transient = TRUE)"));
     }
