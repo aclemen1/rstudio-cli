@@ -238,6 +238,151 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "term",
+        name: "busy",
+        summary: "Whether a terminal is currently running a foreground command.",
+        description: "Wraps rstudioapi::terminalBusy(id). Useful right after `term exec` to \
+                      poll whether the command has finished before reading the buffer.",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Terminal id.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term busy 93555F0A",
+            explanation: "Returns {busy: true|false}.",
+        }],
+        returns: "{busy: bool}",
+        errors: &[],
+        rstudioapi_fn: Some("terminalBusy"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "term",
+        name: "running",
+        summary: "Whether a terminal's shell process is alive.",
+        description: "Wraps rstudioapi::terminalRunning(id). Distinct from `term busy`: \
+                      a terminal can be running (shell alive) without being busy (no \
+                      foreground command).",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Terminal id.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term running 93555F0A",
+            explanation: "Returns {running: true|false}.",
+        }],
+        returns: "{running: bool}",
+        errors: &[],
+        rstudioapi_fn: Some("terminalRunning"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "term",
+        name: "exit-code",
+        summary: "Exit code of a terminated terminal (null if still running).",
+        description: "Wraps rstudioapi::terminalExitCode(id). Returns null while the \
+                      shell is still alive.",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Terminal id.",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term exit-code 93555F0A",
+            explanation: "Returns {exit_code: 0} after a clean exit, {exit_code: null} while running.",
+        }],
+        returns: "{exit_code: int|null}",
+        errors: &[],
+        rstudioapi_fn: Some("terminalExitCode"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "term",
+        name: "visible",
+        summary: "Id of the terminal currently visible in the Terminal pane (null if none).",
+        description: "Wraps rstudioapi::terminalVisible(). Returns the id of whichever \
+                      terminal is selected in the user's Terminal pane.",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio term visible",
+            explanation: "Returns {id: '93555F0A'} or {id: null}.",
+        }],
+        returns: "{id: string|null}",
+        errors: &[],
+        rstudioapi_fn: Some("terminalVisible"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "term",
+        name: "run",
+        summary: "Create a new terminal AND run a shell command in it. Returns the id.",
+        description: "Wraps rstudioapi::terminalExecute(command, workingDir, env, show). \
+                      Different from `term exec`, which sends to an existing terminal: \
+                      `term run` spawns a fresh terminal whose entire purpose is to run \
+                      the command. Useful to dispatch a long-running task without \
+                      touching the user's existing shells. Read `term buffer <id>` to \
+                      retrieve output as it accumulates.",
+        params: &[
+            ParamSpec {
+                name: "command",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Shell command to run in the new terminal.",
+            },
+            ParamSpec {
+                name: "--working-dir",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Working directory (defaults to the user's home).",
+            },
+            ParamSpec {
+                name: "--env",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Environment variable in KEY=VALUE form. Repeat the flag for multiple variables.",
+            },
+            ParamSpec {
+                name: "--show",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Focus the Terminal pane after creation.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio term run 'find . -name *.R | xargs wc -l'",
+                explanation: "Spawn a terminal that runs the count and exits.",
+            },
+            ExampleSpec {
+                cmd: "rstudio term run 'cargo build' --working-dir ~/projects/foo --env RUST_LOG=debug",
+                explanation: "Dispatch the build with the given env and CWD.",
+            },
+        ],
+        returns: "{id: string}",
+        errors: &[],
+        rstudioapi_fn: Some("terminalExecute"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "term",
         name: "activate",
         summary: "Focus the Terminal pane and activate this terminal.",
         description: "rstudioapi::terminalActivate(id). User-visible.",
@@ -315,19 +460,54 @@ pub enum TermCmd {
     Activate {
         id: String,
     },
+    /// Whether a terminal is currently running a foreground command.
+    Busy { id: String },
+    /// Whether a terminal's shell process is alive.
+    Running { id: String },
+    /// Exit code of a terminated terminal (null if still running).
+    ExitCode { id: String },
+    /// Id of the terminal currently visible in the pane (null if none).
+    Visible,
+    /// Create a new terminal AND run a shell command in it.
+    Run {
+        command: String,
+        /// Working directory.
+        #[arg(long)]
+        working_dir: Option<String>,
+        /// Env var in KEY=VALUE form. Repeat for multiple.
+        #[arg(long)]
+        env: Vec<String>,
+        /// Focus the Terminal pane after creation.
+        #[arg(long)]
+        show: bool,
+    },
 }
 
 pub fn run(cmd: &TermCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
         TermCmd::List => list(rpc),
         TermCmd::Buffer { id, limit, ansi } => buffer(rpc, id, *limit, *ansi),
-        TermCmd::Create { name, shell_type, show } => create(rpc, name.as_deref(), shell_type.as_deref(), *show),
+        TermCmd::Create {
+            name,
+            shell_type,
+            show,
+        } => create(rpc, name.as_deref(), shell_type.as_deref(), *show),
         TermCmd::Send { id, text } => send(rpc, id, text),
         TermCmd::Exec { id, text } => exec(rpc, id, text),
         TermCmd::Kill { id } => kill(rpc, id),
         TermCmd::Clear { id } => clear(rpc, id),
         TermCmd::Context { id } => context(rpc, id),
         TermCmd::Activate { id } => activate(rpc, id),
+        TermCmd::Busy { id } => term_bool(rpc, "terminalBusy", id, "busy"),
+        TermCmd::Running { id } => term_bool(rpc, "terminalRunning", id, "running"),
+        TermCmd::ExitCode { id } => exit_code(rpc, id),
+        TermCmd::Visible => visible(rpc),
+        TermCmd::Run {
+            command,
+            working_dir,
+            env,
+            show,
+        } => term_run(rpc, command, working_dir.as_deref(), env, *show),
     }
 }
 
@@ -461,4 +641,92 @@ fn activate(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
     let r = format!("rstudioapi::terminalActivate({})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
+}
+
+fn term_bool(
+    rpc: &RpcClient<'_>,
+    api_fn: &str,
+    id: &str,
+    field: &str,
+) -> Result<Option<Value>, CliError> {
+    let r = format!(
+        "cat(jsonlite::toJSON(list({field} = rstudioapi::{api_fn}({id_q})), auto_unbox = TRUE))",
+        id_q = r_quote(id)
+    );
+    let raw = r_eval::run(rpc, &r)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("term {field}: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn exit_code(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
+    let r = format!(
+        r#"local({{
+  .__c <- rstudioapi::terminalExitCode({id_q})
+  if (is.null(.__c)) cat("{{\"exit_code\":null}}")
+  else cat(jsonlite::toJSON(list(exit_code = .__c), auto_unbox = TRUE))
+}})"#,
+        id_q = r_quote(id)
+    );
+    let raw = r_eval::run(rpc, &r)?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("term exit-code: invalid JSON: {e}; raw: {raw}"))
+    })?;
+    Ok(Some(parsed))
+}
+
+fn visible(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    let r = r#"local({
+  .__id <- rstudioapi::terminalVisible()
+  if (is.null(.__id)) cat("{\"id\":null}")
+  else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
+})"#;
+    let raw = r_eval::run(rpc, r)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("term visible: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn term_run(
+    rpc: &RpcClient<'_>,
+    command: &str,
+    working_dir: Option<&str>,
+    env: &[String],
+    show: bool,
+) -> Result<Option<Value>, CliError> {
+    // Validate env var entries: must be KEY=VALUE.
+    for kv in env {
+        if !kv.contains('=') {
+            return Err(CliError::user(format!(
+                "invalid --env entry '{kv}'. Expected KEY=VALUE."
+            )));
+        }
+    }
+    let wd_arg = match working_dir {
+        Some(w) => r_quote(w),
+        None => "NULL".into(),
+    };
+    let env_arg = if env.is_empty() {
+        "character()".to_string()
+    } else {
+        let pieces: Vec<String> = env.iter().map(|s| r_quote(s)).collect();
+        format!("c({})", pieces.join(", "))
+    };
+    let show_arg = if show { "TRUE" } else { "FALSE" };
+    let r = format!(
+        r#"local({{
+  .__id <- rstudioapi::terminalExecute(
+    command = {command_q},
+    workingDir = {wd_arg},
+    env = {env_arg},
+    show = {show_arg}
+  )
+  cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
+}})"#,
+        command_q = r_quote(command),
+    );
+    let raw = r_eval::run(rpc, &r)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("term run: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
 }
