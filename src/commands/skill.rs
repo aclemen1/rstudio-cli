@@ -5,27 +5,30 @@ use std::path::{Path, PathBuf};
 use clap::Subcommand;
 use serde_json::{Value, json};
 
-use crate::SKILL_VERSION;
+use crate::VERSION;
 use crate::error::CliError;
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
-/// The skill template embedded at compile time. Bumping its semantic version
-/// requires also bumping `SKILL_VERSION` in `lib.rs` and the `skill_version`
-/// frontmatter at the top of the markdown.
-pub const SKILL_TEMPLATE: &str = include_str!("../skills/rstudio.md");
+const SKILL_NAME: &str = "rstudio";
+const SKILL_FILE: &str = "SKILL.md";
+const VERSION_PLACEHOLDER: &str = "__VERSION__";
+
+/// Raw skill template embedded at compile time. Contains `__VERSION__`,
+/// substituted to `VERSION` (= `CARGO_PKG_VERSION`) at install time.
+pub const SKILL_TEMPLATE_RAW: &str = include_str!("../skills/rstudio.md");
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "skill",
         name: "show",
-        summary: "Imprime le skill rstudio embarqué dans le binaire (markdown).",
+        summary: "Imprime le skill rstudio embarqué (markdown, version substituée).",
         description: "Le skill est un fichier markdown statique avec un frontmatter \
-                      contenant `skill_version`. Sa version est aussi exposée par \
-                      `rstudio version` (champ `skill`).",
+                      contenant `version`, alignée sur la version du CLI (les deux \
+                      sont distribués ensemble dans le binaire).",
         params: &[],
         examples: &[ExampleSpec {
             cmd: "rstudio skill show",
-            explanation: "Imprime le contenu du skill embarqué.",
+            explanation: "Imprime le contenu du skill (avec version réelle).",
         }],
         returns: "string (markdown)",
         errors: &[],
@@ -33,10 +36,12 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "skill",
         name: "install",
-        summary: "Installe le skill embarqué dans le projet courant (.claude/skills/rstudio.md).",
+        summary: "Installe le skill embarqué dans .claude/skills/rstudio/SKILL.md.",
         description: "Cherche le dossier `.claude/skills/` le plus proche en remontant \
-                      depuis cwd, ou le crée dans cwd. Refuse de surécrire un skill \
-                      installé dont la version est >= à celle embarquée, sauf --force.",
+                      depuis cwd, ou le crée dans cwd. Crée ensuite le sous-dossier \
+                      `rstudio/` et y écrit `SKILL.md`. Refuse de surécrire un skill \
+                      installé dont la version est strictement supérieure (semver), \
+                      sauf --force.",
         params: &[
             ParamSpec {
                 name: "--force",
@@ -44,7 +49,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("false"),
                 allowed: &[],
-                description: "Surécrit même si la version installée est >= à celle embarquée.",
+                description: "Surécrit même si la version installée est plus récente.",
             },
             ParamSpec {
                 name: "--target",
@@ -58,14 +63,14 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio skill install",
-                explanation: "Installe ou met à jour ./.claude/skills/rstudio.md.",
+                explanation: "Crée ./.claude/skills/rstudio/SKILL.md.",
             },
             ExampleSpec {
                 cmd: "rstudio skill install --force",
                 explanation: "Force la réinstallation même si la version installée est plus récente.",
             },
         ],
-        returns: "{path: string, action: 'created'|'updated'|'unchanged', skill_version: int}",
+        returns: "{path: string, action: 'created'|'updated'|'unchanged', version: string}",
         errors: &[
             ErrorSpec {
                 kind: "user_error",
@@ -85,10 +90,10 @@ pub enum SkillCmd {
     Show,
     /// Installe le skill dans le projet courant.
     Install {
-        /// Surécrit même si la version installée est >= à celle embarquée.
+        /// Surécrit même si la version installée est strictement plus récente.
         #[arg(long)]
         force: bool,
-        /// Dossier explicite de skills.
+        /// Dossier explicite de skills (parent de `rstudio/`).
         #[arg(long)]
         target: Option<PathBuf>,
     },
@@ -97,11 +102,16 @@ pub enum SkillCmd {
 pub fn run(cmd: &SkillCmd) -> Result<Option<Value>, CliError> {
     match cmd {
         SkillCmd::Show => {
-            print!("{SKILL_TEMPLATE}");
+            print!("{}", rendered_template());
             Ok(None)
         }
         SkillCmd::Install { force, target } => install(*force, target.as_deref()),
     }
+}
+
+/// Returns the skill markdown with `__VERSION__` replaced by the CLI version.
+pub fn rendered_template() -> String {
+    SKILL_TEMPLATE_RAW.replace(VERSION_PLACEHOLDER, VERSION)
 }
 
 fn install(force: bool, target: Option<&Path>) -> Result<Option<Value>, CliError> {
@@ -109,25 +119,25 @@ fn install(force: bool, target: Option<&Path>) -> Result<Option<Value>, CliError
         Some(p) => p.to_path_buf(),
         None => find_or_default_skills_dir()?,
     };
-    fs::create_dir_all(&skills_dir).map_err(|e| {
-        CliError::internal(format!(
-            "create skills dir {}: {e}",
-            skills_dir.display()
-        ))
+    let skill_dir = skills_dir.join(SKILL_NAME);
+    fs::create_dir_all(&skill_dir).map_err(|e| {
+        CliError::internal(format!("create skill dir {}: {e}", skill_dir.display()))
     })?;
-    let target_file = skills_dir.join("rstudio.md");
+    let target_file = skill_dir.join(SKILL_FILE);
 
     let action = match fs::read_to_string(&target_file) {
         Ok(existing) => {
-            let existing_v = parse_skill_version(&existing).unwrap_or(0);
-            if existing_v == SKILL_VERSION {
+            let existing_v = parse_skill_version(&existing).unwrap_or_default();
+            let embedded_v = parse_semver(VERSION).unwrap_or_default();
+            if existing_v == embedded_v {
                 "unchanged"
-            } else if existing_v > SKILL_VERSION && !force {
+            } else if existing_v > embedded_v && !force {
                 return Err(CliError::user(format!(
-                    "skill at {} is newer (v{existing_v}) than the embedded one (v{}). \
+                    "skill at {} is newer (v{}) than the embedded one (v{}). \
                      Pass --force to overwrite.",
                     target_file.display(),
-                    SKILL_VERSION
+                    fmt_semver(&existing_v),
+                    VERSION
                 )));
             } else {
                 "updated"
@@ -137,21 +147,19 @@ fn install(force: bool, target: Option<&Path>) -> Result<Option<Value>, CliError
     };
 
     if action != "unchanged" {
-        fs::write(&target_file, SKILL_TEMPLATE).map_err(|e| {
-            CliError::internal(format!("write {}: {e}", target_file.display()))
-        })?;
+        fs::write(&target_file, rendered_template())
+            .map_err(|e| CliError::internal(format!("write {}: {e}", target_file.display())))?;
     }
 
     Ok(Some(json!({
         "path": target_file.to_string_lossy(),
         "action": action,
-        "skill_version": SKILL_VERSION,
+        "version": VERSION,
     })))
 }
 
 fn find_or_default_skills_dir() -> Result<PathBuf, CliError> {
-    let cwd = env::current_dir()
-        .map_err(|e| CliError::internal(format!("getcwd: {e}")))?;
+    let cwd = env::current_dir().map_err(|e| CliError::internal(format!("getcwd: {e}")))?;
     let mut probe = cwd.clone();
     loop {
         let candidate = probe.join(".claude").join("skills");
@@ -165,20 +173,34 @@ fn find_or_default_skills_dir() -> Result<PathBuf, CliError> {
     Ok(cwd.join(".claude").join("skills"))
 }
 
-fn parse_skill_version(content: &str) -> Option<u32> {
+type SemVer = (u32, u32, u32);
+
+fn parse_skill_version(content: &str) -> Option<SemVer> {
     let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_open = &trimmed[3..];
+    let after_open = trimmed.strip_prefix("---")?;
     let end = after_open.find("\n---")?;
     let frontmatter = &after_open[..end];
     for line in frontmatter.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix("skill_version:") {
-            return rest.trim().parse().ok();
+        if let Some(rest) = line.trim_start().strip_prefix("version:") {
+            return parse_semver(rest.trim());
         }
     }
     None
+}
+
+fn parse_semver(s: &str) -> Option<SemVer> {
+    let mut parts = s.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    let patch: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn fmt_semver(v: &SemVer) -> String {
+    format!("{}.{}.{}", v.0, v.1, v.2)
 }
 
 #[cfg(test)]
@@ -186,9 +208,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_skill_version_from_frontmatter() {
-        let s = "---\nname: foo\nskill_version: 7\n---\n# Body\n";
-        assert_eq!(parse_skill_version(s), Some(7));
+    fn parses_version_from_frontmatter() {
+        let s = "---\nname: foo\nversion: 0.2.5\n---\n# Body\n";
+        assert_eq!(parse_skill_version(s), Some((0, 2, 5)));
     }
 
     #[test]
@@ -197,9 +219,23 @@ mod tests {
     }
 
     #[test]
-    fn embedded_template_has_matching_version() {
-        // Must stay in lockstep with SKILL_VERSION in lib.rs.
-        let v = parse_skill_version(SKILL_TEMPLATE).expect("frontmatter parses");
-        assert_eq!(v, SKILL_VERSION);
+    fn parse_semver_basic() {
+        assert_eq!(parse_semver("0.2.0"), Some((0, 2, 0)));
+        assert_eq!(parse_semver("1.10.3"), Some((1, 10, 3)));
+        assert_eq!(parse_semver("0.2"), None);
+        assert_eq!(parse_semver("0.2.0.1"), None);
+    }
+
+    #[test]
+    fn semver_ordering_is_numeric() {
+        // Sanity: tuple ordering avoids the "0.10 < 0.2" string-compare trap.
+        assert!(parse_semver("0.10.0").unwrap() > parse_semver("0.2.0").unwrap());
+    }
+
+    #[test]
+    fn template_substitutes_version() {
+        let rendered = rendered_template();
+        assert!(rendered.contains(&format!("version: {}", VERSION)));
+        assert!(!rendered.contains(VERSION_PLACEHOLDER));
     }
 }

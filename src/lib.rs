@@ -9,5 +9,4 @@ pub mod schema;
 pub mod session;
 pub mod socket;
 
-pub const SKILL_VERSION: u32 = 1;
-pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -9,12 +9,12 @@ use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
 use crate::session::{Session, SessionOverrides};
-use crate::{CLI_VERSION, SKILL_VERSION};
+use crate::VERSION;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "rstudio",
-    version = CLI_VERSION,
+    version = VERSION,
     about = "AI-native CLI bridge to interact with the embedded RStudio Server IDE",
     long_about = None,
 )]
@@ -46,7 +46,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Imprime les versions du CLI et du skill embarqué.
+    /// Imprime la version du CLI (= version du skill embarqué — ils sont distribués ensemble).
     Version,
 
     /// Manipulation de l'éditeur (ouverture, navigation, ...).
@@ -111,10 +111,7 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
         state_path: cli.state_path,
     };
     match cli.command {
-        Command::Version => Ok(Some(json!({
-            "cli": CLI_VERSION,
-            "skill": SKILL_VERSION,
-        }))),
+        Command::Version => Ok(Some(json!({ "version": VERSION }))),
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
