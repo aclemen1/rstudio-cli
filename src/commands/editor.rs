@@ -12,10 +12,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "open",
-        summary: "Ouvre un fichier dans l'éditeur RStudio.",
-        description: "Sans --line, utilise un postback editfile (non bloquant côté R). \
-                      Avec --line, route via rstudioapi::navigateToFile pour ouvrir ET \
-                      positionner le curseur en un seul appel.",
+        summary: "Ouvre un fichier dans le pane Source (non-modal). Retourne l'id du document.",
+        description: "Wrap rstudioapi::documentOpen(path, line, col, moveCursor). \
+                      Le fichier apparaît comme un onglet dans l'éditeur principal, \
+                      l'utilisateur garde le contrôle. Pas le même comportement que \
+                      `editor edit` qui ouvre la modale R `edit()` (Save/Cancel).",
         params: &[
             ParamSpec {
                 name: "path",
@@ -37,22 +38,30 @@ pub const ACTIONS: &[ActionSpec] = &[
                 name: "--col",
                 kind: ParamKind::Integer,
                 required: false,
-                default: Some("1"),
+                default: None,
                 allowed: &[],
-                description: "Colonne (1-based) ; nécessite --line.",
+                description: "Colonne (1-based) ; combiner avec --line.",
+            },
+            ParamSpec {
+                name: "--no-cursor",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Ne pas déplacer le curseur (moveCursor=FALSE). Utile pour ouvrir en arrière-plan.",
             },
         ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor open ~/code/aclemen1/rstudio-cli/Cargo.toml",
-                explanation: "Ouvre Cargo.toml sans changer la position du curseur.",
+                explanation: "Ouvre Cargo.toml dans le pane Source, position cursor inchangée si déjà ouvert.",
             },
             ExampleSpec {
-                cmd: "rstudio editor open src/main.rs --line 42",
-                explanation: "Ouvre src/main.rs et place le curseur en ligne 42, colonne 1.",
+                cmd: "rstudio editor open src/main.rs --line 42 --col 5",
+                explanation: "Ouvre puis place le curseur en (42, 5).",
             },
         ],
-        returns: "{path: string, line: int|null, col: int|null}",
+        returns: "{path: string, line: int|null, col: int|null, id: string}",
         errors: &[
             ErrorSpec {
                 kind: "user_error",
@@ -60,9 +69,36 @@ pub const ACTIONS: &[ActionSpec] = &[
             },
             ErrorSpec {
                 kind: "r_error",
-                when: "rstudioapi::navigateToFile rejette le chemin avec --line.",
+                when: "rstudioapi::documentOpen rejette le chemin.",
             },
         ],
+    },
+    ActionSpec {
+        category: "editor",
+        name: "edit",
+        summary: "Ouvre la modale R edit() pour le fichier (Save/Cancel). Bloquant.",
+        description: "Wrap le postback editfile. Comportement R standard `edit(file = ...)`: \
+                      RStudio affiche une fenêtre modale d'édition séparée du pane Source. \
+                      L'utilisateur doit cliquer Save ou Cancel pour fermer. Pendant ce temps, \
+                      la session R est en attente — les `exec run` qui suivent attendront. \
+                      Pour l'édition normale (non-modal), préférer `editor open`.",
+        params: &[ParamSpec {
+            name: "path",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Chemin du fichier (résolu en absolu via canonicalize).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor edit /tmp/scratch.R",
+            explanation: "Ouvre une modale d'édition pour /tmp/scratch.R. Bloque jusqu'à Save/Cancel.",
+        }],
+        returns: "{path: string, exit_code: int}",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Fichier introuvable.",
+        }],
     },
     ActionSpec {
         category: "editor",
@@ -195,17 +231,20 @@ pub const ACTIONS: &[ActionSpec] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum EditorCmd {
-    /// Ouvre un fichier dans l'éditeur RStudio.
+    /// Ouvre un fichier dans le pane Source (non-modal). Retourne l'id du document.
     Open {
-        /// Chemin du fichier à ouvrir.
         path: PathBuf,
-        /// Saute à cette ligne après ouverture.
         #[arg(long)]
         line: Option<u32>,
-        /// Saute à cette colonne après ouverture (nécessite --line).
         #[arg(long)]
         col: Option<u32>,
+        /// Ne pas déplacer le curseur (moveCursor=FALSE).
+        #[arg(long)]
+        no_cursor: bool,
     },
+    /// Ouvre la modale R `edit()` pour le fichier (Save/Cancel).
+    /// Bloque la session R jusqu'à fermeture de la modale.
+    Edit { path: PathBuf },
     /// Lit le contenu disque d'un fichier (pas le buffer en cours d'édition).
     Read {
         path: PathBuf,
@@ -235,7 +274,13 @@ pub enum EditorCmd {
 
 pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        EditorCmd::Open { path, line, col } => open(rpc, path, *line, *col),
+        EditorCmd::Open {
+            path,
+            line,
+            col,
+            no_cursor,
+        } => open(rpc, path, *line, *col, *no_cursor),
+        EditorCmd::Edit { path } => edit_modal(rpc, path),
         EditorCmd::Read { path, encoding } => read(rpc, path, encoding),
         EditorCmd::Context { include_contents } => context(rpc, *include_contents),
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
@@ -248,38 +293,40 @@ fn open(
     path: &PathBuf,
     line: Option<u32>,
     col: Option<u32>,
+    no_cursor: bool,
 ) -> Result<Option<Value>, CliError> {
     let abs = path
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
 
-    match line {
-        None => {
-            let pb = rpc.postback("editfile", &abs_str)?;
-            if pb.exit_code != 0 {
-                return Err(CliError::rpc(
-                    pb.exit_code,
-                    format!("editfile postback failed (exit_code={})", pb.exit_code),
-                ));
-            }
-        }
-        Some(l) => {
-            let c = col.unwrap_or(1);
-            let r_code = format!(
-                "rstudioapi::navigateToFile({}, line = {}L, column = {}L)",
-                r_quote(&abs_str),
-                l,
-                c
-            );
-            r_eval::run_silent(rpc, &r_code)?;
-        }
-    }
+    let line_arg = line.map(|l| format!("{l}L")).unwrap_or_else(|| "-1L".into());
+    let col_arg = col.map(|c| format!("{c}L")).unwrap_or_else(|| "-1L".into());
+    let move_cursor = if no_cursor { "FALSE" } else { "TRUE" };
+
+    let r_code = format!(
+        "cat(rstudioapi::documentOpen({path}, line = {line_arg}, col = {col_arg}, moveCursor = {move_cursor}))",
+        path = r_quote(&abs_str),
+    );
+    let id = r_eval::run(rpc, &r_code)?;
 
     Ok(Some(json!({
         "path": abs_str,
         "line": line,
         "col": col,
+        "id": id.trim(),
+    })))
+}
+
+fn edit_modal(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError> {
+    let abs = path
+        .canonicalize()
+        .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
+    let abs_str = abs.to_string_lossy().into_owned();
+    let pb = rpc.postback("editfile", &abs_str)?;
+    Ok(Some(json!({
+        "path": abs_str,
+        "exit_code": pb.exit_code,
     })))
 }
 
