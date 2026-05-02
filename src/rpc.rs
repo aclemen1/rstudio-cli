@@ -4,10 +4,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::client_id::read_active_client_id;
+use crate::client_id::resolve_client_id;
 use crate::error::CliError;
-use crate::session::Session;
-use crate::socket::{HttpResponse, request};
+use crate::session::{Mode, Session};
+use crate::transport::{HttpResponse, request};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const RPC_INVALID_CLIENT_ID: i32 = 4;
@@ -34,8 +34,8 @@ impl<'a> RpcClient<'a> {
         self.timeout.replace(timeout)
     }
 
-    fn auth_headers(&self, csrf: &str) -> [(String, String); 4] {
-        [
+    fn auth_headers(&self, csrf: &str) -> Vec<(String, String)> {
+        let mut headers = vec![
             ("X-Session-Postback".into(), "1".into()),
             ("X-RStudioUserIdentity".into(), self.session.user.clone()),
             ("X-RS-CSRF-Token".into(), csrf.into()),
@@ -43,7 +43,16 @@ impl<'a> RpcClient<'a> {
                 "Cookie".into(),
                 format!("rs-csrf-token={csrf}; csrf-token={csrf}"),
             ),
-        ]
+        ];
+        // Desktop authenticates by shared secret instead of SO_PEERCRED. The
+        // header is the only thing the listener checks; the Server-style
+        // headers above are harmless on Desktop (the listener ignores them).
+        if self.session.mode == Mode::Desktop
+            && let Some(secret) = self.session.shared_secret.as_ref()
+        {
+            headers.push(("X-Shared-Secret".into(), secret.clone()));
+        }
+        headers
     }
 
     /// Postbacks don't carry a clientId — random CSRF is enough. They also don't
@@ -59,7 +68,7 @@ impl<'a> RpcClient<'a> {
 
         let path = format!("/rsession-local/postback/{cmd}");
         let resp = request(
-            self.session.socket(),
+            &self.session.transport,
             "POST",
             &path,
             &header_refs,
@@ -104,8 +113,7 @@ impl<'a> RpcClient<'a> {
         if !force_refresh && let Some(id) = self.cached_client_id.borrow().clone() {
             return Ok(id);
         }
-        let state_path = self.session.require_state_path()?;
-        let id = read_active_client_id(state_path)?;
+        let id = resolve_client_id(self.session)?;
         *self.cached_client_id.borrow_mut() = Some(id.clone());
         Ok(id)
     }
@@ -134,7 +142,7 @@ impl<'a> RpcClient<'a> {
 
         let path = format!("/rpc/{method}");
         let resp = request(
-            self.session.socket(),
+            &self.session.transport,
             "POST",
             &path,
             &header_refs,
@@ -186,6 +194,27 @@ fn parse_rpc_envelope(method: &str, resp: &HttpResponse) -> Result<Value, CliErr
         ));
     }
 
+    // Desktop's TCP listener returns an asyncHandle when an RPC is queued
+    // behind a busy R session: the actual result is later delivered through
+    // a kAsyncCompletion event on /events/get_events, keyed on the desktop
+    // client id. The CLI does not poll that event channel (and cannot mint
+    // its own client id since `client_init` is blacklisted, see
+    // src/commands/raw.rs), so we surface a clean session_unavailable
+    // instead of falling through to a Value::Null result that downstream
+    // callers like r_eval would later reject as "non-string: null". Server's
+    // unix-socket listener never takes this path (it keeps the HTTP
+    // response open until the result is ready), so this branch only fires
+    // on Desktop. See DESKTOP_TEST_RESULTS.md "B1 — wire capture".
+    if let Some(handle) = envelope.get("asyncHandle").and_then(|v| v.as_str()) {
+        return Err(CliError::session(format!(
+            "Desktop rsession queued this {method} call \
+             (asyncHandle={handle}); the CLI does not poll the \
+             kAsyncCompletion event channel. Serialise r exec calls \
+             externally, or wait for async support to land. Server is \
+             unaffected."
+        )));
+    }
+
     Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
 }
 
@@ -210,4 +239,65 @@ pub fn r_quote(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ErrorKind;
+
+    fn resp_with_body(body: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn parses_plain_result() {
+        let resp = resp_with_body(r#"{"result":"42","ep":"false"}"#);
+        let value = parse_rpc_envelope("execute_r_code", &resp).expect("ok");
+        assert_eq!(value, Value::String("42".into()));
+    }
+
+    #[test]
+    fn surfaces_async_handle_as_session_unavailable() {
+        let resp = resp_with_body(
+            r#"{"asyncHandle":"22e9ffe3-b62a-41c1-9909-f7f883cca9fc","ep":"false"}"#,
+        );
+        let err = parse_rpc_envelope("execute_r_code", &resp)
+            .expect_err("asyncHandle must be rejected, not silently null");
+        assert!(matches!(err.kind, ErrorKind::SessionUnavailable));
+        assert!(
+            err.message.contains("22e9ffe3-b62a-41c1-9909-f7f883cca9fc"),
+            "message must name the handle, got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("execute_r_code"),
+            "message must name the method, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn rpc_error_still_surfaces_as_rpc_error() {
+        let resp = resp_with_body(
+            r#"{"error":{"code":4,"message":"jsonrpc error 4 (Invalid client id)","error":null}}"#,
+        );
+        let err = parse_rpc_envelope("execute_r_code", &resp).expect_err("err");
+        assert!(matches!(err.kind, ErrorKind::RpcError));
+        assert_eq!(err.code, 4);
+    }
+
+    #[test]
+    fn r_error_still_surfaces_as_r_error() {
+        let resp = resp_with_body(
+            r#"{"error":{"code":100,"message":"R eval error","error":{"message":"intentional"}}}"#,
+        );
+        let err = parse_rpc_envelope("execute_r_code", &resp).expect_err("err");
+        assert!(matches!(err.kind, ErrorKind::RError));
+        assert_eq!(err.message, "intentional");
+    }
 }

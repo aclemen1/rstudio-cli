@@ -4,9 +4,15 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::error::CliError;
+use crate::session::{Mode, Session};
 
 const SESSIONS_SUBDIR: &str = ".local/share/rstudio/sessions/active";
 const STATE_FILENAME: &str = "session-persistent-state";
+
+/// The client id RStudio Desktop uses for every JSON-RPC call. Confirmed
+/// from `src/cpp/session/SessionPersistentState.cpp` upstream — Desktop
+/// hardcodes this value rather than persisting one to disk.
+pub const DESKTOP_CLIENT_ID: &str = "33e600bb-c1b1-46bf-b562-ab5cba070b0e";
 
 pub fn detect_session_id() -> Option<String> {
     if let Ok(id) = env::var("RSTUDIO_SESSION_ID")
@@ -56,6 +62,20 @@ pub fn sources_dir_for(session_id: &str) -> Option<PathBuf> {
             .join(".local/share/rstudio/sources")
             .join(format!("session-{session_id}")),
     )
+}
+
+/// Resolve the client id to use for JSON-RPC calls in this session. On
+/// Desktop, the value is the hardcoded `DESKTOP_CLIENT_ID` constant. On
+/// Server, we read it from `session-persistent-state` so the CLI shares
+/// identity with the user's open browser tab.
+pub fn resolve_client_id(session: &Session) -> Result<String, CliError> {
+    match session.mode {
+        Mode::Desktop => Ok(DESKTOP_CLIENT_ID.to_string()),
+        Mode::Server => {
+            let path = session.require_state_path()?;
+            read_active_client_id(path)
+        }
+    }
 }
 
 pub fn read_active_client_id(state_path: &Path) -> Result<String, CliError> {

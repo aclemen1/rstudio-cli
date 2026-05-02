@@ -11,7 +11,7 @@ use crate::commands::{
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
-use crate::session::{Session, SessionOverrides};
+use crate::session::{Mode, Session, SessionOverrides};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -21,20 +21,37 @@ use crate::session::{Session, SessionOverrides};
     long_about = None,
 )]
 struct Cli {
-    /// Override socket path (default: $RS_SESSION_TMP_DIR/$RSTUDIO_SESSION_STREAM).
+    /// Force a specific RStudio mode. Default 'auto' picks Server when an
+    /// rsession Unix socket is reachable, Desktop when a local rsession
+    /// process is running.
+    #[arg(long, global = true, default_value = "auto", value_parser = ["auto", "server", "desktop"])]
+    mode: String,
+
+    /// (Server) Override socket path (default: $RS_SESSION_TMP_DIR/$RSTUDIO_SESSION_STREAM).
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
+
+    /// (Desktop) Override the rsession TCP port. Pair with --secret to skip
+    /// process discovery. Default: discover from the running rsession process.
+    #[arg(long, global = true)]
+    port: Option<u16>,
+
+    /// (Desktop) Override the rsession shared secret (RS_SHARED_SECRET).
+    /// Required when --port is passed.
+    #[arg(long, global = true)]
+    secret: Option<String>,
 
     /// Override user identity (default: $USER).
     #[arg(long, global = true)]
     user: Option<String>,
 
-    /// Override session id used to locate session-persistent-state
-    /// (default: $RSTUDIO_SESSION_ID, else most recent under ~/.local/share/rstudio/sessions/active/).
+    /// Override session id. On Server, used to locate session-persistent-state.
+    /// On Desktop, used as the on-disk sources/session-<id>/ folder name
+    /// (= the rsession --launcher-token value).
     #[arg(long, global = true)]
     session_id: Option<String>,
 
-    /// Override the full path to the session-persistent-state file.
+    /// (Server) Override the full path to the session-persistent-state file.
     #[arg(long, global = true)]
     state_path: Option<PathBuf>,
 
@@ -122,11 +139,26 @@ pub fn run() -> ExitCode {
 }
 
 fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
+    let mode = match cli.mode.as_str() {
+        "auto" => None,
+        "server" => Some(Mode::Server),
+        "desktop" => Some(Mode::Desktop),
+        // clap value_parser already restricts the set, so this is unreachable
+        // in practice — kept for explicit error reporting.
+        other => {
+            return Err(CliError::user(format!(
+                "invalid --mode '{other}'. Expected: auto, server, desktop."
+            )));
+        }
+    };
     let overrides = SessionOverrides {
+        mode,
         socket: cli.socket,
         user: cli.user,
         session_id: cli.session_id,
         state_path: cli.state_path,
+        port: cli.port,
+        secret: cli.secret,
     };
     match cli.command {
         Command::Version => Ok(Some(json!({ "version": VERSION }))),
