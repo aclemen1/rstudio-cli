@@ -136,10 +136,10 @@ fn list(rpc: &RpcClient<'_>, pattern: Option<&str>) -> Result<Option<Value>, Cli
         .into_iter()
         .filter_map(|v| {
             let name = v.get("name")?.as_str()?.to_string();
-            if let Some(r) = &regex {
-                if !r.is_match(&name) {
-                    return None;
-                }
+            if let Some(r) = &regex
+                && !r.is_match(&name)
+            {
+                return None;
             }
             let type_ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
             let length = v.get("length").and_then(|x| x.as_u64());

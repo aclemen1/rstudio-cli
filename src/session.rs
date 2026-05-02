@@ -71,18 +71,12 @@ impl Session {
 
         let state_path = match overrides.state_path {
             Some(explicit) => Some(explicit),
-            None => session_id
-                .as_deref()
-                .and_then(client_id::state_path_for),
+            None => session_id.as_deref().and_then(client_id::state_path_for),
         };
 
-        let session_dir = session_id
-            .as_deref()
-            .and_then(client_id::session_dir_for);
+        let session_dir = session_id.as_deref().and_then(client_id::session_dir_for);
 
-        let sources_dir = session_id
-            .as_deref()
-            .and_then(client_id::sources_dir_for);
+        let sources_dir = session_id.as_deref().and_then(client_id::sources_dir_for);
 
         Ok(Self {
             socket_path,

@@ -9,10 +9,10 @@ const SESSIONS_SUBDIR: &str = ".local/share/rstudio/sessions/active";
 const STATE_FILENAME: &str = "session-persistent-state";
 
 pub fn detect_session_id() -> Option<String> {
-    if let Ok(id) = env::var("RSTUDIO_SESSION_ID") {
-        if !id.is_empty() {
-            return Some(id);
-        }
+    if let Ok(id) = env::var("RSTUDIO_SESSION_ID")
+        && !id.is_empty()
+    {
+        return Some(id);
     }
     let dir = sessions_dir()?;
     let mut best: Option<(String, SystemTime)> = None;
@@ -38,7 +38,10 @@ pub fn detect_session_id() -> Option<String> {
 
 pub fn state_path_for(session_id: &str) -> Option<PathBuf> {
     let dir = sessions_dir()?;
-    Some(dir.join(format!("session-{session_id}")).join(STATE_FILENAME))
+    Some(
+        dir.join(format!("session-{session_id}"))
+            .join(STATE_FILENAME),
+    )
 }
 
 pub fn session_dir_for(session_id: &str) -> Option<PathBuf> {

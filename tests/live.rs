@@ -78,7 +78,10 @@ fn exec_run_basic() {
     let session = require_live!();
     let rpc = RpcClient::new(&session);
     let out = r_eval::run(&rpc, "1 + 1").expect("exec run 1+1");
-    assert!(out.contains("2"), "expected output to contain '2', got: {out:?}");
+    assert!(
+        out.contains("2"),
+        "expected output to contain '2', got: {out:?}"
+    );
 }
 
 #[test]
@@ -139,7 +142,10 @@ fn env_list_returns_array() {
     let rpc = RpcClient::new(&session);
     let cmd = EnvCmd::List { pattern: None };
     let result = env_cmd::run(&cmd, &rpc).expect("env list").expect("some");
-    let vars = result.get("vars").and_then(|v| v.as_array()).expect("vars array");
+    let vars = result
+        .get("vars")
+        .and_then(|v| v.as_array())
+        .expect("vars array");
     // The session may or may not have user variables, but the call must
     // succeed and the field must be an array (possibly empty).
     eprintln!("env list returned {} variables", vars.len());
@@ -165,9 +171,12 @@ fn schema_introspection_works_offline() {
     // schema is offline (no socket needed) but lives in the lib so we
     // assert here that the registry is populated.
     let actions = rstudio_cli::schema::registry();
-    assert!(actions.len() >= 20, "expected >=20 actions, got {}", actions.len());
-    let categories: std::collections::HashSet<_> =
-        actions.iter().map(|a| a.category).collect();
+    assert!(
+        actions.len() >= 20,
+        "expected >=20 actions, got {}",
+        actions.len()
+    );
+    let categories: std::collections::HashSet<_> = actions.iter().map(|a| a.category).collect();
     for required in ["editor", "r", "console", "term", "env", "pane", "skill"] {
         assert!(categories.contains(required), "missing category {required}");
     }

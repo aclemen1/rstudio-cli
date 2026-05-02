@@ -126,11 +126,7 @@ pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
             }
             rpc.rpc(
                 "console_input",
-                vec![
-                    Value::String(text),
-                    Value::String(String::new()),
-                    json!(0),
-                ],
+                vec![Value::String(text), Value::String(String::new()), json!(0)],
             )?;
             Ok(None)
         }

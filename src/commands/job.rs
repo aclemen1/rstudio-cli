@@ -385,10 +385,7 @@ pub enum JobCmd {
     /// Increment progress.
     AddProgress { id: String, units: u32 },
     /// Update lifecycle state.
-    SetState {
-        id: String,
-        state: String,
-    },
+    SetState { id: String, state: String },
     /// Update status text.
     SetStatus { id: String, status: String },
     /// Append text to a job's output log.
@@ -424,7 +421,15 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
             running,
             auto_remove,
             show,
-        } => add(rpc, name, status, *progress_units, *running, *auto_remove, *show),
+        } => add(
+            rpc,
+            name,
+            status,
+            *progress_units,
+            *running,
+            *auto_remove,
+            *show,
+        ),
         JobCmd::Remove { id } => silent_id(rpc, "jobRemove", id),
         JobCmd::SetProgress { id, units } => silent_id_int(rpc, "jobSetProgress", id, *units),
         JobCmd::AddProgress { id, units } => silent_id_int(rpc, "jobAddProgress", id, *units),
@@ -437,7 +442,14 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
             working_dir,
             import_env,
             export_env,
-        } => run_script(rpc, path, name.as_deref(), working_dir.as_deref(), *import_env, export_env),
+        } => run_script(
+            rpc,
+            path,
+            name.as_deref(),
+            working_dir.as_deref(),
+            *import_env,
+            export_env,
+        ),
         JobCmd::IsActive => is_active(rpc),
     }
 }
@@ -584,8 +596,9 @@ fn run_script(
         export_env_q = r_quote(export_env),
     );
     let raw = r_eval::run(rpc, &r)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("job run-script: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("job run-script: invalid JSON: {e}; raw: {raw}"))
+    })?;
     Ok(Some(parsed))
 }
 

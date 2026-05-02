@@ -238,7 +238,9 @@ pub enum PrefCmd {
 
 pub fn run(cmd: &PrefCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        PrefCmd::Read { name, default_json } => read_pref(rpc, "readPreference", name, default_json),
+        PrefCmd::Read { name, default_json } => {
+            read_pref(rpc, "readPreference", name, default_json)
+        }
         PrefCmd::Write { name, value_json } => write_pref(rpc, "writePreference", name, value_json),
         PrefCmd::ReadRstudio { name, default_json } => {
             read_pref(rpc, "readRStudioPreference", name, default_json)
@@ -272,7 +274,9 @@ fn read_pref(
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
-        CliError::internal(format!("pref read ({api_fn}): invalid JSON: {e}; raw: {raw}"))
+        CliError::internal(format!(
+            "pref read ({api_fn}): invalid JSON: {e}; raw: {raw}"
+        ))
     })?;
     Ok(Some(parsed))
 }
@@ -297,7 +301,9 @@ fn write_pref(
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
-        CliError::internal(format!("pref write ({api_fn}): invalid JSON: {e}; raw: {raw}"))
+        CliError::internal(format!(
+            "pref write ({api_fn}): invalid JSON: {e}; raw: {raw}"
+        ))
     })?;
     Ok(Some(parsed))
 }
@@ -311,8 +317,11 @@ fn get_persistent(rpc: &RpcClient<'_>, name: &str) -> Result<Option<Value>, CliE
         name_q = r_quote(name),
     );
     let raw = r_eval::run(rpc, &r_code)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("pref get-persistent: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!(
+            "pref get-persistent: invalid JSON: {e}; raw: {raw}"
+        ))
+    })?;
     Ok(Some(parsed))
 }
 
@@ -333,7 +342,10 @@ fn set_persistent(
         value_q = r_quote(value_json),
     );
     let raw = r_eval::run(rpc, &r_code)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("pref set-persistent: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!(
+            "pref set-persistent: invalid JSON: {e}; raw: {raw}"
+        ))
+    })?;
     Ok(Some(parsed))
 }

@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
+use crate::VERSION;
 use crate::commands::{
     console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, term, ui,
 };
@@ -11,7 +12,6 @@ use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
 use crate::session::{Session, SessionOverrides};
-use crate::VERSION;
 
 #[derive(Parser, Debug)]
 #[command(

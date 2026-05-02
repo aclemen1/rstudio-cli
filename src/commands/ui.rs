@@ -405,12 +405,23 @@ pub enum UiCmd {
 
 pub fn run(cmd: &UiCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        UiCmd::Dialog { title, message, url } => dialog(rpc, title, message, url),
+        UiCmd::Dialog {
+            title,
+            message,
+            url,
+        } => dialog(rpc, title, message, url),
         UiCmd::UpdateDialog { fields_json } => update_dialog(rpc, fields_json),
-        UiCmd::Prompt { title, message, default } => prompt(rpc, title, message, default.as_deref()),
-        UiCmd::Question { title, message, ok, cancel } => {
-            question(rpc, title, message, ok.as_deref(), cancel.as_deref())
-        }
+        UiCmd::Prompt {
+            title,
+            message,
+            default,
+        } => prompt(rpc, title, message, default.as_deref()),
+        UiCmd::Question {
+            title,
+            message,
+            ok,
+            cancel,
+        } => question(rpc, title, message, ok.as_deref(), cancel.as_deref()),
         UiCmd::SelectFile {
             caption,
             label,
@@ -418,13 +429,19 @@ pub fn run(cmd: &UiCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> 
             filter,
             new_file,
         } => select_file(rpc, caption, label, path.as_deref(), filter, *new_file),
-        UiCmd::SelectDir { caption, label, path } => {
-            select_dir(rpc, caption, label, path.as_deref())
-        }
-        UiCmd::AskPassword { prompt: prompt_text } => ask_password(rpc, prompt_text),
-        UiCmd::AskSecret { name, message, title } => {
-            ask_secret(rpc, name, message.as_deref(), title.as_deref())
-        }
+        UiCmd::SelectDir {
+            caption,
+            label,
+            path,
+        } => select_dir(rpc, caption, label, path.as_deref()),
+        UiCmd::AskPassword {
+            prompt: prompt_text,
+        } => ask_password(rpc, prompt_text),
+        UiCmd::AskSecret {
+            name,
+            message,
+            title,
+        } => ask_secret(rpc, name, message.as_deref(), title.as_deref()),
     }
 }
 
@@ -542,8 +559,9 @@ fn select_file(
         filter_q = r_quote(filter),
     );
     let raw = r_eval::run(rpc, &r)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("ui select-file: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("ui select-file: invalid JSON: {e}; raw: {raw}"))
+    })?;
     Ok(Some(parsed))
 }
 
@@ -582,8 +600,9 @@ fn ask_password(rpc: &RpcClient<'_>, prompt: &str) -> Result<Option<Value>, CliE
         prompt_q = r_quote(prompt),
     );
     let raw = r_eval::run(rpc, &r)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("ui ask-password: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("ui ask-password: invalid JSON: {e}; raw: {raw}"))
+    })?;
     Ok(Some(parsed))
 }
 

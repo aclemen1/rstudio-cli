@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use serde_json::{Value, json};
@@ -351,7 +351,7 @@ fn viewer(rpc: &RpcClient<'_>, target: &str) -> Result<Option<Value>, CliError> 
     Ok(Some(json!({ "target": resolved })))
 }
 
-fn files(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError> {
+fn files(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
     let abs = path
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
@@ -361,7 +361,7 @@ fn files(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError>
     Ok(Some(json!({ "path": abs_str })))
 }
 
-fn preview_rd(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError> {
+fn preview_rd(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
     let abs = path
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
@@ -371,11 +371,7 @@ fn preview_rd(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliE
     Ok(Some(json!({ "path": abs_str })))
 }
 
-fn preview_sql(
-    rpc: &RpcClient<'_>,
-    conn_expr: &str,
-    sql: &str,
-) -> Result<Option<Value>, CliError> {
+fn preview_sql(rpc: &RpcClient<'_>, conn_expr: &str, sql: &str) -> Result<Option<Value>, CliError> {
     let r = format!(
         "rstudioapi::previewSql(conn = ({}), statement = {})",
         conn_expr,
@@ -398,7 +394,7 @@ fn save_plot(
         )));
     }
     // The output path may not exist yet; just absolutize relative paths.
-    let abs = if file.is_absolute() {
+    let abs: PathBuf = if file.is_absolute() {
         file.clone()
     } else {
         std::env::current_dir()

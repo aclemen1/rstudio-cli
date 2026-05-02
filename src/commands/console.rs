@@ -179,11 +179,11 @@ fn context(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     if raw.trim() == "null" {
         return Ok(Some(Value::Null));
     }
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("console context: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("console context: invalid JSON: {e}; raw: {raw}"))
+    })?;
     Ok(Some(parsed))
 }
-
 
 fn history(rpc: &RpcClient<'_>, limit: u32) -> Result<Option<Value>, CliError> {
     if limit == 0 {
@@ -248,10 +248,7 @@ fn actions(
                 .unwrap_or("unknown")
                 .to_string();
             let text = d.as_str().unwrap_or("").to_string();
-            let keep = allow_all
-                || kind
-                    .map(|k| types.contains(&k))
-                    .unwrap_or(false);
+            let keep = allow_all || kind.map(|k| types.contains(&k)).unwrap_or(false);
             if !keep {
                 return None;
             }

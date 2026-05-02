@@ -76,9 +76,9 @@ fn parse_output(raw: &str) -> Result<String, CliError> {
     let (status, payload) = raw.split_once('\n').unwrap_or((raw, ""));
     match status {
         "OK" => Ok(payload.to_string()),
-        "ER" if payload == TIMEOUT_MARKER => Err(CliError::timeout(format!(
-            "R evaluation exceeded elapsed time limit (default 2s; pass --timeout to override)"
-        ))),
+        "ER" if payload == TIMEOUT_MARKER => Err(CliError::timeout(
+            "R evaluation exceeded elapsed time limit (default 2s; pass --timeout to override)",
+        )),
         "ER" => Err(CliError::r(payload.to_string())),
         _ => Err(CliError::internal(format!(
             "execute_r_code returned unexpected format (no OK/ER status line): {raw:?}"

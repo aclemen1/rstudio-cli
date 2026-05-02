@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
-use crate::schema::{ActionSpec, CategorySpec, actions_in, category, find, registry, CATEGORIES};
+use crate::schema::{ActionSpec, CATEGORIES, CategorySpec, actions_in, category, find, registry};
 
 #[derive(Args, Debug)]
 pub struct SchemaCmd {

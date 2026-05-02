@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use serde_json::{Value, json};
@@ -742,7 +742,7 @@ pub fn run(
 
 fn open(
     rpc: &RpcClient<'_>,
-    path: &PathBuf,
+    path: &Path,
     line: Option<u32>,
     col: Option<u32>,
     no_cursor: bool,
@@ -752,7 +752,9 @@ fn open(
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
 
-    let line_arg = line.map(|l| format!("{l}L")).unwrap_or_else(|| "-1L".into());
+    let line_arg = line
+        .map(|l| format!("{l}L"))
+        .unwrap_or_else(|| "-1L".into());
     let col_arg = col.map(|c| format!("{c}L")).unwrap_or_else(|| "-1L".into());
     let move_cursor = if no_cursor { "FALSE" } else { "TRUE" };
 
@@ -770,7 +772,7 @@ fn open(
     })))
 }
 
-fn edit_modal(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError> {
+fn edit_modal(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
     let abs = path
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
@@ -782,7 +784,7 @@ fn edit_modal(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliE
     })))
 }
 
-fn read(rpc: &RpcClient<'_>, path: &PathBuf, encoding: &str) -> Result<Option<Value>, CliError> {
+fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value>, CliError> {
     let abs = path
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
@@ -843,8 +845,11 @@ fn context_via(
     if raw.trim() == "null" {
         return Ok(Some(Value::Null));
     }
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("editor context ({api_fn}): invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!(
+            "editor context ({api_fn}): invalid JSON: {e}; raw: {raw}"
+        ))
+    })?;
     Ok(Some(parsed))
 }
 
@@ -1021,8 +1026,9 @@ fn modify_range(
     text: &str,
     id: Option<&str>,
 ) -> Result<Option<Value>, CliError> {
-    let ((l1, c1), (l2, c2)) = parse_range(range)
-        .ok_or_else(|| CliError::user(format!("invalid range '{range}'. Expected 'L1:C1-L2:C2'.")))?;
+    let ((l1, c1), (l2, c2)) = parse_range(range).ok_or_else(|| {
+        CliError::user(format!("invalid range '{range}'. Expected 'L1:C1-L2:C2'."))
+    })?;
     let id_arg = match id {
         Some(s) => r_quote(s),
         None => "NULL".into(),
@@ -1089,10 +1095,7 @@ fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, Cl
     // skip it silently rather than fail the whole listing.
     let mut docs: Vec<Value> = Vec::with_capacity(ids.len());
     for id in &ids {
-        let result = rpc.rpc(
-            "get_source_document",
-            vec![Value::String(id.clone())],
-        );
+        let result = rpc.rpc("get_source_document", vec![Value::String(id.clone())]);
         let mut entry = match result {
             Ok(Value::Object(map)) => map,
             Ok(_) | Err(_) => continue, // race or unexpected shape — skip
@@ -1117,7 +1120,10 @@ fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, Cl
 /// Match the source-database filename pattern: 8 uppercase hex characters.
 /// Skips `<id>-contents` files (live buffer) and `lock_file`.
 fn is_document_id(name: &str) -> bool {
-    name.len() == 8 && name.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+    name.len() == 8
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
 }
 
 fn parse_line_col(s: &str) -> Option<(u32, u32)> {

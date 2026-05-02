@@ -433,33 +433,19 @@ pub enum TermCmd {
     /// The text is poked at the current prompt. A subsequent `term exec` will
     /// append to that line instead of starting a new command — prefer several
     /// `term exec` calls to run distinct commands.
-    Send {
-        id: String,
-        text: String,
-    },
+    Send { id: String, text: String },
     /// Send text to the terminal with a trailing newline (equivalent to pressing Enter).
     /// Fire-and-forget: does not block or wait for the command to finish. Read
     /// `term buffer <id>` afterwards to retrieve the output.
-    Exec {
-        id: String,
-        text: String,
-    },
+    Exec { id: String, text: String },
     /// Kill a terminal (removes it from the pane).
-    Kill {
-        id: String,
-    },
+    Kill { id: String },
     /// Clear a terminal's buffer.
-    Clear {
-        id: String,
-    },
+    Clear { id: String },
     /// Return the full context of a terminal (caption, working_dir, shell, pid, ...).
-    Context {
-        id: String,
-    },
+    Context { id: String },
     /// Focus the Terminal pane and activate this terminal.
-    Activate {
-        id: String,
-    },
+    Activate { id: String },
     /// Whether a terminal is currently running a foreground command.
     Busy { id: String },
     /// Whether a terminal's shell process is alive.
@@ -539,8 +525,9 @@ fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
   }
 })"#;
     let raw = r_eval::run(rpc, r)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("term list: invalid JSON from R: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("term list: invalid JSON from R: {e}; raw: {raw}"))
+    })?;
     Ok(Some(json!({ "terminals": parsed })))
 }
 
@@ -553,8 +540,11 @@ fn context(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
         id_q = r_quote(id)
     );
     let raw = r_eval::run(rpc, &r)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("term context: invalid JSON from R: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!(
+            "term context: invalid JSON from R: {e}; raw: {raw}"
+        ))
+    })?;
     Ok(Some(parsed))
 }
 
@@ -579,8 +569,9 @@ fn buffer(
         id_q = r_quote(id),
     );
     let raw = r_eval::run(rpc, &r)?;
-    let lines: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("term buffer: invalid JSON from R: {e}; raw: {raw}")))?;
+    let lines: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("term buffer: invalid JSON from R: {e}; raw: {raw}"))
+    })?;
     Ok(Some(json!({ "id": id, "lines": lines })))
 }
 

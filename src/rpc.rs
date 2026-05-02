@@ -101,10 +101,8 @@ impl<'a> RpcClient<'a> {
     }
 
     fn client_id(&self, force_refresh: bool) -> Result<String, CliError> {
-        if !force_refresh {
-            if let Some(id) = self.cached_client_id.borrow().clone() {
-                return Ok(id);
-            }
+        if !force_refresh && let Some(id) = self.cached_client_id.borrow().clone() {
+            return Ok(id);
         }
         let state_path = self.session.require_state_path()?;
         let id = read_active_client_id(state_path)?;
@@ -182,7 +180,10 @@ fn parse_rpc_envelope(method: &str, resp: &HttpResponse) -> Result<Value, CliErr
                 .to_string();
             return Err(CliError::r(detail));
         }
-        return Err(CliError::rpc(code, format!("jsonrpc error {code} ({message})")));
+        return Err(CliError::rpc(
+            code,
+            format!("jsonrpc error {code} ({message})"),
+        ));
     }
 
     Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
