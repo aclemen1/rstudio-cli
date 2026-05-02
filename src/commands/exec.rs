@@ -2,6 +2,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
+use crate::r_eval;
 use crate::rpc::RpcClient;
 
 #[derive(Subcommand, Debug)]
@@ -22,8 +23,8 @@ pub enum ExecCmd {
 pub fn run(cmd: &ExecCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
         ExecCmd::Run { code } => {
-            let v = rpc.rpc("execute_r_code", vec![Value::String(code.clone())])?;
-            Ok(Some(json!({ "output": v })))
+            let output = r_eval::run(rpc, code)?;
+            Ok(Some(json!({ "output": output })))
         }
         ExecCmd::Send { code } => {
             let mut text = code.clone();

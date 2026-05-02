@@ -4,6 +4,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
+use crate::r_eval;
 use crate::rpc::{RpcClient, r_quote};
 
 #[derive(Subcommand, Debug)]
@@ -31,7 +32,6 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
 
             match line {
                 None => {
-                    // Postback editfile : ouvre sans bloquer R, sans navigation.
                     let pb = rpc.postback("editfile", &abs_str)?;
                     if pb.exit_code != 0 {
                         return Err(CliError::rpc(
@@ -41,8 +41,6 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
                     }
                 }
                 Some(l) => {
-                    // Avec ligne : execute_r_code (silencieux, capture les erreurs)
-                    // qui ouvre ET navigue en un seul appel.
                     let c = col.unwrap_or(1);
                     let r_code = format!(
                         "rstudioapi::navigateToFile({}, line = {}L, column = {}L)",
@@ -50,7 +48,7 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
                         l,
                         c
                     );
-                    rpc.rpc("execute_r_code", vec![Value::String(r_code)])?;
+                    r_eval::run_silent(rpc, &r_code)?;
                 }
             }
 
