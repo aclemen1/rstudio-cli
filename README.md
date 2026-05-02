@@ -62,7 +62,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.5.1
+rstudio version                 # 0.5.2
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -128,7 +128,7 @@ The CLI reads the following at each invocation:
 
 | Var                       | Purpose                                              | Fallback                                                                  |
 |---------------------------|------------------------------------------------------|---------------------------------------------------------------------------|
-| `$RSTUDIO_SESSION_STREAM` | Unix socket name under `$RS_SESSION_TMP_DIR`         | none — must be set or pass `--socket`                                     |
+| `$RSTUDIO_SESSION_STREAM` | Unix socket name under `$RS_SESSION_TMP_DIR`         | scan `$RS_SESSION_TMP_DIR` for a socket owned by the current uid; single match wins, error otherwise |
 | `$RS_SESSION_TMP_DIR`     | Directory holding the rsession socket                | `/var/run/rstudio-server/rstudio-rsession`                                |
 | `$RSTUDIO_SESSION_ID`     | Used to find `session-persistent-state` for clientId | most-recently-modified `session-*` under `~/.local/share/rstudio/sessions/active` |
 | `$USER`                   | Identity sent in `X-RStudioUserIdentity`             | `$LOGNAME`                                                                |

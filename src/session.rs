@@ -1,5 +1,6 @@
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use crate::client_id;
@@ -127,17 +128,18 @@ fn detect_server(overrides: SessionOverrides) -> Result<Session, CliError> {
 
     let socket_path = match overrides.socket {
         Some(p) => p,
-        None => {
-            let stream = env::var("RSTUDIO_SESSION_STREAM").map_err(|_| {
-                CliError::session(
-                    "RSTUDIO_SESSION_STREAM is not set — not running inside an RStudio \
-                     Server session? Pass --socket <path>, or run with --mode desktop.",
-                )
-            })?;
-            let dir = env::var("RS_SESSION_TMP_DIR")
-                .unwrap_or_else(|_| DEFAULT_SESSION_TMP_DIR.to_string());
-            PathBuf::from(dir).join(stream)
-        }
+        None => match env::var("RSTUDIO_SESSION_STREAM") {
+            Ok(stream) => {
+                let dir = env::var("RS_SESSION_TMP_DIR")
+                    .unwrap_or_else(|_| DEFAULT_SESSION_TMP_DIR.to_string());
+                PathBuf::from(dir).join(stream)
+            }
+            // Env var unset (e.g. running on the same machine as the rsession but
+            // not from inside its terminal): scan the socket directory for one
+            // owned by the current user. Single match wins, otherwise we surface
+            // an actionable error.
+            Err(_) => auto_discover_server_socket()?,
+        },
     };
 
     if !socket_path.exists() {
@@ -224,5 +226,74 @@ fn resolve_user(user_override: Option<String>) -> Result<String, CliError> {
         None => env::var("USER")
             .or_else(|_| env::var("LOGNAME"))
             .map_err(|_| CliError::session("cannot determine user (set $USER or pass --user)")),
+    }
+}
+
+/// Scan `$RS_SESSION_TMP_DIR` for an rsession Unix socket owned by the current
+/// uid. Used when `$RSTUDIO_SESSION_STREAM` is unset — typical for a process
+/// (Claude Code, a plain shell) running on the same machine as the rsession
+/// but not inside its embedded terminal.
+fn auto_discover_server_socket() -> Result<PathBuf, CliError> {
+    let dir =
+        env::var("RS_SESSION_TMP_DIR").unwrap_or_else(|_| DEFAULT_SESSION_TMP_DIR.to_string());
+    let dir_path = PathBuf::from(&dir);
+
+    if !dir_path.is_dir() {
+        return Err(CliError::session(format!(
+            "$RSTUDIO_SESSION_STREAM is not set and the rsession socket directory \
+             ({}) does not exist. Pass --socket <path>, or run with --mode desktop.",
+            dir_path.display()
+        )));
+    }
+
+    // SAFETY: getuid() is always-safe; it has no failure mode.
+    let our_uid = unsafe { libc::getuid() };
+
+    let entries = std::fs::read_dir(&dir_path).map_err(|e| {
+        CliError::session(format!(
+            "$RSTUDIO_SESSION_STREAM is not set and cannot list {}: {e}. \
+             Pass --socket <path>.",
+            dir_path.display()
+        ))
+    })?;
+
+    let mut sockets: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let Ok(ft) = e.file_type() else { return false };
+            if !ft.is_socket() {
+                return false;
+            }
+            // Filter by ownership: a single user can have multiple sessions, and
+            // multiple users can share the host. We only consider sockets owned
+            // by the current uid — the only ones we can connect to anyway.
+            e.metadata().map(|m| m.uid() == our_uid).unwrap_or(false)
+        })
+        .map(|e| e.path())
+        .collect();
+    sockets.sort();
+
+    match sockets.len() {
+        0 => Err(CliError::session(format!(
+            "$RSTUDIO_SESSION_STREAM is not set and no rsession socket owned by \
+             the current user was found in {}. Either rsession isn't running, or \
+             you're on the wrong machine. Pass --socket <path>, or run with \
+             --mode desktop.",
+            dir_path.display()
+        ))),
+        1 => Ok(sockets.into_iter().next().unwrap()),
+        _ => {
+            let listing: Vec<String> = sockets
+                .iter()
+                .map(|p| format!("  --socket {}", p.display()))
+                .collect();
+            Err(CliError::session(format!(
+                "$RSTUDIO_SESSION_STREAM is not set and multiple rsession sockets \
+                 owned by the current user are present in {}:\n{}\n\
+                 Pass one of them explicitly, or set $RSTUDIO_SESSION_STREAM.",
+                dir_path.display(),
+                listing.join("\n")
+            )))
+        }
     }
 }

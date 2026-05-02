@@ -4,6 +4,40 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-05-02
+
+### Added — Server socket auto-discovery
+
+When `$RSTUDIO_SESSION_STREAM` is not set, the CLI now scans
+`$RS_SESSION_TMP_DIR` (default `/var/run/rstudio-server/rstudio-rsession`)
+for rsession Unix sockets owned by the current uid. Behaviour by
+case:
+
+- **Exactly one match** → use it, transparently.
+- **Zero matches** → clear error: `… no rsession socket owned by the
+  current user was found in <dir>. Either rsession isn't running, or
+  you're on the wrong machine. Pass --socket <path>, or run with
+  --mode desktop.`
+- **Multiple matches** (a single user *can* run several RStudio Server
+  sessions) → error listing every candidate as a copy-pastable
+  `--socket <path>` line, with a hint to set
+  `$RSTUDIO_SESSION_STREAM` to disambiguate.
+
+This unblocks the case where Claude Code (or any process) is launched
+on the same machine as the rsession but not from inside its embedded
+terminal — no env var is set, but the socket *is* on disk and
+connectable. Previously the CLI errored with "RSTUDIO_SESSION_STREAM
+is not set"; now it just works.
+
+The previous behaviour (read `$RSTUDIO_SESSION_STREAM`, fast-path) is
+preserved: when the env var is set, no scan happens.
+
+### Dependencies
+
+Adds `libc = "0.2"` for `getuid()`, used by the uid filter on
+discovered sockets. Saves writing custom uid lookup via `/proc` or
+shelling out to `id -u`.
+
 ## [0.5.1] — 2026-05-02
 
 Polishes the output contract for the three meta-CLI commands so they're
