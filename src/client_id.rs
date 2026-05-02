@@ -46,6 +46,15 @@ pub fn session_dir_for(session_id: &str) -> Option<PathBuf> {
     Some(dir.join(format!("session-{session_id}")))
 }
 
+pub fn sources_dir_for(session_id: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".local/share/rstudio/sources")
+            .join(format!("session-{session_id}")),
+    )
+}
+
 pub fn read_active_client_id(state_path: &Path) -> Result<String, CliError> {
     let content = fs::read_to_string(state_path).map_err(|e| {
         CliError::session(format!(

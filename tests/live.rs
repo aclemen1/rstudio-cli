@@ -121,7 +121,9 @@ fn editor_read_returns_content() {
         path: cargo_toml.clone(),
         encoding: "UTF-8".into(),
     };
-    let result = editor::run(&cmd, &rpc).expect("editor read").expect("some");
+    let result = editor::run(&cmd, &rpc, &session)
+        .expect("editor read")
+        .expect("some");
     let contents = result
         .get("contents")
         .and_then(|v| v.as_str())

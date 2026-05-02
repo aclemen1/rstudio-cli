@@ -17,6 +17,10 @@ pub struct Session {
     /// `~/.local/share/rstudio/sessions/active/session-<id>`. Same `None`
     /// caveat as `state_path` — only resolved when we know the session id.
     pub session_dir: Option<PathBuf>,
+    /// Path to the open-documents directory under
+    /// `~/.local/share/rstudio/sources/session-<id>`. Each open document is
+    /// a JSON file (`<docId>` + `<docId>-contents` for the live buffer).
+    pub sources_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -76,11 +80,16 @@ impl Session {
             .as_deref()
             .and_then(client_id::session_dir_for);
 
+        let sources_dir = session_id
+            .as_deref()
+            .and_then(client_id::sources_dir_for);
+
         Ok(Self {
             socket_path,
             user,
             state_path,
             session_dir,
+            sources_dir,
         })
     }
 
@@ -102,6 +111,16 @@ impl Session {
         self.session_dir.as_deref().ok_or_else(|| {
             CliError::session(
                 "Cannot locate the RStudio session directory. \
+                 Set $RSTUDIO_SESSION_ID or pass --session-id.",
+            )
+        })
+    }
+
+    pub fn require_sources_dir(&self) -> Result<&Path, CliError> {
+        self.sources_dir.as_deref().ok_or_else(|| {
+            CliError::session(
+                "Cannot locate the RStudio sources directory \
+                 (~/.local/share/rstudio/sources/session-<ID>). \
                  Set $RSTUDIO_SESSION_ID or pass --session-id.",
             )
         })

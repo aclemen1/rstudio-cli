@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 
 use clap::Subcommand;
@@ -7,6 +8,7 @@ use crate::error::CliError;
 use crate::r_eval;
 use crate::rpc::{RpcClient, r_quote};
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+use crate::session::Session;
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
@@ -310,6 +312,35 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
+        name: "list",
+        summary: "List every document currently open in the Source pane.",
+        description: "RStudio's rsession exposes no RPC method to enumerate open documents \
+                      (verified against the rstudio source tree: SessionSource.cpp registers \
+                      24 methods, none returns a list — the full list is shipped only via \
+                      `client_init`, which we must NOT call). \
+                      \
+                      We therefore enumerate document ids from the filesystem (filenames \
+                      matching ^[0-9A-F]{8}$ under ~/.local/share/rstudio/sources/session-<ID>/), \
+                      then fetch each document's metadata through the official `get_source_document` \
+                      RPC. The on-disk surface is intentionally minimal: we only read filenames, \
+                      not their contents. `contents` is stripped from the RPC response since this \
+                      is a listing — use `editor context --include-contents` or `editor read` for \
+                      the buffer/file body.",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor list",
+            explanation: "Returns every open document, ordered by tab order, with metadata only.",
+        }],
+        returns: "{documents: [{id, path, project_path, type, dirty, relative_order, source_on_save, last_known_write_time, encoding, read_only, ...}]}",
+        errors: &[ErrorSpec {
+            kind: "session_unavailable",
+            when: "Cannot locate the sources directory (no session id).",
+        }],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_source_document"),
+    },
+    ActionSpec {
+        category: "editor",
         name: "save-all",
         summary: "Save every dirty document in the Source pane.",
         description: "Wraps .rs.api.documentSaveAll().",
@@ -418,9 +449,15 @@ pub enum EditorCmd {
     },
     /// Save every dirty document in the Source pane.
     SaveAll,
+    /// List every document currently open in the Source pane.
+    List,
 }
 
-pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+pub fn run(
+    cmd: &EditorCmd,
+    rpc: &RpcClient<'_>,
+    session: &Session,
+) -> Result<Option<Value>, CliError> {
     match cmd {
         EditorCmd::Open {
             path,
@@ -441,6 +478,7 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
         EditorCmd::Close { id, save } => close(rpc, id, save),
         EditorCmd::Save { id } => save(rpc, id.as_deref()),
         EditorCmd::SaveAll => save_all(rpc),
+        EditorCmd::List => list_open(rpc, session),
     }
 }
 
@@ -640,6 +678,67 @@ fn save(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliError
 fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     r_eval::run_silent(rpc, ".rs.api.documentSaveAll()")?;
     Ok(None)
+}
+
+fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, CliError> {
+    let dir = session.require_sources_dir()?;
+    let entries = fs::read_dir(dir).map_err(|e| {
+        CliError::session(format!(
+            "cannot read RStudio sources directory {}: {e}",
+            dir.display()
+        ))
+    })?;
+
+    // Step 1: enumerate document IDs by filename pattern only. We deliberately
+    // do NOT read these files' contents — that on-disk format is internal to
+    // RStudio and out of contract.
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_document_id(&name) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    ids.sort();
+
+    // Step 2: fetch each document's metadata through the official RPC. If a
+    // doc was closed between the read_dir and the RPC call (race condition),
+    // skip it silently rather than fail the whole listing.
+    let mut docs: Vec<Value> = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let result = rpc.rpc(
+            "get_source_document",
+            vec![Value::String(id.clone())],
+        );
+        let mut entry = match result {
+            Ok(Value::Object(map)) => map,
+            Ok(_) | Err(_) => continue, // race or unexpected shape — skip
+        };
+        // Strip the body from the listing — `editor list` is metadata-only.
+        // Use `editor context --include-contents` or `editor read` to retrieve it.
+        entry.remove("contents");
+        docs.push(Value::Object(entry));
+    }
+
+    // Step 3: order by RStudio's reported tab order so the listing matches
+    // what the user sees in the Source pane.
+    docs.sort_by_key(|d| {
+        d.get("relative_order")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(i64::MAX)
+    });
+
+    Ok(Some(json!({ "documents": docs })))
+}
+
+/// Match the source-database filename pattern: 8 uppercase hex characters.
+/// Skips `<id>-contents` files (live buffer) and `lock_file`.
+fn is_document_id(name: &str) -> bool {
+    name.len() == 8 && name.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
 }
 
 fn parse_line_col(s: &str) -> Option<(u32, u32)> {

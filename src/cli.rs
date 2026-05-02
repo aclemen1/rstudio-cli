@@ -115,7 +115,7 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            editor::run(&cmd, &rpc)
+            editor::run(&cmd, &rpc, &session)
         }
         Command::R(cmd) => {
             let session = Session::detect(overrides)?;
