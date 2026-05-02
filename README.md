@@ -3,7 +3,7 @@
 [![CI](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-AI-native CLI bridge that lets a terminal-bound process — Claude Code,
+[AI-native CLI](https://github.com/aclemen1/ai-native-cli) bridge that lets a terminal-bound process — Claude Code,
 a shell user, anything else — drive the embedded RStudio Server IDE
 it runs inside: open files, run R code, list and read terminals,
 inspect the live R environment, surface lint-style markers, manage
@@ -38,7 +38,7 @@ across 13 categories and 76 actions. Live-tested end-to-end on both
 
 Run `rstudio schema` for the auto-generated catalog of every action.
 
-## AI-native pattern
+## [AI-native](https://github.com/aclemen1/ai-native-cli) pattern
 
 This CLI follows the [AI-native CLI](https://github.com/aclemen1/ai-native-cli)
 pattern — embedded skill, schema drill-down, JSON envelope. The
