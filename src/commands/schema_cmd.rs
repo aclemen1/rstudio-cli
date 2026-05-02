@@ -8,11 +8,11 @@ use crate::schema::{ActionSpec, CategorySpec, actions_in, category, find, regist
 
 #[derive(Args, Debug)]
 pub struct SchemaCmd {
-    /// Catégorie (level 1) ou action (level 2 si suivie de --action / position 2).
+    /// Category (level 1) or action (level 2 when followed by an action arg).
     pub category: Option<String>,
-    /// Nom de l'action dans la catégorie (level 2).
+    /// Action name within the category (level 2).
     pub action: Option<String>,
-    /// Filtre regex (level 0 uniquement) sur category/name/summary.
+    /// Regex filter (level 0 only) applied to category/name/summary.
     #[arg(long)]
     pub search: Option<String>,
 }

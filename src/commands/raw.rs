@@ -6,18 +6,18 @@ use crate::rpc::RpcClient;
 
 #[derive(Args, Debug)]
 pub struct RpcCmd {
-    /// Nom de la méthode JSON-RPC (ex: console_input, get_environment_state).
+    /// JSON-RPC method name (e.g. console_input, get_environment_state).
     pub method: String,
-    /// Paramètres comme tableau JSON. Ex: --params '["1+1"]' ou '[{"path": "x"}]'.
+    /// Parameters as a JSON array. Ex: --params '["1+1"]' or '[{"path": "x"}]'.
     #[arg(long, default_value = "[]")]
     pub params: String,
 }
 
 #[derive(Args, Debug)]
 pub struct PostbackCmd {
-    /// Nom du postback (ex: editfile, browser, pdfviewer).
+    /// Postback name (e.g. editfile, browser, pdfviewer).
     pub command: String,
-    /// Corps brut envoyé en text/plain.
+    /// Raw body sent as text/plain.
     pub body: String,
 }
 

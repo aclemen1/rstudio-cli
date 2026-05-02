@@ -21,14 +21,13 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "skill",
         name: "show",
-        summary: "Imprime le skill rstudio embarqué (markdown, version substituée).",
-        description: "Le skill est un fichier markdown statique avec un frontmatter \
-                      contenant `version`, alignée sur la version du CLI (les deux \
-                      sont distribués ensemble dans le binaire).",
+        summary: "Print the embedded rstudio skill (markdown, with version substituted).",
+        description: "The skill is a static markdown file whose frontmatter `version` \
+                      tracks the CLI version (they ship together inside the binary).",
         params: &[],
         examples: &[ExampleSpec {
             cmd: "rstudio skill show",
-            explanation: "Imprime le contenu du skill (avec version réelle).",
+            explanation: "Prints the skill content with the real version inlined.",
         }],
         returns: "string (markdown)",
         errors: &[],
@@ -38,12 +37,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "skill",
         name: "install",
-        summary: "Installe le skill embarqué dans .claude/skills/rstudio/SKILL.md.",
-        description: "Cherche le dossier `.claude/skills/` le plus proche en remontant \
-                      depuis cwd, ou le crée dans cwd. Crée ensuite le sous-dossier \
-                      `rstudio/` et y écrit `SKILL.md`. Refuse de surécrire un skill \
-                      installé dont la version est strictement supérieure (semver), \
-                      sauf --force.",
+        summary: "Install the embedded skill at .claude/skills/rstudio/SKILL.md.",
+        description: "Looks for the nearest `.claude/skills/` ancestor of cwd, or \
+                      creates one in cwd. Then creates the `rstudio/` sub-directory \
+                      and writes `SKILL.md`. Refuses to overwrite an installed skill \
+                      whose version is strictly newer (semver) unless --force.",
         params: &[
             ParamSpec {
                 name: "--force",
@@ -51,7 +49,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("false"),
                 allowed: &[],
-                description: "Surécrit même si la version installée est plus récente.",
+                description: "Overwrite even if the installed version is newer.",
             },
             ParamSpec {
                 name: "--target",
@@ -59,28 +57,28 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Dossier explicite de skills (sinon: .claude/skills/ ancestor de cwd, ou cwd/.claude/skills).",
+                description: "Explicit skills directory (else: nearest .claude/skills/ ancestor of cwd, or cwd/.claude/skills).",
             },
         ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio skill install",
-                explanation: "Crée ./.claude/skills/rstudio/SKILL.md.",
+                explanation: "Creates ./.claude/skills/rstudio/SKILL.md.",
             },
             ExampleSpec {
                 cmd: "rstudio skill install --force",
-                explanation: "Force la réinstallation même si la version installée est plus récente.",
+                explanation: "Force a reinstall even if the installed version is newer.",
             },
         ],
         returns: "{path: string, action: 'created'|'updated'|'unchanged', version: string}",
         errors: &[
             ErrorSpec {
                 kind: "user_error",
-                when: "Skill installé plus récent et --force absent.",
+                when: "Installed skill is newer and --force was not passed.",
             },
             ErrorSpec {
                 kind: "internal",
-                when: "Permissions insuffisantes pour écrire le fichier.",
+                when: "Insufficient permissions to write the file.",
             },
         ],
         rstudioapi_fn: None,
@@ -90,14 +88,14 @@ pub const ACTIONS: &[ActionSpec] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum SkillCmd {
-    /// Imprime le skill embarqué (markdown).
+    /// Print the embedded skill (markdown).
     Show,
-    /// Installe le skill dans le projet courant.
+    /// Install the skill in the current project.
     Install {
-        /// Surécrit même si la version installée est strictement plus récente.
+        /// Overwrite even if the installed version is strictly newer.
         #[arg(long)]
         force: bool,
-        /// Dossier explicite de skills (parent de `rstudio/`).
+        /// Explicit skills directory (parent of `rstudio/`).
         #[arg(long)]
         target: Option<PathBuf>,
     },

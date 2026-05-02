@@ -80,7 +80,7 @@ pub struct CategorySpec {
 pub const CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
         name: "editor",
-        description: "Manipulation de l'éditeur de code (ouverture, navigation, sélection, lecture).",
+        description: "Code editor manipulation (open, navigate, read, context, insert, select).",
     },
     CategorySpec {
         name: "r",
@@ -88,15 +88,15 @@ pub const CATEGORIES: &[CategorySpec] = &[
     },
     CategorySpec {
         name: "console",
-        description: "Lecture de l'historique des commandes et du buffer console.",
+        description: "R console history, on-disk buffer snapshot, and live console editor context.",
     },
     CategorySpec {
         name: "term",
-        description: "Manipulation du panneau Terminal RStudio (shells live, lecture du buffer).",
+        description: "RStudio Terminal pane (live shells, buffer reads, send/exec, lifecycle).",
     },
     CategorySpec {
         name: "env",
-        description: "Inspection de l'environnement R actif (variables, contenus, métadonnées).",
+        description: "Inspect the active R environment (variables, contents, metadata).",
     },
     CategorySpec {
         name: "pane",
@@ -104,7 +104,7 @@ pub const CATEGORIES: &[CategorySpec] = &[
     },
     CategorySpec {
         name: "skill",
-        description: "Gestion du skill Claude Code embarqué (show / install).",
+        description: "Manage the embedded Claude Code skill (show / install).",
     },
 ];
 

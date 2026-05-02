@@ -13,19 +13,19 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "console",
         name: "history",
-        summary: "Liste les dernières commandes saisies par l'user dans la console R.",
-        description: "Live (lit l'historique R en mémoire via get_recent_history).",
+        summary: "List the latest commands typed by the user in the R console.",
+        description: "Live — reads the in-memory R history via the get_recent_history RPC.",
         params: &[ParamSpec {
             name: "--limit",
             kind: ParamKind::Integer,
             required: false,
             default: Some("100"),
             allowed: &[],
-            description: "Nombre maximum de commandes (les plus récentes). > 0.",
+            description: "Max number of commands (most recent first). Must be > 0.",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio console history --limit 5",
-            explanation: "Retourne les 5 dernières commandes tapées.",
+            explanation: "Returns the 5 most recently typed commands.",
         }],
         returns: "{commands: [string]}",
         errors: &[],
@@ -35,10 +35,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "console",
         name: "actions",
-        summary: "Lit le snapshot du buffer console (last suspend, pas live).",
-        description: "Décode suspended-session-data/console_actions {type, data}. \
-                      Codes type: 0=prompt, 1=input, 2=output, 3=error. \
-                      Vérifier last_modified_unix dans le retour pour juger de la fraîcheur.",
+        summary: "Read the on-disk console buffer snapshot (last suspend; not live).",
+        description: "Decodes suspended-session-data/console_actions {type, data}. \
+                      type codes: 0=prompt, 1=input, 2=output, 3=error. \
+                      Check last_modified_unix in the return value to gauge freshness.",
         params: &[
             ParamSpec {
                 name: "--limit",
@@ -46,7 +46,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Nombre maximum d'entrées (les plus récentes).",
+                description: "Max number of entries (most recent first).",
             },
             ParamSpec {
                 name: "--types",
@@ -54,17 +54,17 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &["prompt", "input", "output", "error"],
-                description: "Filtre par type, multi-valué (séparé par virgule).",
+                description: "Filter by type. Multi-valued, comma-separated.",
             },
         ],
         examples: &[ExampleSpec {
             cmd: "rstudio console actions --types output --limit 10",
-            explanation: "10 derniers outputs du dernier snapshot.",
+            explanation: "Last 10 outputs from the last snapshot.",
         }],
         returns: "{snapshot_path, last_modified_unix, is_live: false, entries: [{type, code, text}]}",
         errors: &[ErrorSpec {
             kind: "session_unavailable",
-            when: "Pas de fichier console_actions (session jamais suspendue).",
+            when: "No console_actions file (session was never suspended).",
         }],
         rstudioapi_fn: None,
         rpc_method: None,

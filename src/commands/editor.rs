@@ -13,10 +13,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         category: "editor",
         name: "open",
         summary: "Ouvre un fichier dans le pane Source (non-modal). Retourne l'id du document.",
-        description: "Wrap rstudioapi::documentOpen(path, line, col, moveCursor). \
-                      Le fichier apparaît comme un onglet dans l'éditeur principal, \
-                      l'utilisateur garde le contrôle. Pas le même comportement que \
-                      `editor edit` qui ouvre la modale R `edit()` (Save/Cancel).",
+        description: "Wraps rstudioapi::documentOpen(path, line, col, moveCursor). The file \
+                      appears as a tab in the Source pane and the user retains control. \
+                      Different from `editor edit`, which opens the modal R `edit()` dialog \
+                      (Save/Cancel).",
         params: &[
             ParamSpec {
                 name: "path",
@@ -24,7 +24,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: true,
                 default: None,
                 allowed: &[],
-                description: "Chemin du fichier (résolu en absolu via canonicalize).",
+                description: "File path (resolved to absolute via canonicalize).",
             },
             ParamSpec {
                 name: "--line",
@@ -32,7 +32,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Ligne (1-based) où placer le curseur après ouverture.",
+                description: "Line (1-based) where the cursor should land after opening.",
             },
             ParamSpec {
                 name: "--col",
@@ -40,7 +40,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Colonne (1-based) ; combiner avec --line.",
+                description: "Column (1-based); combine with --line.",
             },
             ParamSpec {
                 name: "--no-cursor",
@@ -48,28 +48,28 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("false"),
                 allowed: &[],
-                description: "Ne pas déplacer le curseur (moveCursor=FALSE). Utile pour ouvrir en arrière-plan.",
+                description: "Don't move the cursor (moveCursor=FALSE). Useful to open in the background.",
             },
         ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor open ~/code/aclemen1/rstudio-cli/Cargo.toml",
-                explanation: "Ouvre Cargo.toml dans le pane Source, position cursor inchangée si déjà ouvert.",
+                explanation: "Opens Cargo.toml in the Source pane; cursor unchanged if already open.",
             },
             ExampleSpec {
                 cmd: "rstudio editor open src/main.rs --line 42 --col 5",
-                explanation: "Ouvre puis place le curseur en (42, 5).",
+                explanation: "Opens then moves the cursor to (42, 5).",
             },
         ],
         returns: "{path: string, line: int|null, col: int|null, id: string}",
         errors: &[
             ErrorSpec {
                 kind: "user_error",
-                when: "Fichier introuvable (canonicalize fail).",
+                when: "File not found (canonicalize fail).",
             },
             ErrorSpec {
                 kind: "r_error",
-                when: "rstudioapi::documentOpen rejette le chemin.",
+                when: "rstudioapi::documentOpen rejects the path.",
             },
         ],
         rstudioapi_fn: Some("documentOpen"),
@@ -79,27 +79,27 @@ pub const ACTIONS: &[ActionSpec] = &[
         category: "editor",
         name: "edit",
         summary: "Ouvre la modale R edit() pour le fichier (Save/Cancel). Bloquant.",
-        description: "Wrap le postback editfile. Comportement R standard `edit(file = ...)`: \
-                      RStudio affiche une fenêtre modale d'édition séparée du pane Source. \
-                      L'utilisateur doit cliquer Save ou Cancel pour fermer. Pendant ce temps, \
-                      la session R est en attente — les `exec run` qui suivent attendront. \
-                      Pour l'édition normale (non-modal), préférer `editor open`.",
+        description: "Wraps the editfile postback — standard R `edit(file = ...)` behaviour. \
+                      RStudio displays a modal editor window separate from the Source pane. \
+                      The user must click Save or Cancel to close it. While the modal is up, \
+                      the R session is blocked, so subsequent `r exec` calls will wait. \
+                      For normal (non-modal) editing, prefer `editor open`.",
         params: &[ParamSpec {
             name: "path",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Chemin du fichier (résolu en absolu via canonicalize).",
+            description: "File path (resolved to absolute via canonicalize).",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio editor edit /tmp/scratch.R",
-            explanation: "Ouvre une modale d'édition pour /tmp/scratch.R. Bloque jusqu'à Save/Cancel.",
+            explanation: "Opens a modal editor for /tmp/scratch.R. Blocks until Save/Cancel.",
         }],
         returns: "{path: string, exit_code: int}",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "Fichier introuvable.",
+            when: "File not found.",
         }],
         rstudioapi_fn: None,
         rpc_method: Some("postback:editfile"),
@@ -107,10 +107,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "read",
-        summary: "Lit le contenu d'un fichier (pas le buffer éditeur, le fichier disque).",
-        description: "Wrap le RPC get_file_contents [path, encoding=UTF-8]. \
-                      Pour le buffer en cours d'édition (avec modifs non sauvegardées), \
-                      utiliser `editor context --include-contents`.",
+        summary: "Read a file's contents (the on-disk file, not the editor buffer).",
+        description: "Wraps the get_file_contents RPC [path, encoding=UTF-8]. To read the \
+                      live editor buffer (including unsaved changes), use \
+                      `editor context --include-contents`.",
         params: &[
             ParamSpec {
                 name: "path",
@@ -118,7 +118,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: true,
                 default: None,
                 allowed: &[],
-                description: "Chemin du fichier (canonicalize côté CLI).",
+                description: "File path (canonicalized CLI-side).",
             },
             ParamSpec {
                 name: "--encoding",
@@ -126,17 +126,17 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("UTF-8"),
                 allowed: &[],
-                description: "Encoding passé à get_file_contents.",
+                description: "Encoding forwarded to get_file_contents.",
             },
         ],
         examples: &[ExampleSpec {
             cmd: "rstudio editor read ~/projects/foo/main.R",
-            explanation: "Retourne le contenu disque de main.R.",
+            explanation: "Returns the on-disk contents of main.R.",
         }],
         returns: "{path: string, contents: string}",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "Fichier introuvable.",
+            when: "File not found.",
         }],
         rstudioapi_fn: None,
         rpc_method: Some("get_file_contents"),
@@ -144,17 +144,17 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "context",
-        summary: "Contexte du document actif dans le panneau Source (path, sélection, etc.).",
-        description: "Wrap rstudioapi::getSourceEditorContext(). Sans flag, retourne id, \
-                      path, et la liste de sélections (positions start/end + texte sélectionné). \
-                      Avec --include-contents, ajoute les lignes du buffer (live, modifs incluses).",
+        summary: "Context of the active document in the Source pane (path, selection, etc.).",
+        description: "Wraps rstudioapi::getSourceEditorContext(). Without the flag, returns id, \
+                      path, and the selections list (start/end positions + selected text). \
+                      With --include-contents, adds the buffer lines (live, including unsaved edits).",
         params: &[ParamSpec {
             name: "--include-contents",
             kind: ParamKind::Bool,
             required: false,
             default: Some("false"),
             allowed: &[],
-            description: "Inclure le contenu du buffer (live, peut être grand).",
+            description: "Include the live buffer contents (may be large).",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio editor context",
@@ -193,9 +193,9 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "insert",
-        summary: "Insère du texte dans le document actif.",
-        description: "Wrap rstudioapi::insertText(). Sans --at, à la position du curseur. \
-                      --at start = (1,1), --at end = fin du fichier, --at L:C = position explicite.",
+        summary: "Insert text into the active document.",
+        description: "Wraps rstudioapi::insertText(). Without --at, inserts at the cursor. \
+                      --at start = (1,1), --at end = end of file, --at L:C = explicit position.",
         params: &[
             ParamSpec {
                 name: "text",
@@ -203,7 +203,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: true,
                 default: None,
                 allowed: &[],
-                description: "Texte à insérer.",
+                description: "Text to insert.",
             },
             ParamSpec {
                 name: "--at",
@@ -211,23 +211,23 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("cursor"),
                 allowed: &["cursor", "start", "end"],
-                description: "Position d'insertion ; valeurs spéciales 'cursor', 'start', 'end' ou format 'L:C'.",
+                description: "Insertion position. Special values 'cursor', 'start', 'end', or 'L:C'.",
             },
         ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor insert 'TODO\\n' --at start",
-                explanation: "Préfixe le fichier avec 'TODO\\n'.",
+                explanation: "Prepends 'TODO\\n' to the file.",
             },
             ExampleSpec {
                 cmd: "rstudio editor insert 'x' --at 5:1",
-                explanation: "Insère 'x' à la ligne 5, colonne 1.",
+                explanation: "Inserts 'x' at line 5, column 1.",
             },
         ],
         returns: "void",
         errors: &[ErrorSpec {
             kind: "r_error",
-            when: "Position invalide ou pas d'éditeur actif.",
+            when: "Invalid position or no active editor.",
         }],
         rstudioapi_fn: Some("insertText"),
         rpc_method: Some("execute_r_code"),
@@ -235,31 +235,31 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "select",
-        summary: "Définit la sélection (ou positionne le curseur) dans le document actif.",
-        description: "Wrap rstudioapi::setSelectionRanges(). Format range: 'L:C' (curseur sans \
-                      sélection) ou 'L1:C1-L2:C2' (sélection range).",
+        summary: "Set the selection (or move the cursor) in the active document.",
+        description: "Wraps rstudioapi::setSelectionRanges(). Range format: 'L:C' (cursor only, \
+                      no selection) or 'L1:C1-L2:C2' (selection range).",
         params: &[ParamSpec {
             name: "range",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Range à sélectionner. 'L:C' ou 'L1:C1-L2:C2'. 1-based.",
+            description: "Range to select. 'L:C' or 'L1:C1-L2:C2'. 1-based.",
         }],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor select 10:1",
-                explanation: "Place le curseur en ligne 10, colonne 1.",
+                explanation: "Moves the cursor to line 10, column 1.",
             },
             ExampleSpec {
                 cmd: "rstudio editor select 5:1-7:80",
-                explanation: "Sélectionne du (5,1) au (7,80).",
+                explanation: "Selects from (5,1) to (7,80).",
             },
         ],
         returns: "void",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "Format de range invalide.",
+            when: "Invalid range format.",
         }],
         rstudioapi_fn: Some("setSelectionRanges"),
         rpc_method: Some("execute_r_code"),
@@ -275,12 +275,12 @@ pub enum EditorCmd {
         line: Option<u32>,
         #[arg(long)]
         col: Option<u32>,
-        /// Ne pas déplacer le curseur (moveCursor=FALSE).
+        /// Don't move the cursor (moveCursor=FALSE).
         #[arg(long)]
         no_cursor: bool,
     },
-    /// Ouvre la modale R `edit()` pour le fichier (Save/Cancel).
-    /// Bloque la session R jusqu'à fermeture de la modale.
+    /// Open the modal R `edit()` dialog for the file (Save/Cancel).
+    /// Blocks the R session until the modal is dismissed.
     Edit { path: PathBuf },
     /// Context of whatever document the user has focus on (Source pane or console).
     ActiveContext {
@@ -288,29 +288,29 @@ pub enum EditorCmd {
         #[arg(long)]
         include_contents: bool,
     },
-    /// Lit le contenu disque d'un fichier (pas le buffer en cours d'édition).
+    /// Read the on-disk file contents (not the live editor buffer).
     Read {
         path: PathBuf,
         /// Encoding (default UTF-8).
         #[arg(long, default_value = "UTF-8")]
         encoding: String,
     },
-    /// Contexte du document actif dans le panneau Source.
+    /// Context of the active document in the Source pane.
     Context {
-        /// Inclure le contenu live du buffer (peut être grand).
+        /// Include the live buffer contents (may be large).
         #[arg(long)]
         include_contents: bool,
     },
-    /// Insère du texte dans le document actif.
+    /// Insert text into the active document.
     Insert {
         text: String,
-        /// Position d'insertion : 'cursor' (def), 'start', 'end', ou 'L:C'.
+        /// Insertion position: 'cursor' (default), 'start', 'end', or 'L:C'.
         #[arg(long, default_value = "cursor")]
         at: String,
     },
-    /// Définit la sélection (ou le curseur) dans le document actif.
+    /// Set the selection (or cursor) in the active document.
     Select {
-        /// Range : 'L:C' ou 'L1:C1-L2:C2'.
+        /// Range: 'L:C' or 'L1:C1-L2:C2'.
         range: String,
     },
 }

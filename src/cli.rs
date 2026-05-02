@@ -46,10 +46,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Imprime la version du CLI (= version du skill embarqué — ils sont distribués ensemble).
+    /// Print the CLI version (= embedded skill version — they ship together).
     Version,
 
-    /// Manipulation de l'éditeur (ouverture, navigation, ...).
+    /// Editor manipulation (open, navigate, read, context, insert, select, ...).
     #[command(subcommand)]
     Editor(editor::EditorCmd),
 
@@ -57,15 +57,15 @@ enum Command {
     #[command(subcommand)]
     R(r::RCmd),
 
-    /// Lecture de l'historique et du buffer console.
+    /// R console history and buffer access.
     #[command(subcommand)]
     Console(console::ConsoleCmd),
 
-    /// Manipulation du panneau Terminal RStudio (shells live).
+    /// RStudio Terminal pane (live shells).
     #[command(subcommand)]
     Term(term::TermCmd),
 
-    /// Inspection de l'environnement R actif.
+    /// Inspect the active R environment.
     #[command(subcommand)]
     Env(env::EnvCmd),
 
@@ -73,17 +73,17 @@ enum Command {
     #[command(subcommand)]
     Pane(pane::PaneCmd),
 
-    /// Skill Claude Code embarqué (show / install).
+    /// Embedded Claude Code skill (show / install).
     #[command(subcommand)]
     Skill(skill::SkillCmd),
 
-    /// Catalogue auto-descriptif des commandes (drill-down 3 niveaux).
+    /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
 
-    /// Appel JSON-RPC brut (échappatoire pour méthodes non encore wrappées).
+    /// Raw JSON-RPC call (escape hatch for methods not yet wrapped).
     Rpc(raw::RpcCmd),
 
-    /// Postback brut (échappatoire pour endpoints postback non wrappés).
+    /// Raw postback (escape hatch for postback endpoints not yet wrapped).
     Postback(raw::PostbackCmd),
 }
 

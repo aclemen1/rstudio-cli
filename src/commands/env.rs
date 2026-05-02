@@ -11,32 +11,32 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "env",
         name: "list",
-        summary: "Liste les variables de l'environnement R actif (live).",
-        description: "Wrappe le RPC get_environment_state. Retourne pour chaque variable \
-                      son nom, type R, classe, longueur, taille en octets et description \
-                      condensée. Filtrage optionnel par regex sur le nom.",
+        summary: "List variables in the active R environment (live).",
+        description: "Wraps the get_environment_state RPC. For each variable returns \
+                      its name, R type, class, length, size in bytes, and condensed \
+                      description. Optional name regex filter applied CLI-side.",
         params: &[ParamSpec {
             name: "--pattern",
             kind: ParamKind::String,
             required: false,
             default: None,
             allowed: &[],
-            description: "Regex appliquée au nom de variable (filtre côté CLI).",
+            description: "Regex applied to the variable name (CLI-side filter).",
         }],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio env list",
-                explanation: "Toutes les variables de l'environnement actif.",
+                explanation: "All variables in the active environment.",
             },
             ExampleSpec {
                 cmd: "rstudio env list --pattern '^df_'",
-                explanation: "Seulement les variables dont le nom commence par df_.",
+                explanation: "Only variables whose name starts with df_.",
             },
         ],
         returns: "{vars: [{name, type, class, length, size_bytes, description, is_data}]}",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "--pattern n'est pas une regex valide.",
+            when: "--pattern is not a valid regex.",
         }],
         rstudioapi_fn: None,
         rpc_method: Some("get_environment_state"),
@@ -44,25 +44,25 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "env",
         name: "contents",
-        summary: "Retourne le contenu formaté d'un objet (str/head live).",
-        description: "Wrappe le RPC get_object_contents. \
-                      Retourne le rendu RStudio (mêmes lignes que le panneau Environment).",
+        summary: "Return the formatted contents of an object (live str/head).",
+        description: "Wraps the get_object_contents RPC. Returns RStudio's own rendering \
+                      (same lines as the Environment pane).",
         params: &[ParamSpec {
             name: "name",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Nom de la variable dans l'environnement actif.",
+            description: "Variable name in the active environment.",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio env contents mtcars",
-            explanation: "Retourne le str() formaté de mtcars.",
+            explanation: "Returns the formatted str() of mtcars.",
         }],
         returns: "{contents: [string]}",
         errors: &[ErrorSpec {
             kind: "rpc_error",
-            when: "Variable inexistante dans l'environnement actif.",
+            when: "Variable not present in the active environment.",
         }],
         rstudioapi_fn: None,
         rpc_method: Some("get_object_contents"),
@@ -70,25 +70,25 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "env",
         name: "info",
-        summary: "Métadonnées succinctes d'une variable (class, typeof, length, dim, size).",
-        description: "execute_r_code wrappé. Retourne les métadonnées clés sans charger \
-                      la valeur — utile pour vérifier rapidement la nature d'un objet.",
+        summary: "Concise metadata for a variable (class, typeof, length, dim, size).",
+        description: "Wrapped execute_r_code. Returns the key metadata without loading \
+                      the value — useful to quickly check the nature of an object.",
         params: &[ParamSpec {
             name: "name",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Nom de la variable dans l'environnement actif.",
+            description: "Variable name in the active environment.",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio env info mtcars",
-            explanation: "Retourne {class: 'data.frame', typeof: 'list', length: 11, dim: [32, 11], size_bytes: ...}.",
+            explanation: "Returns {class: 'data.frame', typeof: 'list', length: 11, dim: [32, 11], size_bytes: ...}.",
         }],
         returns: "{name, class: [string], typeof: string, length: int, dim: [int]|null, size_bytes: int}",
         errors: &[ErrorSpec {
             kind: "r_error",
-            when: "Nom introuvable (object 'X' not found).",
+            when: "Name not found (object 'X' not found).",
         }],
         rstudioapi_fn: None,
         rpc_method: Some("execute_r_code"),
@@ -97,15 +97,15 @@ pub const ACTIONS: &[ActionSpec] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum EnvCmd {
-    /// Liste les variables de l'environnement actif (live).
+    /// List variables in the active environment (live).
     List {
-        /// Regex sur le nom de variable (filtre côté CLI).
+        /// Regex applied to the variable name (CLI-side filter).
         #[arg(long)]
         pattern: Option<String>,
     },
-    /// Contenu formaté d'un objet (mêmes lignes que le panneau Environment).
+    /// Formatted contents of an object (same lines as the Environment pane).
     Contents { name: String },
-    /// Métadonnées succinctes (class/typeof/length/dim/size).
+    /// Concise metadata (class/typeof/length/dim/size).
     Info { name: String },
 }
 
