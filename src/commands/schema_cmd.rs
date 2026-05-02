@@ -98,6 +98,8 @@ fn serialize_action(a: &ActionSpec) -> Value {
         examples: &'a [crate::schema::ExampleSpec],
         returns: &'a str,
         errors: &'a [crate::schema::ErrorSpec],
+        rstudioapi_fn: Option<&'a str>,
+        rpc_method: Option<&'a str>,
     }
     serde_json::to_value(Out {
         category: a.category,
@@ -108,6 +110,8 @@ fn serialize_action(a: &ActionSpec) -> Value {
         examples: a.examples,
         returns: a.returns,
         errors: a.errors,
+        rstudioapi_fn: a.rstudioapi_fn,
+        rpc_method: a.rpc_method,
     })
     .unwrap()
 }

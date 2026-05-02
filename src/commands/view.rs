@@ -38,6 +38,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "Chemin local introuvable.",
         }],
+        rstudioapi_fn: Some("viewer"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "view",
@@ -61,6 +63,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "Chemin introuvable.",
         }],
+        rstudioapi_fn: Some("filesPaneNavigate"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "view",
@@ -117,6 +121,8 @@ pub const ACTIONS: &[ActionSpec] = &[
                 when: "Champ obligatoire manquant ou type invalide.",
             },
         ],
+        rstudioapi_fn: Some("sourceMarkers"),
+        rpc_method: Some("execute_r_code"),
     },
 ];
 

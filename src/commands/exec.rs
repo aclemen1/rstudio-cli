@@ -62,6 +62,8 @@ pub const ACTIONS: &[ActionSpec] = &[
                 when: "Le code dépasse la limite (default 2s ou --timeout).",
             },
         ],
+        rstudioapi_fn: None,
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "exec",
@@ -88,6 +90,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         ],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: Some("console_input"),
     },
 ];
 

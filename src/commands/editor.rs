@@ -72,6 +72,8 @@ pub const ACTIONS: &[ActionSpec] = &[
                 when: "rstudioapi::documentOpen rejette le chemin.",
             },
         ],
+        rstudioapi_fn: Some("documentOpen"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "editor",
@@ -99,6 +101,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "Fichier introuvable.",
         }],
+        rstudioapi_fn: None,
+        rpc_method: Some("postback:editfile"),
     },
     ActionSpec {
         category: "editor",
@@ -134,6 +138,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "Fichier introuvable.",
         }],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_file_contents"),
     },
     ActionSpec {
         category: "editor",
@@ -156,6 +162,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "{id, path, selections, contents?}",
         errors: &[],
+        rstudioapi_fn: Some("getSourceEditorContext"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "editor",
@@ -196,6 +204,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "r_error",
             when: "Position invalide ou pas d'éditeur actif.",
         }],
+        rstudioapi_fn: Some("insertText"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "editor",
@@ -226,6 +236,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "Format de range invalide.",
         }],
+        rstudioapi_fn: Some("setSelectionRanges"),
+        rpc_method: Some("execute_r_code"),
     },
 ];
 

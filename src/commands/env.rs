@@ -38,6 +38,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "user_error",
             when: "--pattern n'est pas une regex valide.",
         }],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_environment_state"),
     },
     ActionSpec {
         category: "env",
@@ -62,6 +64,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "rpc_error",
             when: "Variable inexistante dans l'environnement actif.",
         }],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_object_contents"),
     },
     ActionSpec {
         category: "env",
@@ -86,6 +90,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "r_error",
             when: "Nom introuvable (object 'X' not found).",
         }],
+        rstudioapi_fn: None,
+        rpc_method: Some("execute_r_code"),
     },
 ];
 

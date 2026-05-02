@@ -28,6 +28,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "{commands: [string]}",
         errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_recent_history"),
     },
     ActionSpec {
         category: "console",
@@ -63,6 +65,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "session_unavailable",
             when: "Pas de fichier console_actions (session jamais suspendue).",
         }],
+        rstudioapi_fn: None,
+        rpc_method: None,
     },
 ];
 

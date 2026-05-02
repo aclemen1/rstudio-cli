@@ -56,6 +56,16 @@ pub struct ActionSpec {
     pub examples: &'static [ExampleSpec],
     pub returns: &'static str,
     pub errors: &'static [ErrorSpec],
+    /// Name of the corresponding `rstudioapi` function if the action wraps
+    /// one (e.g. `documentOpen`, `terminalBuffer`). `None` for actions that
+    /// don't have a direct rstudioapi analog (CLI-internal helpers, raw RPC
+    /// calls without a public wrapper, etc.).
+    pub rstudioapi_fn: Option<&'static str>,
+    /// JSON-RPC method invoked on the rsession Unix socket. Postbacks are
+    /// noted as `"postback:<cmd>"`. `None` for actions that don't hit the
+    /// socket at all (CLI-internal: `skill show`, `skill install`,
+    /// `console actions` which just reads a disk file, etc.).
+    pub rpc_method: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

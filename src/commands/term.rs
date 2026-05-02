@@ -19,6 +19,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "{terminals: [{id, caption, title, working_dir, shell, running, busy, exit_code, pid, cols, rows, lines, connection}]}",
         errors: &[],
+        rstudioapi_fn: Some("terminalList"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -62,6 +64,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             kind: "r_error",
             when: "Identifiant inconnu.",
         }],
+        rstudioapi_fn: Some("terminalBuffer"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -82,6 +86,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "{handle, caption, title, working_dir, shell, running, busy, exit_code, connection, sequence, lines, cols, rows, pid, full_screen, restarted}",
         errors: &[],
+        rstudioapi_fn: Some("terminalContext"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -121,6 +127,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "{id: string}",
         errors: &[],
+        rstudioapi_fn: Some("terminalCreate"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -152,6 +160,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: Some("terminalSend"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -182,6 +192,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: Some("terminalSend"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -202,6 +214,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: Some("terminalKill"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -219,6 +233,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: Some("terminalClear"),
+        rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
         category: "term",
@@ -236,6 +252,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[],
         returns: "void",
         errors: &[],
+        rstudioapi_fn: Some("terminalActivate"),
+        rpc_method: Some("execute_r_code"),
     },
 ];
 

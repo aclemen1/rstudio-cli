@@ -32,6 +32,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         returns: "string (markdown)",
         errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: None,
     },
     ActionSpec {
         category: "skill",
@@ -81,6 +83,8 @@ pub const ACTIONS: &[ActionSpec] = &[
                 when: "Permissions insuffisantes pour écrire le fichier.",
             },
         ],
+        rstudioapi_fn: None,
+        rpc_method: None,
     },
 ];
 
