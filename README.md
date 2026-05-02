@@ -17,12 +17,12 @@ WIP, but covers a substantial slice of the IDE :
 
 | category | actions |
 |---|---|
-| `editor` | `open` (non-modal) `edit` (modal R `edit()`) `read` `context` `insert` `select` |
-| `exec`   | `run` (silent) `send` (visible) |
-| `console`| `history` (live) `actions` (snapshot) |
+| `editor` | `open` (non-modal) `edit` (modal R `edit()`) `read` `context` `active-context` `insert` `select` |
+| `r`      | `exec` (silent) `send` (visible) |
+| `console`| `history` (live) `actions` (snapshot) `context` (live) |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` |
 | `env`    | `list` `contents` `info` |
-| `view`   | `html` `files` `mark` |
+| `pane`   | `viewer` `files` `markers` |
 | `skill`  | `show` `install` |
 | `schema` | the AI-native catalog (drill-down 3 levels) |
 | escape   | `rpc <method>` `postback <cmd>` |
@@ -74,7 +74,7 @@ cargo test --test live -- --ignored   # integration tests against a live session
 The integration tests skip silently (`SKIP: no live RStudio session
 available`) when no `rsession` socket is reachable, so the suite is safe
 to run anywhere. They never mutate the user's UI: read-only paths only
-(`exec run` round-trips, `editor read`, `env list`, `term list`, schema
+(`r exec` round-trips, `editor read`, `env list`, `term list`, schema
 registry shape).
 
 ## Auto-detection
@@ -113,14 +113,14 @@ Exit codes: `0` success, `1` runtime error, `2` bad CLI args.
 rstudio editor open src/main.rs --line 42
 
 # Evaluate R silently and read the captured output.
-rstudio exec run 'summary(mtcars)'
+rstudio r exec 'summary(mtcars)'
 
 # Bypass the 2 s server limit for a longer job.
-rstudio exec run --timeout 60 'Sys.sleep(10); summary(mtcars)'
-rstudio exec run --timeout 0  'long_running()'   # no limit
+rstudio r exec --timeout 60 'Sys.sleep(10); summary(mtcars)'
+rstudio r exec --timeout 0  'long_running()'   # no limit
 
 # Make something appear and execute in the user's R console.
-rstudio exec send 'print(Sys.time())'
+rstudio r send 'print(Sys.time())'
 
 # Read the buffer of an open shell terminal.
 rstudio term list
@@ -134,7 +134,7 @@ rstudio term buffer "$ID" --limit 30
 rstudio term kill "$ID"
 
 # Surface lint-style feedback in the Markers pane.
-rstudio view mark --name 'lint' --markers '[
+rstudio pane markers --name 'lint' --markers '[
   {"type":"warning","file":"/path/to/foo.R","line":12,"message":"Unused variable"},
   {"type":"error",  "file":"/path/to/bar.R","line":3, "message":"Syntax error"}
 ]'
@@ -147,16 +147,16 @@ rstudio env contents mtcars
 
 ## Concurrency model
 
-R is single-threaded; the rsession serialises every `exec run` /
+R is single-threaded; the rsession serialises every `r exec` /
 `exec eval` style call into a FIFO. Two concurrent calls do **not** run
 in parallel — total wall time ≈ sum of per-call time. So:
 
-- `--timeout 0` on a long `exec run` blocks every subsequent `exec`-style
+- `--timeout 0` on a long `r exec` blocks every subsequent `exec`-style
   call until it returns. Use it deliberately.
 - For real parallelism (running shell commands or external processes),
   use `term exec` — the Terminal pane spawns a separate pty/process,
   not bound to the R FIFO.
-- Postbacks (`editor edit`) and `console_input` (`exec send`) don't go
+- Postbacks (`editor edit`) and `console_input` (`r send`) don't go
   through the R queue, so they aren't subject to the FIFO.
 
 ## Hard "do not"

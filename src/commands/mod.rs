@@ -1,9 +1,9 @@
 pub mod console;
 pub mod editor;
 pub mod env;
-pub mod exec;
+pub mod pane;
+pub mod r;
 pub mod raw;
 pub mod schema_cmd;
 pub mod skill;
 pub mod term;
-pub mod view;

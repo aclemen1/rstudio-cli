@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, env, exec, raw, schema_cmd, skill, term, view};
+use crate::commands::{console, editor, env, pane, r, raw, schema_cmd, skill, term};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -53,9 +53,9 @@ enum Command {
     #[command(subcommand)]
     Editor(editor::EditorCmd),
 
-    /// Exécution de code R dans la session active.
+    /// Run R code in the active session (silent or visible).
     #[command(subcommand)]
-    Exec(exec::ExecCmd),
+    R(r::RCmd),
 
     /// Lecture de l'historique et du buffer console.
     #[command(subcommand)]
@@ -69,9 +69,9 @@ enum Command {
     #[command(subcommand)]
     Env(env::EnvCmd),
 
-    /// Panneaux Viewer / Files / Markers (HTML, navigation, feedback linter).
+    /// Non-editor panes: Viewer (HTML), Files (navigation), Markers (lint feedback).
     #[command(subcommand)]
-    View(view::ViewCmd),
+    Pane(pane::PaneCmd),
 
     /// Skill Claude Code embarqué (show / install).
     #[command(subcommand)]
@@ -117,10 +117,10 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let rpc = RpcClient::new(&session);
             editor::run(&cmd, &rpc)
         }
-        Command::Exec(cmd) => {
+        Command::R(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            exec::run(&cmd, &rpc)
+            r::run(&cmd, &rpc)
         }
         Command::Console(cmd) => {
             let session = Session::detect(overrides)?;
@@ -137,10 +137,10 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let rpc = RpcClient::new(&session);
             env::run(&cmd, &rpc)
         }
-        Command::View(cmd) => {
+        Command::Pane(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            view::run(&cmd, &rpc)
+            pane::run(&cmd, &rpc)
         }
         Command::Skill(cmd) => skill::run(&cmd),
         Command::Schema(cmd) => schema_cmd::run(&cmd),

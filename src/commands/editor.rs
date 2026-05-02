@@ -167,6 +167,31 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
+        name: "active-context",
+        summary: "Context of the document the user last interacted with (Source pane OR console).",
+        description: "Wraps rstudioapi::getActiveDocumentContext(). Unlike `editor context` \
+                      (which always targets the Source pane), this returns whichever document \
+                      currently has focus — including the R console (id = '#console'). \
+                      Useful when the agent needs to know where the user is acting right now.",
+        params: &[ParamSpec {
+            name: "--include-contents",
+            kind: ParamKind::Bool,
+            required: false,
+            default: Some("false"),
+            allowed: &[],
+            description: "Include the live buffer contents (may be large).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio editor active-context",
+            explanation: "Returns the active document — could be a file or the R console.",
+        }],
+        returns: "{id, path, selections, contents?}",
+        errors: &[],
+        rstudioapi_fn: Some("getActiveDocumentContext"),
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
         name: "insert",
         summary: "Insère du texte dans le document actif.",
         description: "Wrap rstudioapi::insertText(). Sans --at, à la position du curseur. \
@@ -257,6 +282,12 @@ pub enum EditorCmd {
     /// Ouvre la modale R `edit()` pour le fichier (Save/Cancel).
     /// Bloque la session R jusqu'à fermeture de la modale.
     Edit { path: PathBuf },
+    /// Context of whatever document the user has focus on (Source pane or console).
+    ActiveContext {
+        /// Include the live buffer contents (may be large).
+        #[arg(long)]
+        include_contents: bool,
+    },
     /// Lit le contenu disque d'un fichier (pas le buffer en cours d'édition).
     Read {
         path: PathBuf,
@@ -293,8 +324,13 @@ pub fn run(cmd: &EditorCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErr
             no_cursor,
         } => open(rpc, path, *line, *col, *no_cursor),
         EditorCmd::Edit { path } => edit_modal(rpc, path),
+        EditorCmd::ActiveContext { include_contents } => {
+            context_via(rpc, "getActiveDocumentContext", *include_contents)
+        }
         EditorCmd::Read { path, encoding } => read(rpc, path, encoding),
-        EditorCmd::Context { include_contents } => context(rpc, *include_contents),
+        EditorCmd::Context { include_contents } => {
+            context_via(rpc, "getSourceEditorContext", *include_contents)
+        }
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
         EditorCmd::Select { range } => select(rpc, range),
     }
@@ -361,7 +397,14 @@ fn read(rpc: &RpcClient<'_>, path: &PathBuf, encoding: &str) -> Result<Option<Va
     })))
 }
 
-fn context(rpc: &RpcClient<'_>, include_contents: bool) -> Result<Option<Value>, CliError> {
+/// Shared implementation for `editor context` (getSourceEditorContext) and
+/// `editor active-context` (getActiveDocumentContext). Both return the same
+/// shape; only the rstudioapi getter differs.
+fn context_via(
+    rpc: &RpcClient<'_>,
+    api_fn: &str,
+    include_contents: bool,
+) -> Result<Option<Value>, CliError> {
     let contents_field = if include_contents {
         "contents = paste(ctx$contents, collapse = \"\\n\"),"
     } else {
@@ -369,7 +412,7 @@ fn context(rpc: &RpcClient<'_>, include_contents: bool) -> Result<Option<Value>,
     };
     let r_code = format!(
         r#"local({{
-  ctx <- rstudioapi::getSourceEditorContext()
+  ctx <- rstudioapi::{api_fn}()
   if (is.null(ctx)) {{
     cat("null")
     return(invisible())
@@ -397,7 +440,7 @@ fn context(rpc: &RpcClient<'_>, include_contents: bool) -> Result<Option<Value>,
         return Ok(Some(Value::Null));
     }
     let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("editor context: invalid JSON: {e}; raw: {raw}")))?;
+        .map_err(|e| CliError::internal(format!("editor context ({api_fn}): invalid JSON: {e}; raw: {raw}")))?;
     Ok(Some(parsed))
 }
 

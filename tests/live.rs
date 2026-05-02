@@ -166,7 +166,7 @@ fn schema_introspection_works_offline() {
     assert!(actions.len() >= 20, "expected >=20 actions, got {}", actions.len());
     let categories: std::collections::HashSet<_> =
         actions.iter().map(|a| a.category).collect();
-    for required in ["editor", "exec", "console", "term", "env", "view", "skill"] {
+    for required in ["editor", "r", "console", "term", "env", "pane", "skill"] {
         assert!(categories.contains(required), "missing category {required}");
     }
 }

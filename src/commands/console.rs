@@ -4,6 +4,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
+use crate::r_eval;
 use crate::rpc::RpcClient;
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 use crate::session::Session;
@@ -68,29 +69,45 @@ pub const ACTIONS: &[ActionSpec] = &[
         rstudioapi_fn: None,
         rpc_method: None,
     },
+    ActionSpec {
+        category: "console",
+        name: "context",
+        summary: "Context of the R console editor (currently typed input + cursor position).",
+        description: "Wraps rstudioapi::getConsoleEditorContext(). Returns what the user is \
+                      currently typing in the R console (id always = '#console'), the cursor \
+                      position, and the selection if any. Live.",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio console context",
+            explanation: "Returns {id: '#console', path: '', selections: [...], contents?}.",
+        }],
+        returns: "{id, path, selections, contents?}",
+        errors: &[],
+        rstudioapi_fn: Some("getConsoleEditorContext"),
+        rpc_method: Some("execute_r_code"),
+    },
 ];
 
 #[derive(Subcommand, Debug)]
 pub enum ConsoleCmd {
-    /// Liste les commandes saisies par l'utilisateur dans la console R.
-    /// Live (lit l'historique en mémoire de la session R).
+    /// List the latest commands typed by the user in the R console (live).
     History {
-        /// Nombre maximum d'entrées à retourner (les plus récentes).
+        /// Max number of commands to return (most recent first).
         #[arg(long, short = 'n', default_value_t = 100)]
         limit: u32,
     },
-    /// Lit le snapshot du buffer console écrit par RStudio lors de la dernière
-    /// suspend (~/.local/share/rstudio/sessions/active/session-<ID>/suspended-session-data/console_actions).
-    /// Pas live — la valeur de `last_modified` indique l'ancienneté du snapshot.
+    /// Read the on-disk console_actions snapshot (last suspend; not live).
     Actions {
-        /// Nombre maximum d'entrées à retourner (les plus récentes).
+        /// Max number of entries to return (most recent first).
         #[arg(long, short = 'n')]
         limit: Option<usize>,
-        /// Filtre par type d'action (parmi: prompt, input, output, error).
-        /// Multi-valué; séparé par virgule. Sans flag, toutes retournées.
+        /// Filter by action type. Multi-valued, comma-separated.
+        /// Without this flag, all types are returned.
         #[arg(long, value_delimiter = ',')]
         types: Vec<ActionType>,
     },
+    /// Context of the R console editor (currently typed input + cursor position). Live.
+    Context,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +147,41 @@ pub fn run(
     match cmd {
         ConsoleCmd::History { limit } => history(rpc, *limit),
         ConsoleCmd::Actions { limit, types } => actions(session, *limit, types),
+        ConsoleCmd::Context => context(rpc),
     }
+}
+
+fn context(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    let r_code = r#"local({
+  ctx <- rstudioapi::getConsoleEditorContext()
+  if (is.null(ctx)) {
+    cat("null")
+    return(invisible())
+  }
+  selections <- lapply(ctx$selection, function(s) {
+    list(
+      start_row = as.integer(s$range$start[[1]]),
+      start_col = as.integer(s$range$start[[2]]),
+      end_row = as.integer(s$range$end[[1]]),
+      end_col = as.integer(s$range$end[[2]]),
+      text = s$text
+    )
+  })
+  out <- list(
+    id = ctx$id,
+    path = ctx$path,
+    contents = paste(ctx$contents, collapse = "\n"),
+    selections = selections
+  )
+  cat(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null"))
+})"#;
+    let raw = r_eval::run(rpc, r_code)?;
+    if raw.trim() == "null" {
+        return Ok(Some(Value::Null));
+    }
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("console context: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
 }
 
 

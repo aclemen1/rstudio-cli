@@ -10,70 +10,70 @@ use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
-        category: "view",
-        name: "html",
-        summary: "Affiche un fichier HTML local ou une URL dans le panneau Viewer.",
-        description: "Wrap rstudioapi::viewer(url). Pour un fichier local, le chemin \
-                      est résolu en absolu via canonicalize.",
+        category: "pane",
+        name: "viewer",
+        summary: "Show a local HTML file or URL in the Viewer pane.",
+        description: "Wraps rstudioapi::viewer(url). Local paths are resolved \
+                      to absolute via canonicalize before being passed to R.",
         params: &[ParamSpec {
             name: "target",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Chemin local ou URL (http://, https://).",
+            description: "Local path or URL (http://, https://).",
         }],
         examples: &[
             ExampleSpec {
-                cmd: "rstudio view html ~/reports/coverage.html",
-                explanation: "Ouvre le fichier dans le panneau Viewer.",
+                cmd: "rstudio pane viewer ~/reports/coverage.html",
+                explanation: "Opens the file in the Viewer pane.",
             },
             ExampleSpec {
-                cmd: "rstudio view html https://example.com",
-                explanation: "Affiche la page distante (selon les permissions du navigateur).",
+                cmd: "rstudio pane viewer https://example.com",
+                explanation: "Loads the remote page (subject to browser policy).",
             },
         ],
         returns: "void",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "Chemin local introuvable.",
+            when: "Local path not found.",
         }],
         rstudioapi_fn: Some("viewer"),
         rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
-        category: "view",
+        category: "pane",
         name: "files",
-        summary: "Navigue le panneau Files vers un dossier.",
-        description: "Wrap rstudioapi::filesPaneNavigate(path).",
+        summary: "Navigate the Files pane to a directory.",
+        description: "Wraps rstudioapi::filesPaneNavigate(path).",
         params: &[ParamSpec {
             name: "path",
             kind: ParamKind::String,
             required: true,
             default: None,
             allowed: &[],
-            description: "Chemin du dossier cible.",
+            description: "Target directory.",
         }],
         examples: &[ExampleSpec {
-            cmd: "rstudio view files ~/projects/my-project",
-            explanation: "Pointe le panneau Files vers ce dossier.",
+            cmd: "rstudio pane files ~/projects/my-project",
+            explanation: "Points the Files pane at this directory.",
         }],
         returns: "void",
         errors: &[ErrorSpec {
             kind: "user_error",
-            when: "Chemin introuvable.",
+            when: "Path not found.",
         }],
         rstudioapi_fn: Some("filesPaneNavigate"),
         rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
-        category: "view",
-        name: "mark",
-        summary: "Affiche un panneau Markers (style linter) avec une liste de problèmes.",
-        description: "Wrap rstudioapi::sourceMarkers(name, markers, autoSelect). \
-                      Les markers sont passés en JSON via --markers ou stdin (un array \
-                      d'objets {type, file, line, column?, message}). type ∈ \
-                      {error,warning,info,style,usage,box}.",
+        category: "pane",
+        name: "markers",
+        summary: "Display a Markers pane (lint-style) with a list of issues.",
+        description: "Wraps rstudioapi::sourceMarkers(name, markers, autoSelect). \
+                      Markers are passed as a JSON array via --markers or stdin: \
+                      [{type, file, line, column?, message}, ...]. \
+                      type ∈ {error, warning, info, style, usage, box}.",
         params: &[
             ParamSpec {
                 name: "--name",
@@ -81,7 +81,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("rstudio-cli"),
                 allowed: &[],
-                description: "Nom de la collection affiché en titre du panneau Markers.",
+                description: "Collection name shown as the Markers pane title.",
             },
             ParamSpec {
                 name: "--markers",
@@ -89,7 +89,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "JSON array inline. Si absent, lu depuis stdin.",
+                description: "Inline JSON array. If absent, read from stdin.",
             },
             ParamSpec {
                 name: "--auto-select",
@@ -97,28 +97,28 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: Some("none"),
                 allowed: &["none", "first", "error"],
-                description: "Quel marker activer automatiquement après création.",
+                description: "Which marker to auto-activate after creation.",
             },
         ],
         examples: &[
             ExampleSpec {
-                cmd: "rstudio view mark --name 'lint' --markers '[{\"type\":\"warning\",\"file\":\"~/p/foo.R\",\"line\":12,\"message\":\"Unused var\"}]'",
-                explanation: "Affiche un marker warning sur foo.R ligne 12.",
+                cmd: "rstudio pane markers --name 'lint' --markers '[{\"type\":\"warning\",\"file\":\"~/p/foo.R\",\"line\":12,\"message\":\"Unused var\"}]'",
+                explanation: "Surfaces a warning on foo.R line 12.",
             },
             ExampleSpec {
-                cmd: "cat markers.json | rstudio view mark --name 'lint'",
-                explanation: "Lit les markers depuis stdin (un JSON array).",
+                cmd: "cat markers.json | rstudio pane markers --name 'lint'",
+                explanation: "Reads markers from stdin (a JSON array).",
             },
         ],
-        returns: "{count: int}",
+        returns: "{count: int, name: string}",
         errors: &[
             ErrorSpec {
                 kind: "user_error",
-                when: "JSON invalide ou markers vides.",
+                when: "Invalid JSON or empty markers array.",
             },
             ErrorSpec {
                 kind: "r_error",
-                when: "Champ obligatoire manquant ou type invalide.",
+                when: "Required field missing or invalid type.",
             },
         ],
         rstudioapi_fn: Some("sourceMarkers"),
@@ -127,44 +127,44 @@ pub const ACTIONS: &[ActionSpec] = &[
 ];
 
 #[derive(Subcommand, Debug)]
-pub enum ViewCmd {
-    /// Affiche un fichier HTML local ou une URL dans le panneau Viewer.
-    Html { target: String },
-    /// Navigue le panneau Files vers un dossier.
+pub enum PaneCmd {
+    /// Show a local HTML file or URL in the Viewer pane.
+    Viewer { target: String },
+    /// Navigate the Files pane to a directory.
     Files { path: PathBuf },
-    /// Affiche des markers (style linter) dans le panneau Markers.
-    Mark {
-        /// Nom de la collection affiché en titre.
+    /// Display markers (lint-style) in the Markers pane.
+    Markers {
+        /// Collection name shown as the pane title.
         #[arg(long, default_value = "rstudio-cli")]
         name: String,
-        /// Markers en JSON inline (sinon lu sur stdin).
+        /// Markers as inline JSON array (otherwise read from stdin).
         #[arg(long)]
         markers: Option<String>,
-        /// Quel marker activer après création.
+        /// Which marker to auto-activate after creation.
         #[arg(long, default_value = "none")]
         auto_select: String,
     },
 }
 
-pub fn run(cmd: &ViewCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+pub fn run(cmd: &PaneCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        ViewCmd::Html { target } => html(rpc, target),
-        ViewCmd::Files { path } => files(rpc, path),
-        ViewCmd::Mark {
+        PaneCmd::Viewer { target } => viewer(rpc, target),
+        PaneCmd::Files { path } => files(rpc, path),
+        PaneCmd::Markers {
             name,
             markers,
             auto_select,
-        } => mark(rpc, name, markers.as_deref(), auto_select),
+        } => markers_cmd(rpc, name, markers.as_deref(), auto_select),
     }
 }
 
-fn html(rpc: &RpcClient<'_>, target: &str) -> Result<Option<Value>, CliError> {
+fn viewer(rpc: &RpcClient<'_>, target: &str) -> Result<Option<Value>, CliError> {
     let resolved = if target.starts_with("http://") || target.starts_with("https://") {
         target.to_string()
     } else {
-        let p = std::path::Path::new(target).canonicalize().map_err(|e| {
-            CliError::user(format!("cannot resolve {target}: {e}"))
-        })?;
+        let p = std::path::Path::new(target)
+            .canonicalize()
+            .map_err(|e| CliError::user(format!("cannot resolve {target}: {e}")))?;
         p.to_string_lossy().into_owned()
     };
     let r_code = format!("rstudioapi::viewer({})", r_quote(&resolved));
@@ -182,7 +182,7 @@ fn files(rpc: &RpcClient<'_>, path: &PathBuf) -> Result<Option<Value>, CliError>
     Ok(Some(json!({ "path": abs_str })))
 }
 
-fn mark(
+fn markers_cmd(
     rpc: &RpcClient<'_>,
     name: &str,
     markers_inline: Option<&str>,

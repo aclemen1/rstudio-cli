@@ -65,24 +65,24 @@ Exit codes: `0` ok, `1` runtime error, `2` bad CLI args.
 
 ## Concurrency model
 
-R is single-threaded; the `rsession` serialises every `exec run` /
+R is single-threaded; the `rsession` serialises every `r exec` /
 `exec eval` style call into a FIFO. Two concurrent calls do **not**
 run in parallel — total wall time ≈ sum of per-call time. Implications:
 
-- `--timeout 0` on a long-running `exec run` blocks every subsequent
+- `--timeout 0` on a long-running `r exec` blocks every subsequent
   `exec`-style call until it returns. Be explicit about long timeouts.
 - For real parallelism (running shell commands or external processes),
   use `term exec` — the Terminal pane spawns a separate pty/process,
   not bound to the R FIFO.
-- Postbacks (`editor edit`) and console_input (`exec send`) don't go
+- Postbacks (`editor edit`) and console_input (`r send`) don't go
   through the R queue and therefore aren't subject to that limit.
 
 ## Patterns worth knowing
 
-- **Run R silently and read its output**: `rstudio exec run '<R code>'`.
+- **Run R silently and read its output**: `rstudio r exec '<R code>'`.
   Returns `{output: string}`. Default elapsed limit is 2 s — pass
   `--timeout T` to extend (or `--timeout 0` to disable, see above).
-- **Type into the user's R console (visible)**: `rstudio exec send '<R code>'`.
+- **Type into the user's R console (visible)**: `rstudio r send '<R code>'`.
   Fire-and-forget; the user sees the command appear and run.
 - **Open a file at a specific line in the editor**:
   `rstudio editor open <path> --line N`. This is the non-modal path —
@@ -93,7 +93,7 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
   to find the id, then `rstudio term buffer <id> [--limit N]`. To run a
   shell command: `rstudio term exec <id> '<bash command>'`, then re-read
   `term buffer` after a moment to see the output.
-- **Surface lint-style feedback**: `rstudio view mark --markers '<JSON>'`
+- **Surface lint-style feedback**: `rstudio pane markers --markers '<JSON>'`
   with `[{type, file, line, column?, message}, ...]`. Useful for
   batch-reporting issues you found.
 - **Inspect a variable without loading it**: `rstudio env info <name>`
@@ -105,7 +105,7 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 - Never invoke `rstudio rpc client_init`. It's blacklisted at the CLI
   level because it invalidates the user's browser client and resets
   their RStudio session.
-- `rstudio exec send` and `rstudio term send/exec` are **visible** in
+- `rstudio r send` and `rstudio term send/exec` are **visible** in
   the user's UI — only use them when the action is meant to be seen.
 - `rstudio editor insert/select/edit` operate on the **active** document
   (or open a modal). If you don't know which one is active, run

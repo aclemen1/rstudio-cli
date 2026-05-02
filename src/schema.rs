@@ -83,8 +83,8 @@ pub const CATEGORIES: &[CategorySpec] = &[
         description: "Manipulation de l'éditeur de code (ouverture, navigation, sélection, lecture).",
     },
     CategorySpec {
-        name: "exec",
-        description: "Exécution de code R dans la session active (silencieux ou visible).",
+        name: "r",
+        description: "Run R code in the active session (silent via execute_r_code, or visible via console_input).",
     },
     CategorySpec {
         name: "console",
@@ -99,8 +99,8 @@ pub const CATEGORIES: &[CategorySpec] = &[
         description: "Inspection de l'environnement R actif (variables, contenus, métadonnées).",
     },
     CategorySpec {
-        name: "view",
-        description: "Panneaux Viewer / Files / Markers (HTML, navigation, feedback linter).",
+        name: "pane",
+        description: "Non-editor panes: Viewer (HTML), Files (navigation), Markers (lint-style feedback).",
     },
     CategorySpec {
         name: "skill",
@@ -114,11 +114,11 @@ pub fn registry() -> Vec<&'static ActionSpec> {
     let mut out: Vec<&'static ActionSpec> = Vec::new();
     for slice in [
         crate::commands::editor::ACTIONS,
-        crate::commands::exec::ACTIONS,
+        crate::commands::r::ACTIONS,
         crate::commands::console::ACTIONS,
         crate::commands::term::ACTIONS,
         crate::commands::env::ACTIONS,
-        crate::commands::view::ACTIONS,
+        crate::commands::pane::ACTIONS,
         crate::commands::skill::ACTIONS,
     ] {
         out.extend(slice.iter());

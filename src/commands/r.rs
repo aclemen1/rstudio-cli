@@ -12,12 +12,14 @@ const SOCKET_TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
-        category: "exec",
-        name: "run",
-        summary: "Exécute du code R en silencieux et retourne sortie + erreurs.",
-        description: "Wrappe le code dans un tryCatch + capture.output côté R. \
-                      Le code n'apparaît PAS dans la console visible. \
-                      Limite serveur 2s par défaut, override avec --timeout.",
+        category: "r",
+        name: "exec",
+        summary: "Run R code silently and return the captured output and any error.",
+        description: "Wraps the user code in a tryCatch + capture.output sent through \
+                      execute_r_code. The code does NOT appear in the user's visible \
+                      console. Default elapsed limit is the server-imposed 2 s; pass \
+                      --timeout to override (or --timeout 0 to disable, see the \
+                      concurrency notes).",
         params: &[
             ParamSpec {
                 name: "code",
@@ -25,7 +27,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: true,
                 default: None,
                 allowed: &[],
-                description: "Code R à évaluer (peut être multi-instructions).",
+                description: "R code to evaluate (may contain multiple statements).",
             },
             ParamSpec {
                 name: "--timeout",
@@ -33,61 +35,57 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Limite elapsed en secondes (>0). 0 = pas de limite. \
-                              Sans flag : limite serveur 2s.",
+                description: "Elapsed-time limit in seconds (>0). 0 = no limit. \
+                              Without the flag the rsession server limit (2 s) applies.",
             },
         ],
         examples: &[
             ExampleSpec {
-                cmd: "rstudio exec run '1+1'",
-                explanation: "Retourne {output: \"[1] 2\"}.",
+                cmd: "rstudio r exec '1+1'",
+                explanation: "Returns {output: \"[1] 2\"}.",
             },
             ExampleSpec {
-                cmd: "rstudio exec run --timeout 30 'Sys.sleep(10); summary(mtcars)'",
-                explanation: "Bypass la limite 2s pour un calcul plus long.",
+                cmd: "rstudio r exec --timeout 30 'Sys.sleep(10); summary(mtcars)'",
+                explanation: "Bypasses the 2 s limit for a longer computation.",
             },
             ExampleSpec {
-                cmd: "rstudio exec run 'stop(\"boom\")'",
-                explanation: "Retourne kind=r_error avec message=\"boom\".",
+                cmd: "rstudio r exec 'stop(\"boom\")'",
+                explanation: "Returns kind=r_error with message=\"boom\".",
             },
         ],
         returns: "{output: string}",
         errors: &[
             ErrorSpec {
                 kind: "r_error",
-                when: "Le code R lève une erreur (stop, syntax, etc.).",
+                when: "The R code raised a condition (stop, syntax error, ...).",
             },
             ErrorSpec {
                 kind: "timeout",
-                when: "Le code dépasse la limite (default 2s ou --timeout).",
+                when: "The code exceeded the limit (default 2 s or --timeout).",
             },
         ],
         rstudioapi_fn: None,
         rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
-        category: "exec",
+        category: "r",
         name: "send",
-        summary: "Tape du code dans la console R utilisateur et l'exécute (visible).",
-        description: "Passe par console_input. L'user voit la commande arriver et son \
-                      résultat dans sa console R, comme s'il l'avait tapé. Pas de retour \
-                      structuré, fire-and-forget.",
-        params: &[
-            ParamSpec {
-                name: "code",
-                kind: ParamKind::String,
-                required: true,
-                default: None,
-                allowed: &[],
-                description: "Code R à envoyer (un newline final est ajouté si absent).",
-            },
-        ],
-        examples: &[
-            ExampleSpec {
-                cmd: "rstudio exec send 'print(Sys.time())'",
-                explanation: "L'user verra `print(Sys.time())` dans sa console et l'exécution.",
-            },
-        ],
+        summary: "Type R code into the user's console and execute it (visible).",
+        description: "Uses the console_input RPC. The user sees the command appear \
+                      and run, exactly as if they had typed it. Fire-and-forget; no \
+                      structured return value.",
+        params: &[ParamSpec {
+            name: "code",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "R code to send (a trailing newline is appended if absent).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio r send 'print(Sys.time())'",
+            explanation: "User sees print(Sys.time()) typed into their R console and executed.",
+        }],
         returns: "void",
         errors: &[],
         rstudioapi_fn: None,
@@ -96,30 +94,21 @@ pub const ACTIONS: &[ActionSpec] = &[
 ];
 
 #[derive(Subcommand, Debug)]
-pub enum ExecCmd {
-    /// Exécute du code R en silencieux (capture sortie et erreurs, pas visible
-    /// dans la console utilisateur).
-    ///
-    /// Sans --timeout, la limite d'évaluation est celle imposée par le serveur
-    /// (2s d'elapsed time). Passer --timeout pour la dépasser.
-    Run {
-        /// Code R à exécuter.
+pub enum RCmd {
+    /// Run R code silently (capture output and errors; not visible in the user's console).
+    Exec {
         code: String,
-        /// Limite d'evaluation en secondes (float). 0 = pas de limite (le CLI
-        /// bloque jusqu'à la fin du code, Ctrl-C reste possible).
+        /// Elapsed-time limit in seconds. 0 = no limit.
         #[arg(long, short = 't')]
         timeout: Option<f64>,
     },
-    /// Envoie le code à la console R utilisateur (visible) et l'exécute.
-    Send {
-        /// Code R à envoyer à la console.
-        code: String,
-    },
+    /// Send R code to the user's console (visible) and execute it.
+    Send { code: String },
 }
 
-pub fn run(cmd: &ExecCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        ExecCmd::Run { code, timeout } => {
+        RCmd::Exec { code, timeout } => {
             let eval_timeout = match timeout {
                 None => EvalTimeout::ServerDefault,
                 Some(t) if *t <= 0.0 => EvalTimeout::NoLimit,
@@ -130,7 +119,7 @@ pub fn run(cmd: &ExecCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError
             let output = r_eval::run_with_timeout(rpc, code, eval_timeout)?;
             Ok(Some(json!({ "output": output })))
         }
-        ExecCmd::Send { code } => {
+        RCmd::Send { code } => {
             let mut text = code.clone();
             if !text.ends_with('\n') {
                 text.push('\n');
