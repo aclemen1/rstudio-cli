@@ -1,6 +1,7 @@
 pub mod console;
 pub mod editor;
 pub mod env;
+pub mod job;
 pub mod pane;
 pub mod pref;
 pub mod r;
@@ -9,3 +10,4 @@ pub mod schema_cmd;
 pub mod session;
 pub mod skill;
 pub mod term;
+pub mod ui;

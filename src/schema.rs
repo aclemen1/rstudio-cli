@@ -114,6 +114,14 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "pref",
         description: "User and built-in RStudio preferences + persistent key/value store.",
     },
+    CategorySpec {
+        name: "job",
+        description: "Background jobs in the Jobs pane (create, drive, run R scripts).",
+    },
+    CategorySpec {
+        name: "ui",
+        description: "Modal UI prompts (dialog, prompt, question, file/dir picker, secret). All BLOCKING.",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -130,6 +138,8 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::skill::ACTIONS,
         crate::commands::session::ACTIONS,
         crate::commands::pref::ACTIONS,
+        crate::commands::job::ACTIONS,
+        crate::commands::ui::ACTIONS,
     ] {
         out.extend(slice.iter());
     }

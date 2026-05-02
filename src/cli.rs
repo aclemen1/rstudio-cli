@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
-use crate::commands::{console, editor, env, pane, pref, r, raw, schema_cmd, session, skill, term};
+use crate::commands::{
+    console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, term, ui,
+};
 use crate::error::CliError;
 use crate::output::{Format, print_err, print_ok};
 use crate::rpc::RpcClient;
@@ -85,6 +87,14 @@ enum Command {
     #[command(subcommand)]
     Pref(pref::PrefCmd),
 
+    /// Background jobs in the Jobs pane.
+    #[command(subcommand)]
+    Job(job::JobCmd),
+
+    /// Modal UI prompts (BLOCKING).
+    #[command(subcommand)]
+    Ui(ui::UiCmd),
+
     /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
 
@@ -160,6 +170,16 @@ fn dispatch(cli: Cli) -> Result<Option<Value>, CliError> {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
             pref::run(&cmd, &rpc)
+        }
+        Command::Job(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            job::run(&cmd, &rpc)
+        }
+        Command::Ui(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            ui::run(&cmd, &rpc)
         }
         Command::Schema(cmd) => schema_cmd::run(&cmd),
         Command::Rpc(cmd) => {
