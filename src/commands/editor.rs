@@ -199,50 +199,63 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "context",
-        summary: "Context of the active document in the Source pane (path, selection, etc.).",
-        description: "Wraps rstudioapi::getSourceEditorContext(). Without the flag, returns id, \
-                      path, and the selections list (start/end positions + selected text). \
-                      With --include-contents, adds the buffer lines (live, including unsaved edits).",
-        params: &[ParamSpec {
-            name: "--include-contents",
-            kind: ParamKind::Bool,
-            required: false,
-            default: Some("false"),
-            allowed: &[],
-            description: "Include the live buffer contents (may be large).",
-        }],
-        examples: &[ExampleSpec {
-            cmd: "rstudio editor context",
-            explanation: "Returns {id, path, selections: [{start_row, start_col, end_row, end_col, text}]}.",
-        }],
+        summary: "Context (id, path, selections) of a document in the Source pane or the console.",
+        description: "Wraps rstudioapi::getSourceEditorContext() by default. Modifiers: \
+                      --id <ID> targets a specific source document (active or not); \
+                      --include-console targets whichever document currently has focus, \
+                      including the R console (id = '#console'), via \
+                      rstudioapi::getActiveDocumentContext(). --id and --include-console are \
+                      mutually exclusive (the console doesn't accept an id). \
+                      --include-contents adds the buffer lines to the response.",
+        params: &[
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Document id (8 hex chars). When omitted, returns the active \
+                              source document. Mutually exclusive with --include-console.",
+            },
+            ParamSpec {
+                name: "--include-console",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Use getActiveDocumentContext() instead — returns whichever doc \
+                              currently has focus, including the R console. Mutually exclusive \
+                              with --id.",
+            },
+            ParamSpec {
+                name: "--include-contents",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Include the live buffer contents (may be large).",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor context",
+                explanation: "Returns the active source doc {id, path, selections}.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor context --id D4F4972F",
+                explanation: "Returns context for that specific source doc, even if not active.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor context --include-console",
+                explanation: "Returns whichever doc has focus — could be a file or the R console.",
+            },
+        ],
         returns: "{id, path, selections, contents?}",
-        errors: &[],
-        rstudioapi_fn: Some("getSourceEditorContext"),
-        rpc_method: Some("execute_r_code"),
-    },
-    ActionSpec {
-        category: "editor",
-        name: "active-context",
-        summary: "Context of the document the user last interacted with (Source pane OR console).",
-        description: "Wraps rstudioapi::getActiveDocumentContext(). Unlike `editor context` \
-                      (which always targets the Source pane), this returns whichever document \
-                      currently has focus — including the R console (id = '#console'). \
-                      Useful when the agent needs to know where the user is acting right now.",
-        params: &[ParamSpec {
-            name: "--include-contents",
-            kind: ParamKind::Bool,
-            required: false,
-            default: Some("false"),
-            allowed: &[],
-            description: "Include the live buffer contents (may be large).",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Both --id and --include-console were passed.",
         }],
-        examples: &[ExampleSpec {
-            cmd: "rstudio editor active-context",
-            explanation: "Returns the active document — could be a file or the R console.",
-        }],
-        returns: "{id, path, selections, contents?}",
-        errors: &[],
-        rstudioapi_fn: Some("getActiveDocumentContext"),
+        rstudioapi_fn: Some("getSourceEditorContext / getActiveDocumentContext"),
         rpc_method: Some("execute_r_code"),
     },
     ActionSpec {
@@ -737,12 +750,6 @@ pub enum EditorCmd {
     /// Open the modal R `edit()` dialog for the file (Save/Cancel).
     /// Blocks the R session until the modal is dismissed.
     Edit { path: PathBuf },
-    /// Context of whatever document the user has focus on (Source pane or console).
-    ActiveContext {
-        /// Include the live buffer contents (may be large).
-        #[arg(long)]
-        include_contents: bool,
-    },
     /// Read the on-disk file contents (not the live editor buffer).
     Read {
         path: PathBuf,
@@ -758,8 +765,15 @@ pub enum EditorCmd {
         #[arg(long, conflicts_with = "id")]
         path: Option<PathBuf>,
     },
-    /// Context of the active document in the Source pane.
+    /// Context of a document (Source pane or, with --include-console, anywhere).
     Context {
+        /// Specific source doc id (defaults to the active one). Excludes --include-console.
+        #[arg(long)]
+        id: Option<String>,
+        /// Use getActiveDocumentContext() — returns the focused doc, including console.
+        /// Mutually exclusive with --id.
+        #[arg(long = "include-console", conflicts_with = "id")]
+        include_console: bool,
         /// Include the live buffer contents (may be large).
         #[arg(long)]
         include_contents: bool,
@@ -863,16 +877,15 @@ pub fn run(
             no_cursor,
         } => open(rpc, path, *line, *col, *no_cursor),
         EditorCmd::Edit { path } => edit_modal(rpc, path),
-        EditorCmd::ActiveContext { include_contents } => {
-            context_via(rpc, "getActiveDocumentContext", *include_contents)
-        }
         EditorCmd::Read { path, encoding } => read(rpc, path, encoding),
         EditorCmd::ReadBuffer { id, path } => {
             read_buffer(rpc, session, id.as_deref(), path.as_deref())
         }
-        EditorCmd::Context { include_contents } => {
-            context_via(rpc, "getSourceEditorContext", *include_contents)
-        }
+        EditorCmd::Context {
+            id,
+            include_console,
+            include_contents,
+        } => context(rpc, id.as_deref(), *include_console, *include_contents),
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
         EditorCmd::Select { range, id } => select(rpc, range, id.as_deref()),
         EditorCmd::Close { id, save } => close(rpc, id, save),
@@ -1019,14 +1032,32 @@ fn read_buffer(
     })))
 }
 
-/// Shared implementation for `editor context` (getSourceEditorContext) and
-/// `editor active-context` (getActiveDocumentContext). Both return the same
-/// shape; only the rstudioapi getter differs.
-fn context_via(
+/// Implementation of `editor context [--id] [--include-console] [--include-contents]`.
+/// Dispatches to the appropriate rstudioapi getter:
+/// - `--include-console`: getActiveDocumentContext() (focused doc, can be the console)
+/// - `--id <ID>`         : getSourceEditorContext(id) (specific source doc)
+/// - default             : getSourceEditorContext() (active source doc)
+fn context(
     rpc: &RpcClient<'_>,
-    api_fn: &str,
+    id: Option<&str>,
+    include_console: bool,
     include_contents: bool,
 ) -> Result<Option<Value>, CliError> {
+    // clap's conflicts_with already enforces this; defensive double-check for direct callers.
+    if id.is_some() && include_console {
+        return Err(CliError::user(
+            "editor context: --id and --include-console are mutually exclusive.",
+        ));
+    }
+
+    let api_call = if include_console {
+        "rstudioapi::getActiveDocumentContext()".to_string()
+    } else if let Some(id) = id {
+        format!("rstudioapi::getSourceEditorContext(id = {})", r_quote(id))
+    } else {
+        "rstudioapi::getSourceEditorContext()".to_string()
+    };
+
     let contents_field = if include_contents {
         "contents = paste(ctx$contents, collapse = \"\\n\"),"
     } else {
@@ -1034,7 +1065,7 @@ fn context_via(
     };
     let r_code = format!(
         r#"local({{
-  ctx <- rstudioapi::{api_fn}()
+  ctx <- {api_call}
   if (is.null(ctx)) {{
     cat("null")
     return(invisible())
@@ -1062,9 +1093,7 @@ fn context_via(
         return Ok(Some(Value::Null));
     }
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
-        CliError::internal(format!(
-            "editor context ({api_fn}): invalid JSON: {e}; raw: {raw}"
-        ))
+        CliError::internal(format!("editor context: invalid JSON: {e}; raw: {raw}"))
     })?;
     Ok(Some(parsed))
 }

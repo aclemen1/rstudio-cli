@@ -36,7 +36,7 @@ across 13 categories and 76 actions. Live-tested end-to-end on both
 
 | category | actions | summary |
 |---|---|---|
-| `editor` | `open` `edit` `close` `save` `save-all` `read` `context` `active-context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` | Source pane and document operations |
+| `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` | Source pane and document operations |
 | `r`      | `exec` `send` | Run R code (silent or visible) |
 | `console`| `history` `actions` `context` | Console history + buffer + live editor context |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
