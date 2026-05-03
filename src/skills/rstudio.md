@@ -1,15 +1,23 @@
 ---
 name: rstudio
-description: Interact with the embedded RStudio Server IDE from a terminal — open files, run R code, drive the editor / viewer / markers / files panes, list and read terminal buffers, inspect the live R environment.
+description: Interact with the embedded RStudio IDE (Server on Linux, Desktop on macOS) from a terminal — open files, run R code, drive the editor / viewer / markers / files panes, list and read terminal buffers, inspect the live R environment.
 version: __VERSION__
 ---
 
-# rstudio — RStudio Server IDE bridge
+# rstudio — RStudio IDE bridge
 
-Use the `rstudio` CLI to talk to the RStudio Server session that hosts the
-terminal you're running in. The bridge speaks to that session's `rsession`
-Unix socket and shares the active browser client, so visible actions land
-directly in the user's open RStudio tab without disrupting it.
+Use the `rstudio` CLI to talk to the live RStudio session running on the
+same machine. The bridge auto-detects which mode applies:
+
+- **RStudio Server** (Linux): speaks to the rsession Unix socket and
+  shares the active browser client, so visible actions land directly in
+  the user's open RStudio tab.
+- **RStudio Desktop** (macOS): speaks to the rsession's TCP loopback
+  with the shared secret; same effect on the live IDE window.
+
+The CLI works whether you're invoked from inside RStudio's embedded
+terminal (env vars set) or from any other process on the same host
+(auto-discovery kicks in).
 
 This skill is intentionally minimal: the CLI is self-documenting via
 `rstudio schema`. **Don't pre-load the surface — discover on demand.**
@@ -99,6 +107,18 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 - **Inspect a variable without loading it**: `rstudio env info <name>`
   returns class/typeof/length/dim/size_bytes only. For the formatted
   contents, `rstudio env contents <name>`.
+- **Sync the editor buffer after an external file write**: if you
+  modify a file's content via tools other than `rstudio editor *`
+  (e.g. `Edit`, `Write`, `MultiEdit`, shell redirection, `git`), the
+  user's RStudio buffer keeps the stale content until they click the
+  tab and accept the "file changed" dialog. To skip that friction:
+
+      rstudio editor reload --path <path> --if-clean
+
+  Safe to call unconditionally: it's a no-op (`action: skipped-not-open`)
+  if the file isn't in the Source pane, and a no-op (`action:
+  skipped-dirty`) if the user has unsaved edits in that buffer. Only
+  call once per file write — don't loop.
 
 ## Hard constraints
 

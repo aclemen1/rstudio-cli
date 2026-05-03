@@ -14,7 +14,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "open",
-        summary: "Ouvre un fichier dans le pane Source (non-modal). Retourne l'id du document.",
+        summary: "Open a file in the Source pane (non-modal). Returns the document id.",
         description: "Wraps rstudioapi::documentOpen(path, line, col, moveCursor). The file \
                       appears as a tab in the Source pane and the user retains control. \
                       Different from `editor edit`, which opens the modal R `edit()` dialog \
@@ -80,7 +80,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "edit",
-        summary: "Ouvre la modale R edit() pour le fichier (Save/Cancel). Bloquant.",
+        summary: "Open the modal R edit() dialog for the file (Save/Cancel). Blocking.",
         description: "Wraps the editfile postback — standard R `edit(file = ...)` behaviour. \
                       RStudio displays a modal editor window separate from the Source pane. \
                       The user must click Save or Cancel to close it. While the modal is up, \
@@ -145,6 +145,59 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
+        name: "read-buffer",
+        summary: "Read the live editor buffer of an open document by id (includes unsaved edits).",
+        description: "Wraps the get_source_document RPC and returns the buffer's current \
+                      contents along with id, path and the dirty flag. Unlike `editor read` \
+                      (which reads the on-disk file) and `editor context --include-contents` \
+                      (which works only on the active document), this lets you read any open \
+                      doc's buffer, active or not. Note: the dirty flag is read from the \
+                      source_database snapshot which can lag the frontend by a fraction of a \
+                      second after rapid edits.",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Document id (8 hex chars). Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "File path; the id is resolved by listing open documents and \
+                              matching against this path. Mutually exclusive with positional id.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor read-buffer D4F4972F",
+                explanation: "Returns {id, path, contents, dirty} for that open document.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor read-buffer --path /tmp/foo.R",
+                explanation: "Resolve id from path; same return shape.",
+            },
+            ExampleSpec {
+                cmd: "rstudio --format text editor read-buffer D4F4972F",
+                explanation: "Pretty-prints the JSON; pipe through `jq -r .contents` for raw text.",
+            },
+        ],
+        returns: "{id: string, path: string, contents: string, dirty: bool}",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Neither <id> nor --path was given, or --path doesn't match any open doc, \
+                       or --path matches multiple open docs (ambiguous).",
+        }],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_source_document"),
+    },
+    ActionSpec {
+        category: "editor",
         name: "context",
         summary: "Context of the active document in the Source pane (path, selection, etc.).",
         description: "Wraps rstudioapi::getSourceEditorContext(). Without the flag, returns id, \
@@ -160,7 +213,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio editor context",
-            explanation: "Retourne {id, path, selections: [{start_row, start_col, end_row, end_col, text}]}.",
+            explanation: "Returns {id, path, selections: [{start_row, start_col, end_row, end_col, text}]}.",
         }],
         returns: "{id, path, selections, contents?}",
         errors: &[],
@@ -278,6 +331,69 @@ pub const ACTIONS: &[ActionSpec] = &[
         }],
         rstudioapi_fn: Some("documentClose"),
         rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "editor",
+        name: "reload",
+        summary: "Reload a document's buffer from disk (revert to saved). The id stays the same.",
+        description: "Wraps the rsession revert_document RPC. The buffer is replaced with the \
+                      current on-disk contents, dirty flag is cleared, and the document id is \
+                      preserved (so cached references stay valid). Never opens a file that isn't \
+                      already in the Source pane — passing --path for an unopened file is a \
+                      silent no-op (action='skipped-not-open'). With --if-clean, dirty buffers \
+                      are also no-op'd (action='skipped-dirty'); without it, dirty buffers are \
+                      reverted and unsaved edits are lost.",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Document id (8 hex chars). Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "File path; the id is resolved by listing open documents and \
+                              matching against this path. Mutually exclusive with positional id.",
+            },
+            ParamSpec {
+                name: "--if-clean",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "No-op if the buffer has unsaved changes (dirty=true).",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor reload D4F4972F",
+                explanation: "Reload buffer D4F4972F from disk, overwriting any unsaved edits.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor reload --path /path/to/foo.R --if-clean",
+                explanation: "Resolve id from path; reload only if buffer has no unsaved edits. \
+                              Safe to call after every external file write.",
+            },
+        ],
+        returns: "{id: string|null, path: string|null, action: 'reverted'|'skipped-dirty'|'skipped-not-open'}",
+        errors: &[
+            ErrorSpec {
+                kind: "user_error",
+                when: "Neither <id> nor --path was given, or --path matches multiple open docs.",
+            },
+            ErrorSpec {
+                kind: "rpc_error",
+                when: "revert_document RPC failed (e.g. on-disk file unreadable).",
+            },
+        ],
+        rstudioapi_fn: None,
+        rpc_method: Some("revert_document"),
     },
     ActionSpec {
         category: "editor",
@@ -563,25 +679,36 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "select",
-        summary: "Set the selection (or move the cursor) in the active document.",
+        summary: "Set the selection (or move the cursor) in a document.",
         description: "Wraps rstudioapi::setSelectionRanges(). Range format: 'L:C' (cursor only, \
-                      no selection) or 'L1:C1-L2:C2' (selection range).",
-        params: &[ParamSpec {
-            name: "range",
-            kind: ParamKind::String,
-            required: true,
-            default: None,
-            allowed: &[],
-            description: "Range to select. 'L:C' or 'L1:C1-L2:C2'. 1-based.",
-        }],
+                      no selection) or 'L1:C1-L2:C2' (selection range). Without --id, targets \
+                      the active document.",
+        params: &[
+            ParamSpec {
+                name: "range",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Range to select. 'L:C' or 'L1:C1-L2:C2'. 1-based.",
+            },
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Document id; defaults to the active document.",
+            },
+        ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor select 10:1",
-                explanation: "Moves the cursor to line 10, column 1.",
+                explanation: "Moves the cursor to line 10, column 1 in the active document.",
             },
             ExampleSpec {
-                cmd: "rstudio editor select 5:1-7:80",
-                explanation: "Selects from (5,1) to (7,80).",
+                cmd: "rstudio editor select 5:1-7:80 --id D4F4972F",
+                explanation: "Selects (5,1)-(7,80) in document D4F4972F (even if not active).",
             },
         ],
         returns: "void",
@@ -596,7 +723,7 @@ pub const ACTIONS: &[ActionSpec] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum EditorCmd {
-    /// Ouvre un fichier dans le pane Source (non-modal). Retourne l'id du document.
+    /// Open a file in the Source pane (non-modal). Returns the document id.
     Open {
         path: PathBuf,
         #[arg(long)]
@@ -623,6 +750,14 @@ pub enum EditorCmd {
         #[arg(long, default_value = "UTF-8")]
         encoding: String,
     },
+    /// Read the live editor buffer of an open document by id or path (includes unsaved edits).
+    ReadBuffer {
+        /// Document id (8 hex chars). Mutually exclusive with --path.
+        id: Option<String>,
+        /// Resolve the id from this file path. Mutually exclusive with positional id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
+    },
     /// Context of the active document in the Source pane.
     Context {
         /// Include the live buffer contents (may be large).
@@ -636,10 +771,13 @@ pub enum EditorCmd {
         #[arg(long, default_value = "cursor")]
         at: String,
     },
-    /// Set the selection (or cursor) in the active document.
+    /// Set the selection (or cursor) in a document (active by default).
     Select {
         /// Range: 'L:C' or 'L1:C1-L2:C2'.
         range: String,
+        /// Document id; defaults to the active document.
+        #[arg(long)]
+        id: Option<String>,
     },
     /// Close a document by id (true close, via .rs.api.documentClose).
     Close {
@@ -647,6 +785,17 @@ pub enum EditorCmd {
         /// How to handle unsaved changes: true = save silently, false = discard, ask = prompt.
         #[arg(long, default_value = "true")]
         save: String,
+    },
+    /// Reload a document's buffer from disk (revert to saved). Id stays the same.
+    Reload {
+        /// Document id (8 hex chars). Mutually exclusive with --path.
+        id: Option<String>,
+        /// Resolve the id from this file path. Mutually exclusive with the positional id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
+        /// No-op if the buffer has unsaved changes (dirty=true).
+        #[arg(long = "if-clean")]
+        if_clean: bool,
     },
     /// Save a document by id (or the active document if --id is omitted).
     Save {
@@ -718,12 +867,18 @@ pub fn run(
             context_via(rpc, "getActiveDocumentContext", *include_contents)
         }
         EditorCmd::Read { path, encoding } => read(rpc, path, encoding),
+        EditorCmd::ReadBuffer { id, path } => {
+            read_buffer(rpc, session, id.as_deref(), path.as_deref())
+        }
         EditorCmd::Context { include_contents } => {
             context_via(rpc, "getSourceEditorContext", *include_contents)
         }
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
-        EditorCmd::Select { range } => select(rpc, range),
+        EditorCmd::Select { range, id } => select(rpc, range, id.as_deref()),
         EditorCmd::Close { id, save } => close(rpc, id, save),
+        EditorCmd::Reload { id, path, if_clean } => {
+            reload(rpc, session, id.as_deref(), path.as_deref(), *if_clean)
+        }
         EditorCmd::Save { id } => save(rpc, id.as_deref()),
         EditorCmd::SaveAll => save_all(rpc),
         EditorCmd::List => list_open(rpc, session),
@@ -803,6 +958,67 @@ fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value
     })))
 }
 
+fn read_buffer(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    id: Option<&str>,
+    path: Option<&Path>,
+) -> Result<Option<Value>, CliError> {
+    // Resolve to a concrete id, or fail with a clean message.
+    let resolved_id = match (id, path) {
+        (Some(id), _) => id.to_string(),
+        (None, Some(p)) => match find_open_doc_by_path(rpc, session, p)? {
+            Some(meta) => meta.id,
+            None => {
+                return Err(CliError::user(format!(
+                    "no open document matches path {} (run `editor list` to see open docs)",
+                    p.display()
+                )));
+            }
+        },
+        (None, None) => {
+            return Err(CliError::user(
+                "editor read-buffer requires either <id> or --path <path>.",
+            ));
+        }
+    };
+
+    let raw = match rpc.rpc(
+        "get_source_document",
+        vec![Value::String(resolved_id.clone())],
+    ) {
+        Ok(v) => v,
+        // The rsession surfaces "No such file or directory" when the doc id
+        // doesn't match anything in the source database. Translate to a
+        // user-friendly error.
+        Err(e)
+            if e.message.contains("No such file or directory")
+                || e.message.contains("not found")
+                || e.message.contains("Unknown") =>
+        {
+            return Err(CliError::user(format!(
+                "no open document with id {resolved_id} \
+                 (run `editor list` to see open docs)"
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let map = match raw {
+        Value::Object(m) => m,
+        _ => {
+            return Err(CliError::internal(format!(
+                "get_source_document returned unexpected shape for id {resolved_id}"
+            )));
+        }
+    };
+    Ok(Some(json!({
+        "id": resolved_id,
+        "path": map.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+        "contents": map.get("contents").and_then(|v| v.as_str()).unwrap_or(""),
+        "dirty": map.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false),
+    })))
+}
+
 /// Shared implementation for `editor context` (getSourceEditorContext) and
 /// `editor active-context` (getActiveDocumentContext). Both return the same
 /// shape; only the rstudioapi getter differs.
@@ -879,7 +1095,7 @@ fn insert(rpc: &RpcClient<'_>, text: &str, at: &str) -> Result<Option<Value>, Cl
     Ok(None)
 }
 
-fn select(rpc: &RpcClient<'_>, range: &str) -> Result<Option<Value>, CliError> {
+fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<Value>, CliError> {
     let r_range = match parse_range(range) {
         Some(((l1, c1), (l2, c2))) => format!(
             "rstudioapi::document_range(rstudioapi::document_position({l1}L, {c1}L), \
@@ -891,9 +1107,153 @@ fn select(rpc: &RpcClient<'_>, range: &str) -> Result<Option<Value>, CliError> {
             )));
         }
     };
-    let r_code = format!("rstudioapi::setSelectionRanges(list({r_range}))");
+    let id_arg = match id {
+        Some(id) => format!(", id = {}", r_quote(id)),
+        None => String::new(),
+    };
+    let r_code = format!("rstudioapi::setSelectionRanges(list({r_range}){id_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
+}
+
+fn reload(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    id: Option<&str>,
+    path: Option<&Path>,
+    if_clean: bool,
+) -> Result<Option<Value>, CliError> {
+    // Resolve target doc to (id, on-disk path, dirty flag), or None if no
+    // matching open doc exists in the Source pane.
+    let resolved = match (id, path) {
+        (Some(id), _) => fetch_doc_meta(rpc, id)?,
+        (None, Some(p)) => find_open_doc_by_path(rpc, session, p)?,
+        (None, None) => {
+            return Err(CliError::user(
+                "editor reload requires either <id> or --path <path>.",
+            ));
+        }
+    };
+
+    let Some(meta) = resolved else {
+        // Path/id didn't match any open document. Safe no-op.
+        return Ok(Some(json!({
+            "id": Value::Null,
+            "path": path.map(|p| p.to_string_lossy().into_owned()),
+            "action": "skipped-not-open",
+        })));
+    };
+
+    if if_clean && meta.dirty {
+        return Ok(Some(json!({
+            "id": meta.id,
+            "path": meta.path,
+            "action": "skipped-dirty",
+        })));
+    }
+
+    // Empty fileType keeps the existing one — see SessionSource.cpp:reopen().
+    rpc.rpc(
+        "revert_document",
+        vec![Value::String(meta.id.clone()), Value::String(String::new())],
+    )?;
+
+    Ok(Some(json!({
+        "id": meta.id,
+        "path": meta.path,
+        "action": "reverted",
+    })))
+}
+
+#[derive(Debug)]
+struct DocMeta {
+    id: String,
+    path: String,
+    dirty: bool,
+}
+
+/// Look up an open document's metadata by id. Returns None if the id is unknown.
+fn fetch_doc_meta(rpc: &RpcClient<'_>, id: &str) -> Result<Option<DocMeta>, CliError> {
+    match rpc.rpc("get_source_document", vec![Value::String(id.to_string())]) {
+        Ok(Value::Object(map)) => Ok(Some(DocMeta {
+            id: id.to_string(),
+            path: map
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            dirty: map.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false),
+        })),
+        Ok(_) => Ok(None),
+        // Treat "doc not found" as not-open. Other RPC errors propagate.
+        Err(e) if e.message.contains("not found") || e.message.contains("Unknown") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Find the single open document whose `path` matches `target` (canonicalized
+/// where possible). Returns Ok(None) if no match, Err if more than one.
+fn find_open_doc_by_path(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    target: &Path,
+) -> Result<Option<DocMeta>, CliError> {
+    let target_canon = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+
+    let dir = session.require_sources_dir()?;
+    let entries = fs::read_dir(dir).map_err(|e| {
+        CliError::session(format!(
+            "cannot read RStudio sources directory {}: {e}",
+            dir.display()
+        ))
+    })?;
+
+    let ids: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_document_id(&name) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut matches: Vec<DocMeta> = Vec::new();
+    for id in &ids {
+        let Some(meta) = fetch_doc_meta(rpc, id)? else {
+            continue;
+        };
+        if meta.path.is_empty() {
+            continue;
+        }
+        let candidate = PathBuf::from(&meta.path);
+        let candidate_canon = candidate.canonicalize().unwrap_or(candidate);
+        if candidate_canon == target_canon {
+            matches.push(meta);
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.into_iter().next().unwrap())),
+        _ => {
+            let listing: Vec<String> = matches
+                .iter()
+                .map(|m| format!("  --id {} (path: {})", m.id, m.path))
+                .collect();
+            Err(CliError::user(format!(
+                "{} open documents share the path {}:\n{}\n\
+                 Pass --id explicitly to disambiguate.",
+                matches.len(),
+                target_canon.display(),
+                listing.join("\n")
+            )))
+        }
+    }
 }
 
 fn close(rpc: &RpcClient<'_>, id: &str, save: &str) -> Result<Option<Value>, CliError> {
@@ -1101,7 +1461,9 @@ fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, Cl
             Ok(_) | Err(_) => continue, // race or unexpected shape — skip
         };
         // Strip the body from the listing — `editor list` is metadata-only.
-        // Use `editor context --include-contents` or `editor read` to retrieve it.
+        // Use `editor read-buffer <id>` to retrieve a specific buffer's contents,
+        // `editor context --include-contents` for the active doc, or
+        // `editor read <path>` for the on-disk file.
         entry.remove("contents");
         docs.push(Value::Object(entry));
     }
