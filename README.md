@@ -1,5 +1,7 @@
 # rstudio-cli
 
+<p align="center"><img src="assets/logo.svg" alt="rstudio-cli" width="200"></p>
+
 [![CI](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
