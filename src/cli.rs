@@ -17,7 +17,7 @@ use crate::session::{Mode, Session, SessionOverrides};
 #[command(
     name = "rstudio",
     version = VERSION,
-    about = "AI-native CLI bridge to interact with the embedded RStudio Server IDE",
+    about = "AI-native CLI bridge to drive an RStudio Server (Linux) or Desktop (macOS) IDE from a terminal",
     long_about = None,
 )]
 struct Cli {

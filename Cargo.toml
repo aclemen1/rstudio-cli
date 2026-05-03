@@ -2,7 +2,7 @@
 name = "rstudio-cli"
 version = "0.5.3"
 edition = "2024"
-description = "AI-native CLI bridge to interact with the embedded RStudio Server IDE"
+description = "AI-native CLI bridge to drive an RStudio Server (Linux) or RStudio Desktop (macOS) IDE from a terminal"
 license = "MIT"
 repository = "https://github.com/aclemen1/rstudio-cli"
 readme = "README.md"
