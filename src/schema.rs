@@ -123,6 +123,10 @@ pub const CATEGORIES: &[CategorySpec] = &[
         description: "Modal UI prompts (dialog, prompt, question, file/dir picker, secret). All BLOCKING.",
     },
     CategorySpec {
+        name: "observe",
+        description: "Stream session-state changes as JSON Lines on stdout (polling-based, R-free).",
+    },
+    CategorySpec {
         name: "policy",
         description: "Security policy: block / unblock commands by category or action. No session required.",
     },
@@ -144,6 +148,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::pref::ACTIONS,
         crate::commands::job::ACTIONS,
         crate::commands::ui::ACTIONS,
+        crate::commands::observe::ACTIONS,
         crate::commands::policy_cmd::ACTIONS,
     ] {
         out.extend(slice.iter());

@@ -41,7 +41,7 @@ disrupting your browser tab.
 ## Status
 
 **v0.5.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 14 categories and 79 actions. Live-tested end-to-end on both
+across 15 categories and 80 actions. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
@@ -56,6 +56,7 @@ across 14 categories and 79 actions. Live-tested end-to-end on both
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
 | `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
+| `observe`| (single command) | Stream session-state changes as JSON Lines on stdout |
 | `policy` | `show` `block` `unblock` | Per-user block list (category or action) |
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |
@@ -131,6 +132,13 @@ will correct it promptly.
 | **Package & project (beyond rstudioapi)** | | | | | |
 | Install / update R packages | ✗ | ✗ | ✗ | ✗ | ✓ |
 | Git integration | ✗ | ✗ | ✗ | ✗ | ✓ |
+| **Observability (live JSONL stream)** | | | | | |
+| Document open / close / save / dirty / typing (no R) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Console.input stream with RStudio-authoritative timestamp | ✓ | ✗ | ✗ | ✗ | ✗ |
+| rsession.error + project / markers / files / find / pane events | ✓ | ✗ | ✗ | ✗ | ✗ |
+| R busy / idle, env, wd, attached pkgs, namespaces (Tier 2) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Typed env, last_value, plot count (Tier 3) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Causal ordering: effects buffered until cause `console.input` lands | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **Safety & output** | | | | | |
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
 | Async R execution (non-blocking, via callr) | ✓ | ✗ | ✗ | ✗ | ✗ |

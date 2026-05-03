@@ -6,8 +6,8 @@ use serde_json::json;
 
 use crate::VERSION;
 use crate::commands::{
-    console, editor, env, job, pane, policy_cmd, pref, r, raw, schema_cmd, session, skill, status,
-    term, ui,
+    console, editor, env, job, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session,
+    skill, status, term, ui,
 };
 use crate::policy::Policy;
 use crate::error::CliError;
@@ -121,6 +121,9 @@ enum Command {
     #[command(subcommand)]
     Ui(ui::UiCmd),
 
+    /// Stream session-state changes as JSON Lines on stdout (live tail).
+    Observe(observe::ObserveCmd),
+
     /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
 
@@ -199,6 +202,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         Command::Pref(_)     => Some("pref"),
         Command::Job(_)      => Some("job"),
         Command::Ui(_)       => Some("ui"),
+        Command::Observe(_)  => Some("observe"),
         Command::Rpc(_)      => Some("rpc"),
         Command::Postback(_) => Some("postback"),
     };
@@ -274,6 +278,11 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
             ui::run(&cmd, &rpc).map(Reply::Wrapped)
+        }
+        Command::Observe(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            observe::run(&cmd, &rpc, &session)
         }
         Command::Schema(cmd) => schema_cmd::run(&cmd).map(Reply::Wrapped),
         Command::Rpc(cmd) => {
