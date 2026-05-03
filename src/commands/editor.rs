@@ -303,20 +303,31 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "close",
-        summary: "Close a document by id (Source pane).",
+        summary: "Close a document by id or path (Source pane).",
         description: "Wraps .rs.api.documentClose(id, save). Goes through the C call \
                       `rs_requestDocumentClose`, which actually unmounts the tab. Distinct \
                       from the close_document RPC, which only enqueues a UI event that may \
                       not be applied. --save controls what to do with unsaved changes: \
-                      true = save silently, false = discard, ask = prompt the user (modal).",
+                      true = save silently, false = discard, ask = prompt the user (modal). \
+                      Either <id> or --path is required (closing the active doc by accident \
+                      could lose work).",
         params: &[
             ParamSpec {
                 name: "id",
                 kind: ParamKind::String,
-                required: true,
+                required: false,
                 default: None,
                 allowed: &[],
-                description: "Document id (from `editor open` / `editor context`).",
+                description: "Document id. Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "File path; the id is resolved by listing open documents and \
+                              matching against this path. Mutually exclusive with positional id.",
             },
             ParamSpec {
                 name: "--save",
@@ -333,15 +344,21 @@ pub const ACTIONS: &[ActionSpec] = &[
                 explanation: "Save unsaved changes silently and close.",
             },
             ExampleSpec {
-                cmd: "rstudio editor close 947E7AED --save false",
-                explanation: "Discard unsaved changes and close.",
+                cmd: "rstudio editor close --path /tmp/foo.R --save false",
+                explanation: "Resolve id from path, discard unsaved changes, close.",
             },
         ],
         returns: "{id: string, saved: 'true'|'false'|'ask'}",
-        errors: &[ErrorSpec {
-            kind: "r_error",
-            when: "Unknown id or .rs.api.documentClose error.",
-        }],
+        errors: &[
+            ErrorSpec {
+                kind: "user_error",
+                when: "Neither <id> nor --path was given, or --path matches 0 / multiple docs.",
+            },
+            ErrorSpec {
+                kind: "r_error",
+                when: "Unknown id or .rs.api.documentClose error.",
+            },
+        ],
         rstudioapi_fn: Some("documentClose"),
         rpc_method: Some("execute_r_code"),
     },
@@ -411,24 +428,36 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "editor",
         name: "save",
-        summary: "Save a document by id (or the active one if --id is omitted).",
-        description: "Wraps .rs.api.documentSave(id). Returns the saved document's id.",
-        params: &[ParamSpec {
-            name: "--id",
-            kind: ParamKind::String,
-            required: false,
-            default: None,
-            allowed: &[],
-            description: "Document id; defaults to the active document (excluding the console).",
-        }],
+        summary: "Save a document by id, path, or active by default.",
+        description: "Wraps .rs.api.documentSave(id). Without --id or --path, targets the \
+                      active source document (excluding the console).",
+        params: &[
+            ParamSpec {
+                name: "--id",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Document id. Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "File path; resolved to id via the open-doc listing. Mutually \
+                              exclusive with --id.",
+            },
+        ],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor save",
                 explanation: "Save the active document.",
             },
             ExampleSpec {
-                cmd: "rstudio editor save --id 947E7AED",
-                explanation: "Save document 947E7AED.",
+                cmd: "rstudio editor save --path /tmp/foo.R",
+                explanation: "Save the open doc whose path matches.",
             },
         ],
         returns: "{id: string}",
@@ -530,8 +559,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         name: "set-contents",
         summary: "Replace the entire contents of a document (DESTRUCTIVE).",
         description: "Wraps rstudioapi::setDocumentContents(text, id). The full buffer \
-                      is replaced; previous unsaved content is lost. If --id is omitted \
-                      the active document is targeted.",
+                      is replaced; previous unsaved content is lost. Without --id or \
+                      --path, targets the active document.",
         params: &[
             ParamSpec {
                 name: "text",
@@ -547,12 +576,20 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Target document id (defaults to active).",
+                description: "Target document id. Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Resolve target id from this path. Mutually exclusive with --id.",
             },
         ],
         examples: &[ExampleSpec {
-            cmd: "rstudio editor set-contents 'x <- 1\\n' --id 947E7AED",
-            explanation: "Replace the full content of doc 947E7AED.",
+            cmd: "rstudio editor set-contents 'x <- 1\\n' --path /tmp/foo.R",
+            explanation: "Replace the full content of /tmp/foo.R's buffer.",
         }],
         returns: "void",
         errors: &[ErrorSpec {
@@ -594,7 +631,15 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Target document id (defaults to active).",
+                description: "Target document id. Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Resolve target id from this path. Mutually exclusive with --id.",
             },
         ],
         examples: &[ExampleSpec {
@@ -614,7 +659,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         name: "set-cursor",
         summary: "Move the cursor to a position in a document.",
         description: "Wraps rstudioapi::setCursorPosition(position, id). The cursor moves \
-                      with no selection. Same as `editor select L:C` but more explicit.",
+                      with no selection. Same as `editor select L:C` but more explicit. \
+                      Without --id or --path, targets the active document.",
         params: &[
             ParamSpec {
                 name: "position",
@@ -630,7 +676,15 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Target document id (defaults to active).",
+                description: "Target document id. Mutually exclusive with --path.",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Resolve target id from this path. Mutually exclusive with --id.",
             },
         ],
         examples: &[ExampleSpec {
@@ -793,9 +847,13 @@ pub enum EditorCmd {
         #[arg(long)]
         id: Option<String>,
     },
-    /// Close a document by id (true close, via .rs.api.documentClose).
+    /// Close a document by id or path (true close, via .rs.api.documentClose).
     Close {
-        id: String,
+        /// Document id (8 hex chars). Mutually exclusive with --path.
+        id: Option<String>,
+        /// Resolve the id from this file path. Mutually exclusive with the positional id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
         /// How to handle unsaved changes: true = save silently, false = discard, ask = prompt.
         #[arg(long, default_value = "true")]
         save: String,
@@ -811,10 +869,13 @@ pub enum EditorCmd {
         #[arg(long = "if-clean")]
         if_clean: bool,
     },
-    /// Save a document by id (or the active document if --id is omitted).
+    /// Save a document by id, path, or active by default.
     Save {
         #[arg(long)]
         id: Option<String>,
+        /// Resolve target id from this path. Mutually exclusive with --id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
     },
     /// Save every dirty document in the Source pane.
     SaveAll,
@@ -841,26 +902,35 @@ pub enum EditorCmd {
         #[arg(long)]
         id: Option<String>,
     },
-    /// Replace the entire contents of a document.
+    /// Replace the entire contents of a document (active by default).
     SetContents {
         text: String,
         #[arg(long)]
         id: Option<String>,
+        /// Resolve target id from this path. Mutually exclusive with --id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
     },
-    /// Replace text within a range.
+    /// Replace text within a range (active doc by default).
     ModifyRange {
         /// Range 'L1:C1-L2:C2'.
         range: String,
         text: String,
         #[arg(long)]
         id: Option<String>,
+        /// Resolve target id from this path. Mutually exclusive with --id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
     },
-    /// Move the cursor to a position.
+    /// Move the cursor to a position (active doc by default).
     SetCursor {
         /// Position 'L:C'.
         position: String,
         #[arg(long)]
         id: Option<String>,
+        /// Resolve target id from this path. Mutually exclusive with --id.
+        #[arg(long, conflicts_with = "id")]
+        path: Option<PathBuf>,
     },
 }
 
@@ -888,11 +958,13 @@ pub fn run(
         } => context(rpc, id.as_deref(), *include_console, *include_contents),
         EditorCmd::Insert { text, at } => insert(rpc, text, at),
         EditorCmd::Select { range, id } => select(rpc, range, id.as_deref()),
-        EditorCmd::Close { id, save } => close(rpc, id, save),
+        EditorCmd::Close { id, path, save } => {
+            close(rpc, session, id.as_deref(), path.as_deref(), save)
+        }
         EditorCmd::Reload { id, path, if_clean } => {
             reload(rpc, session, id.as_deref(), path.as_deref(), *if_clean)
         }
-        EditorCmd::Save { id } => save(rpc, id.as_deref()),
+        EditorCmd::Save { id, path } => save(rpc, session, id.as_deref(), path.as_deref()),
         EditorCmd::SaveAll => save_all(rpc),
         EditorCmd::List => list_open(rpc, session),
         EditorCmd::New {
@@ -902,9 +974,18 @@ pub fn run(
         } => new_doc(rpc, text, r#type, *execute),
         EditorCmd::ActiveId { no_console } => active_id(rpc, *no_console),
         EditorCmd::Path { id } => path_of(rpc, id.as_deref()),
-        EditorCmd::SetContents { text, id } => set_contents(rpc, text, id.as_deref()),
-        EditorCmd::ModifyRange { range, text, id } => modify_range(rpc, range, text, id.as_deref()),
-        EditorCmd::SetCursor { position, id } => set_cursor(rpc, position, id.as_deref()),
+        EditorCmd::SetContents { text, id, path } => {
+            set_contents(rpc, session, text, id.as_deref(), path.as_deref())
+        }
+        EditorCmd::ModifyRange {
+            range,
+            text,
+            id,
+            path,
+        } => modify_range(rpc, session, range, text, id.as_deref(), path.as_deref()),
+        EditorCmd::SetCursor { position, id, path } => {
+            set_cursor(rpc, session, position, id.as_deref(), path.as_deref())
+        }
     }
 }
 
@@ -1222,6 +1303,29 @@ fn fetch_doc_meta(rpc: &RpcClient<'_>, id: &str) -> Result<Option<DocMeta>, CliE
 
 /// Find the single open document whose `path` matches `target` (canonicalized
 /// where possible). Returns Ok(None) if no match, Err if more than one.
+/// Common resolver for actions that accept either `<id>` (positional) or
+/// `--path <PATH>` (flag). Returns Some(id) on a positive resolution,
+/// None when both inputs are absent (caller decides whether that means
+/// "default to active" or "error").
+fn resolve_target_id(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    id: Option<&str>,
+    path: Option<&Path>,
+) -> Result<Option<String>, CliError> {
+    match (id, path) {
+        (Some(id), _) => Ok(Some(id.to_string())),
+        (None, Some(p)) => match find_open_doc_by_path(rpc, session, p)? {
+            Some(meta) => Ok(Some(meta.id)),
+            None => Err(CliError::user(format!(
+                "no open document matches path {} (run `editor list` to see open docs)",
+                p.display()
+            ))),
+        },
+        (None, None) => Ok(None),
+    }
+}
+
 fn find_open_doc_by_path(
     rpc: &RpcClient<'_>,
     session: &Session,
@@ -1285,7 +1389,15 @@ fn find_open_doc_by_path(
     }
 }
 
-fn close(rpc: &RpcClient<'_>, id: &str, save: &str) -> Result<Option<Value>, CliError> {
+fn close(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    id: Option<&str>,
+    path: Option<&Path>,
+    save: &str,
+) -> Result<Option<Value>, CliError> {
+    let resolved = resolve_target_id(rpc, session, id, path)?
+        .ok_or_else(|| CliError::user("editor close requires either <id> or --path <path>."))?;
     let save_arg = match save {
         "true" => "TRUE",
         "false" => "FALSE",
@@ -1298,18 +1410,25 @@ fn close(rpc: &RpcClient<'_>, id: &str, save: &str) -> Result<Option<Value>, Cli
     };
     let r_code = format!(
         ".rs.api.documentClose(id = {}, save = {save_arg})",
-        r_quote(id)
+        r_quote(&resolved)
     );
     r_eval::run_silent(rpc, &r_code)?;
     Ok(Some(json!({
-        "id": id,
+        "id": resolved,
         "saved": save,
     })))
 }
 
-fn save(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliError> {
-    let id_arg = match id {
-        Some(s) => r_quote(s),
+fn save(
+    rpc: &RpcClient<'_>,
+    session: &Session,
+    id: Option<&str>,
+    path: Option<&Path>,
+) -> Result<Option<Value>, CliError> {
+    // None target → R-side default (active document).
+    let resolved = resolve_target_id(rpc, session, id, path)?;
+    let id_arg = match resolved {
+        Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
     let r_code = format!(
@@ -1394,11 +1513,14 @@ fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliEr
 
 fn set_contents(
     rpc: &RpcClient<'_>,
+    session: &Session,
     text: &str,
     id: Option<&str>,
+    path: Option<&Path>,
 ) -> Result<Option<Value>, CliError> {
-    let id_arg = match id {
-        Some(s) => r_quote(s),
+    let resolved = resolve_target_id(rpc, session, id, path)?;
+    let id_arg = match resolved {
+        Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
     let r_code = format!(
@@ -1411,15 +1533,18 @@ fn set_contents(
 
 fn modify_range(
     rpc: &RpcClient<'_>,
+    session: &Session,
     range: &str,
     text: &str,
     id: Option<&str>,
+    path: Option<&Path>,
 ) -> Result<Option<Value>, CliError> {
     let ((l1, c1), (l2, c2)) = parse_range(range).ok_or_else(|| {
         CliError::user(format!("invalid range '{range}'. Expected 'L1:C1-L2:C2'."))
     })?;
-    let id_arg = match id {
-        Some(s) => r_quote(s),
+    let resolved = resolve_target_id(rpc, session, id, path)?;
+    let id_arg = match resolved {
+        Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
     let r_code = format!(
@@ -1436,13 +1561,16 @@ fn modify_range(
 
 fn set_cursor(
     rpc: &RpcClient<'_>,
+    session: &Session,
     position: &str,
     id: Option<&str>,
+    path: Option<&Path>,
 ) -> Result<Option<Value>, CliError> {
     let (line, col) = parse_line_col(position)
         .ok_or_else(|| CliError::user(format!("invalid position '{position}'. Expected 'L:C'.")))?;
-    let id_arg = match id {
-        Some(s) => r_quote(s),
+    let resolved = resolve_target_id(rpc, session, id, path)?;
+    let id_arg = match resolved {
+        Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
     let r_code = format!(
