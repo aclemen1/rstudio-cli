@@ -1,57 +1,57 @@
-"""Vectorise the cropped Gemini PNG directly using potrace.
+"""Build the rstudio-cli hexsticker logo as a self-contained SVG.
 
 Strategy:
-1. Take the cropped logo PNG.
-2. Build two masks: light-blue pixels (hex border) and dark-navy pixels
-   (R, >_, wordmark).
-3. Run potrace on each mask separately.
-4. Compose into a multi-colored SVG: light blue for the hex outline,
-   dark navy for the type. Background stays white.
+1. Hex border + interior fill: programmatic <polygon> with fill + stroke.
+   Uniform thickness, easy to adjust (HEX_STROKE_WIDTH, COLOR_FILL).
+2. R + ">_" : traced from `assets/logo.png` (the cropped Gemini raster) via
+   potrace, preserving the original geometry. The R mask is restricted to
+   a central rectangle so the hex border (same color as R) is excluded.
+3. "rstudio-cli" wordmark: rendered fresh from Inter-Bold via Pillow, then
+   traced — crisp typography, no font dependency at render time.
 
-Result: a vector that's geometrically identical to the source raster,
-without depending on any specific font installation.
+The output SVG embeds every glyph as a <path>, so it renders identically
+across browsers, GitHub server-side, and CLI tools.
 """
 import os
 import re
 import subprocess
 import tempfile
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
-# Hybrid approach:
-# - Trace the hex border + "R" + ">_" directly from the Gemini source raster
-#   (full resolution, exact geometry).
-# - Render the "rstudio-cli" wordmark from Inter-Bold via Pillow + potrace
-#   for crisp, typographically clean letters (tracing the AI-rendered raster
-#   produced visible irregularities).
-ORIG_SRC = "/home/endreas/code/aclemen1/rstudio-cli/scratch/Gemini_Generated_Image_286trn286trn286t.png"
-CROP_X = 736
-CROP_Y = 30
-CROP_W = 1280
-CROP_H = 1480
-# Rectangular region (in cropped image px) covering the original wordmark.
-# Pixels inside this rect are excluded from BOTH masks (the wordmark itself
-# AND its antialiased blue halo, which would otherwise be picked up by the
-# border mask and produce a ghost). The hex border doesn't intersect this
-# rect, so the lower half of the hex outline is preserved.
-# Covers the wordmark band exactly. Inset on all sides to keep clear of the
-# hex border's antialiased halo (the hex right vertical edge sits around
-# x=1170; antialiased halo extends inward to ~x=1130, so we cap x_max at
-# 1080 for safety). The wordmark glyphs themselves span x=265..1015, so a
-# 220..1080 horizontal band is plenty.
-WORDMARK_RECT = (220, 870, 1080, 1050)
-
+# Source raster (already cropped + resized to 800x925 — the original 2752x1536
+# Gemini PNG is no longer in the tree).
+SRC = "/home/endreas/code/aclemen1/rstudio-cli/assets/logo.png"
 OUT = "/home/endreas/code/aclemen1/rstudio-cli/assets/logo.svg"
+
+# Region (in source px) covering the R + ">_" group only — excludes the
+# hex border perimeter (same blue color as the R) so we trace the R
+# without dragging the hex into the path.
+# R glyph footprint in source-px (avoids the hex border on the perimeter
+# AND the ">_" halo to the right of R).
+R_RECT = (220, 230, 450, 510)
+# ">_" sits in the dark-navy mask but in the upper portion of the hex.
+TYPE_RECT = (115, 75, 700, 525)
+# Region covering the original wordmark (dark navy + blue antialiased halo).
+# Pixels here are excluded from both masks — we render a fresh Inter-Bold
+# wordmark on top.
+WORDMARK_RECT = (140, 540, 680, 660)
 
 COLOR_BORDER = "#4878B0"
 COLOR_TYPE = "#1A3654"
-COLOR_FILL = "#F1F2F5"  # very light grey interior
-HEX_STROKE_WIDTH = 50    # thicker than the original Gemini stroke (~30 px)
+COLOR_FILL = "#F1F2F5"     # very light grey interior
+HEX_STROKE_WIDTH = 32       # uniform border thickness in source-px
+
+# Hex polygon vertices (points-up, inscribed in the 800x925 source image).
+# Computed so the polygon's centerline matches the original Gemini hex's
+# centerline; with a stroke width of 32 the visible outer edge sits at
+# the source's bbox edges.
+HEX_POINTS = "400,90 728,283 728,672 400,866 72,672 72,283"
 
 FONT_INTER_BOLD = "/nix/store/3cfynhzaw9nlk3afzg6vfbrvpbrx6fjz-inter-68966-tex/fonts/opentype/public/inter/Inter-Bold.otf"
 
 
 def trace_mask(mask_img: Image.Image) -> tuple[str, str, int, int]:
-    """Run potrace on a 1-bit mask and return (path_d, transform, width, height)."""
+    """Run potrace on a 1-bit mask and return (path_d, transform, w, h)."""
     with tempfile.TemporaryDirectory() as tmp:
         pbm = os.path.join(tmp, "in.pbm")
         svg = os.path.join(tmp, "out.svg")
@@ -71,8 +71,7 @@ def trace_mask(mask_img: Image.Image) -> tuple[str, str, int, int]:
 
 
 def render_text_to_pbm(text: str, font_path: str, size_pt: int) -> Image.Image:
-    """Render text as black-on-white bitmap suitable for potrace."""
-    from PIL import ImageDraw, ImageFont
+    """Render text as a tight black-on-white bitmap suitable for potrace."""
     font = ImageFont.truetype(font_path, size_pt)
     bbox = font.getbbox(text)
     pad = 30
@@ -85,71 +84,53 @@ def render_text_to_pbm(text: str, font_path: str, size_pt: int) -> Image.Image:
 
 
 def main():
-    raw = Image.open(ORIG_SRC).convert("RGB")
-    img = raw.crop((CROP_X, CROP_Y, CROP_X + CROP_W, CROP_Y + CROP_H))
+    img = Image.open(SRC).convert("RGB")
     W, H = img.size
-    print(f"source: {W}x{H} (cropped from {raw.size})")
+    print(f"source: {W}x{H}")
 
-    # Build two binary masks: border (light blue) and type (dark navy).
-    # For the type mask we omit pixels below WORDMARK_Y_CUTOFF — that's the
-    # wordmark, which we render from a font for cleaner glyphs.
-    border_mask = Image.new("1", (W, H), 1)
+    r_mask = Image.new("1", (W, H), 1)
     type_mask = Image.new("1", (W, H), 1)
 
-    bm_pix = border_mask.load()
+    rm_pix = r_mask.load()
     tm_pix = type_mask.load()
-    wm_x0, wm_y0, wm_x1, wm_y1 = WORDMARK_RECT
+    rx0, ry0, rx1, ry1 = R_RECT
+    tx0, ty0, tx1, ty1 = TYPE_RECT
     for y in range(H):
-        in_wm_y = wm_y0 <= y <= wm_y1
         for x in range(W):
-            # Skip the entire wordmark rectangle in both masks — we'll render
-            # a fresh wordmark from a font on top.
-            if in_wm_y and wm_x0 <= x <= wm_x1:
-                continue
             r, g, b = img.getpixel((x, y))
-            is_border = (b > r + 25) and (b > 100) and (b < 220) and (r < 150)
-            is_type = (r < 90) and (g < 100) and (b < 150) and (b >= r)
-            if is_border:
-                bm_pix[x, y] = 0
-            elif is_type:
+            is_border_color = (b > r + 25) and (b > 100) and (b < 220) and (r < 150)
+            is_navy = (r < 90) and (g < 100) and (b < 150) and (b >= r)
+            # R mask: blue pixels in the central R rect only.
+            if is_border_color and rx0 <= x <= rx1 and ry0 <= y <= ry1:
+                rm_pix[x, y] = 0
+            # Type mask: dark navy pixels in the upper region (covers ">_",
+            # excludes the wordmark which is below).
+            elif is_navy and tx0 <= x <= tx1 and ty0 <= y <= ty1:
                 tm_pix[x, y] = 0
 
-    # Trace from PNG: hex border + R + >_
-    border_mask.save("/tmp/mask_border.png")
-    type_mask.save("/tmp/mask_type.png")
-    border_d, border_t, _, _ = trace_mask(border_mask)
+    r_d, r_t, _, _ = trace_mask(r_mask)
     type_d, type_t, _, _ = trace_mask(type_mask)
 
-    # Render wordmark from font + trace. Size chosen to roughly match the
-    # original wordmark's footprint inside the hex.
     wordmark_pbm = render_text_to_pbm("rstudio-cli", FONT_INTER_BOLD, 1200)
     wordmark_d, wordmark_t, ww, wh = trace_mask(wordmark_pbm)
 
-    # Position wordmark inside the hex, matching the original's y-band and
-    # width. Original wordmark spans roughly 670 px wide and sits at y≈830.
-    target_w_px = 670
+    # Wordmark target footprint inside the hex (source-px).
+    target_w_px = 420
     scale = target_w_px / ww
-    wm_h_scaled = wh * scale
     wm_x = (W - target_w_px) / 2
-    wm_y = 830
-
-    # Hex polygon vertices (points-up, inscribed in the source-image bbox of
-    # the original Gemini raster). The polygon underlies the trace and
-    # provides the light-grey interior fill plus a slightly wider stroke;
-    # the existing trace overlays the polygon's stroke at the original
-    # border location.
-    hex_pts = "640,140 1172,453 1172,1079 640,1392 108,1079 108,453"
+    wm_y = 555
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">
-  <!-- rstudio-cli logo: hex outline + R + >_ traced from the Gemini source
-       raster (preserves original geometry exactly); the "rstudio-cli"
-       wordmark is rendered from Inter-Bold and traced for crisp typography.
-       Self-contained vector — no font dependency at render time.
-       Programmatic hex polygon underneath provides the light-grey interior
-       fill and a slightly wider blue stroke (the traced ring overlays it). -->
-  <polygon points="{hex_pts}"
+  <!-- rstudio-cli logo. The hex outline is a programmatic polygon (uniform
+       stroke, light-grey interior). The R + ">_" group is traced from the
+       Gemini source raster (geometry preserved), with the hex border
+       excluded via R_RECT / TYPE_RECT so the polygon stroke is free of
+       trace artifacts. The "rstudio-cli" wordmark is rendered fresh from
+       Inter-Bold and traced for crisp typography. Self-contained vector,
+       no font dependency at render time. -->
+  <polygon points="{HEX_POINTS}"
            fill="{COLOR_FILL}" stroke="{COLOR_BORDER}" stroke-width="{HEX_STROKE_WIDTH}" stroke-linejoin="miter"/>
-  <g transform="{border_t}" fill="{COLOR_BORDER}"><path d="{border_d}"/></g>
+  <g transform="{r_t}" fill="{COLOR_BORDER}"><path d="{r_d}"/></g>
   <g transform="{type_t}" fill="{COLOR_TYPE}"><path d="{type_d}"/></g>
   <g transform="translate({wm_x:.2f},{wm_y:.2f}) scale({scale:.6f}) {wordmark_t}" fill="{COLOR_TYPE}"><path d="{wordmark_d}"/></g>
 </svg>
