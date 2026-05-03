@@ -37,3 +37,25 @@ Both repos are Jujutsu colocated with Git (`.jj/` + `.git/`). Only use
 
 Code, comments, README, CHANGELOG, commit messages: English.
 Conversation with the user: French.
+
+## When adding or changing a CLI command
+
+A user-visible command change is not done until three surfaces agree.
+Update them in the same commit (or the same PR for a multi-commit
+feature):
+
+1. **`README.md`** — both the command-summary table and the
+   *comparative table* against other R/LLM tools (rows reflect what
+   the CLI can now do; tick / cross / partial cells change accordingly).
+2. **CLI help** — the `///` doc comments on every clap `Command`
+   variant, `Subcommand` enum, and `#[arg(...)]` field. Clap uses these
+   verbatim for `--help`. Mention defaults and constraints when
+   non-obvious; keep summaries one line.
+3. **`schema` registry** — the new module's `pub const ACTIONS:
+   &[ActionSpec]` must be added to `src/schema.rs` `registry()`, and
+   the new category to `CATEGORIES`, so `rstudio schema <cat>` and
+   `rstudio schema <cat> <action>` work.
+
+If the change is a removal or a renaming, also update the *Design
+philosophy* section of the README when the rationale is non-obvious
+(e.g. why `editor find` was dropped in favour of `editor set-marks`).
