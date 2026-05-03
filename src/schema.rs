@@ -122,6 +122,10 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "ui",
         description: "Modal UI prompts (dialog, prompt, question, file/dir picker, secret). All BLOCKING.",
     },
+    CategorySpec {
+        name: "policy",
+        description: "Security policy: block / unblock commands by category or action. No session required.",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -140,6 +144,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::pref::ACTIONS,
         crate::commands::job::ACTIONS,
         crate::commands::ui::ACTIONS,
+        crate::commands::policy_cmd::ACTIONS,
     ] {
         out.extend(slice.iter());
     }

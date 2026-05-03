@@ -41,7 +41,7 @@ disrupting your browser tab.
 ## Status
 
 **v0.5.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 13 categories and 76 actions. Live-tested end-to-end on both
+across 14 categories and 79 actions. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
@@ -56,6 +56,7 @@ across 13 categories and 76 actions. Live-tested end-to-end on both
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
 | `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
+| `policy` | `show` `block` `unblock` | Per-user block list (category or action) |
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |
 | escape   | `rpc` `postback` | Raw JSON-RPC / postback |
@@ -134,6 +135,7 @@ will correct it promptly.
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
 | Async R execution (non-blocking, via callr) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Block dangerous R calls (`system`, `unlink`, …) | ✗ | ✓ | ✗ | ✗ | ✓ |
+| Persistent CLI-level block list (category or action) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Per-agent execution audit log | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Structured JSON output with typed error envelope | ✓ | ✗ | ✗ | ✗ | ✗ |
 

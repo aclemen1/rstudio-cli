@@ -4,6 +4,7 @@ pub mod commands;
 pub mod desktop_discovery;
 pub mod error;
 pub mod output;
+pub mod policy;
 pub mod r_eval;
 pub mod rpc;
 pub mod schema;

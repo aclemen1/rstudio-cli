@@ -6,8 +6,10 @@ use serde_json::json;
 
 use crate::VERSION;
 use crate::commands::{
-    console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, status, term, ui,
+    console, editor, env, job, pane, policy_cmd, pref, r, raw, schema_cmd, session, skill, status,
+    term, ui,
 };
+use crate::policy::Policy;
 use crate::error::CliError;
 use crate::output::{Format, Reply, print_err, print_reply};
 use crate::rpc::RpcClient;
@@ -127,6 +129,10 @@ enum Command {
 
     /// Raw postback (escape hatch for postback endpoints not yet wrapped).
     Postback(raw::PostbackCmd),
+
+    /// Security policy: block / unblock commands (no session required).
+    #[command(subcommand)]
+    Policy(policy_cmd::PolicyCmd),
 }
 
 pub fn run() -> ExitCode {
@@ -170,6 +176,36 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         port: cli.port,
         secret: cli.secret,
     };
+    // Policy commands and meta-CLI commands are exempt from policy checks.
+    // Everything else is checked before session detection.
+    let policy = Policy::load();
+    let policy_key: Option<&str> = match &cli.command {
+        Command::Version | Command::Status | Command::Schema(_)
+        | Command::Skill(_) | Command::Policy(_) => None,
+        // Session: differentiate the two destructive actions for fine-grained blocking.
+        Command::Session(session::SessionCmd::Restart { .. })     => Some("session.restart"),
+        Command::Session(session::SessionCmd::OpenProject { .. }) => Some("session.open-project"),
+        Command::Session(_) => Some("session"),
+        // R: differentiate code execution from poll.
+        Command::R(r::RCmd::Exec { .. }) => Some("r.exec"),
+        Command::R(r::RCmd::Send { .. }) => Some("r.send"),
+        Command::R(_)        => Some("r"),
+        // Everything else: category-level granularity is sufficient.
+        Command::Editor(_)   => Some("editor"),
+        Command::Console(_)  => Some("console"),
+        Command::Term(_)     => Some("term"),
+        Command::Env(_)      => Some("env"),
+        Command::Pane(_)     => Some("pane"),
+        Command::Pref(_)     => Some("pref"),
+        Command::Job(_)      => Some("job"),
+        Command::Ui(_)       => Some("ui"),
+        Command::Rpc(_)      => Some("rpc"),
+        Command::Postback(_) => Some("postback"),
+    };
+    if let Some(key) = policy_key {
+        policy.check(key)?;
+    }
+
     match cli.command {
         // Meta-CLI carve-out: text mode prints "0.5.0\n" raw, no envelope.
         Command::Version => Ok(Reply::Adaptive {
@@ -250,5 +286,6 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             let rpc = RpcClient::new(&session);
             raw::run_postback(&cmd, &rpc).map(Reply::Wrapped)
         }
+        Command::Policy(cmd) => policy_cmd::run(&cmd).map(Reply::Wrapped),
     }
 }

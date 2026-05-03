@@ -3,6 +3,7 @@ pub mod editor;
 pub mod env;
 pub mod job;
 pub mod pane;
+pub mod policy_cmd;
 pub mod pref;
 pub mod r;
 pub mod raw;
