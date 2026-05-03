@@ -36,6 +36,20 @@ above. If the CLI's value is higher, update:
 Then re-read this file. The skill is shipped inside the CLI binary, so
 its version always equals the CLI's `Cargo.toml` version.
 
+## At the start of a session
+
+Run once, before anything else:
+
+    rstudio status
+
+This returns a single-call snapshot: CLI version + auto-detected mode
+(Server / Desktop), transport (Unix socket or TCP loopback), user
+identity, session id, active client id, sources directory, R version,
+RStudio version, active project, and the open-document count + the
+active doc id and path. It saves a chain of `session info` + `editor
+list` + `editor active-id` calls and gives you the full context the
+user is working in.
+
 ## How to use
 
 Always start with the catalog and drill down only where you need detail:

@@ -4,6 +4,31 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-05-03
+
+### Added — `rstudio status`
+
+Top-level command returning a single-call snapshot of the CLI ↔
+session wiring:
+
+```sh
+rstudio status
+```
+
+Aggregates in one call what previously needed `session info` +
+`editor list` + `editor active-id` + manual mode checks:
+
+- **cli**: version, auto-detected mode (`server` / `desktop`)
+- **transport**: Unix socket path (Server) or TCP loopback address (Desktop)
+- **user**: identity sent in `X-RStudioUserIdentity`
+- **session**: id, active client id, sources directory, state path, active project
+- **rsession**: R version, RStudio version
+- **documents**: open-doc count, active id, active path
+
+The skill markdown is updated to recommend running this first at the
+start of an agent session — it gives the agent immediate context
+without chaining multiple discovery calls.
+
 ## [0.6.1] — 2026-05-03
 
 ### Added — `console activate`

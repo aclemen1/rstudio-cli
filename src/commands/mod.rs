@@ -9,5 +9,6 @@ pub mod raw;
 pub mod schema_cmd;
 pub mod session;
 pub mod skill;
+pub mod status;
 pub mod term;
 pub mod ui;

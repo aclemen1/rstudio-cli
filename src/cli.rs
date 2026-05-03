@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::VERSION;
 use crate::commands::{
-    console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, term, ui,
+    console, editor, env, job, pane, pref, r, raw, schema_cmd, session, skill, status, term, ui,
 };
 use crate::error::CliError;
 use crate::output::{Format, Reply, print_err, print_reply};
@@ -70,6 +70,10 @@ struct Cli {
 enum Command {
     /// Print the CLI version (= embedded skill version — they ship together).
     Version,
+
+    /// Snapshot of the CLI ↔ session wiring (mode, transport, ids, R version, open docs).
+    /// Single round-trip; ideal call at the start of an agent session.
+    Status,
 
     /// Editor manipulation (open, navigate, read, context, insert, select, ...).
     #[command(subcommand)]
@@ -172,6 +176,11 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             value: json!({ "version": VERSION }),
             text: format!("{VERSION}\n"),
         }),
+        Command::Status => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            status::run(&rpc, &session).map(Reply::Wrapped)
+        }
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);

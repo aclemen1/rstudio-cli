@@ -1662,7 +1662,7 @@ fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, Cl
 
 /// Match the source-database filename pattern: 8 uppercase hex characters.
 /// Skips `<id>-contents` files (live buffer) and `lock_file`.
-fn is_document_id(name: &str) -> bool {
+pub(crate) fn is_document_id(name: &str) -> bool {
     name.len() == 8
         && name
             .bytes()
