@@ -5,16 +5,24 @@
 [![CI](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/aclemen1/rstudio-cli/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[AI-native CLI](https://github.com/aclemen1/ai-native-cli) bridge that lets a terminal-bound process — Claude Code,
-a shell user, anything else — drive the embedded RStudio Server IDE
-it runs inside: open files, run R code, list and read terminals,
-inspect the live R environment, surface lint-style markers, manage
-background jobs, install a Claude Code skill, and more.
+[AI-native CLI](https://github.com/aclemen1/ai-native-cli) bridge that
+lets a terminal-bound process — Claude Code, a shell user, anything
+else — drive the live RStudio session running on the same machine:
+open files, run R code, list and read terminals, inspect the live R
+environment, surface lint-style markers, manage background jobs,
+install a Claude Code skill, and more.
 
-The binary is named `rstudio`. It speaks to the rsession Unix socket
-of the **same** RStudio Server session it runs inside, sharing the
-active browser client so visible actions land in the user's open tab
-without disrupting it.
+The binary is named `rstudio`. It auto-detects which RStudio it's
+talking to:
+
+- **RStudio Server** (Linux): the rsession Unix socket. Works from
+  inside the embedded terminal *or* any other shell on the same host
+  (env vars are auto-discovered via the rsession socket directory).
+- **RStudio Desktop** (macOS): the rsession TCP loopback with the
+  shared secret, auto-discovered from the running rsession process.
+
+Either way the CLI reuses the active browser/IDE client, so visible
+actions land in the user's open tab/window without disrupting it.
 
 ## In Claude Code
 
@@ -86,19 +94,23 @@ loaded for actions the agent never uses in a session.
 
 ## Requirements
 
-Either:
+The CLI runs on the **same machine** as RStudio (same Unix user as
+the `rsession` process). Where exactly it runs is flexible:
 
-- **RStudio Server** (Linux). Run the CLI inside a session's embedded
-  terminal — same Unix user as the `rsession` process. A browser tab
-  must be attached to the session (the CLI reads the active client id
-  from the on-disk session state and **never** calls `client_init`,
-  which would invalidate that client).
-- **RStudio Desktop** (macOS). Run the CLI in any terminal as the user
-  who launched RStudio. The CLI auto-discovers the running `rsession`
-  process (TCP port + shared secret from argv/environ); pass
-  `--port`/`--secret` to override.
+- **RStudio Server** (Linux). Inside a session's embedded terminal
+  works (env vars are pre-set), but **any shell on the same host**
+  works too — the CLI scans `$RS_SESSION_TMP_DIR` and picks the
+  rsession socket owned by your uid. A browser tab must be attached
+  to the session (the CLI reads the active client id from on-disk
+  state and **never** calls `client_init`, which would invalidate
+  that client). If you have multiple sessions, the scan returns an
+  actionable error listing each candidate as `--socket <path>`.
+- **RStudio Desktop** (macOS). Any terminal works as the user who
+  launched RStudio. The CLI auto-discovers the rsession process
+  (TCP port + shared secret from argv/environ); pass `--port` /
+  `--secret` to override.
 
-Linux Desktop and Windows are out of scope for v0.5.x.
+Linux Desktop and Windows are out of scope.
 
 ## Install
 
