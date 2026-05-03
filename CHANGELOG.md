@@ -4,6 +4,62 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] — 2026-05-03
+
+### Added — `editor reload`
+
+Re-read a document's buffer from disk, preserving the document id so
+cached references stay valid. Wraps the rsession `revert_document`
+RPC. Variants:
+
+- `rstudio editor reload <id>` — explicit doc id.
+- `rstudio editor reload --path <path>` — resolve the id from the
+  path by listing open documents and matching.
+- `--if-clean` — no-op when the buffer has unsaved changes
+  (`action: skipped-dirty`); otherwise the buffer is overwritten
+  with the on-disk contents.
+- A path/id that doesn't match any open document is a silent no-op
+  (`action: skipped-not-open`). Safe to call after external file
+  writes regardless of which file was touched.
+
+The embedded skill gains a soft directive recommending
+`rstudio editor reload --path <path> --if-clean` after Edit/Write/
+MultiEdit, so the user's RStudio buffer stays in sync without
+relying on the manual "file changed on disk" dialog.
+
+### Added — `editor read-buffer`
+
+Read the live buffer of any open document, by id or by path. Closes
+the gap between `editor read` (on-disk file) and `editor context
+--include-contents` (active document only):
+
+```sh
+rstudio editor read-buffer D4F4972F            # by id
+rstudio editor read-buffer --path /tmp/foo.R   # by path
+```
+
+Returns `{id, path, contents, dirty}`. The `dirty` flag is read
+from the source_database snapshot, which can lag the frontend by a
+fraction of a second after rapid edits.
+
+### Changed — `editor select` accepts `--id`
+
+`rstudio editor select <range> --id <id>` now works on any open
+document, not just the active one. Brings `select` in line with
+`set-cursor`, `set-contents`, `modify-range`. Without `--id`, the
+behavior is unchanged (targets the active document).
+
+### Changed — schema summaries translated
+
+The `editor open` and `editor edit` schema summaries were in
+French; they're now in English, matching the project rule.
+
+### Changed — help/about/skill mention RStudio Desktop
+
+Cargo.toml's `description`, the clap `about` line, and the embedded
+skill text said "RStudio Server" only — Desktop support has shipped
+since 0.5.0. Updated to "RStudio Server (Linux) or Desktop (macOS)".
+
 ## [0.5.3] — 2026-05-03
 
 ### Fixed — `r send` no longer inserts a blank line before the output
