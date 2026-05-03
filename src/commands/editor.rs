@@ -786,6 +786,77 @@ pub const ACTIONS: &[ActionSpec] = &[
         rstudioapi_fn: Some("setSelectionRanges"),
         rpc_method: Some("execute_r_code"),
     },
+    ActionSpec {
+        category: "editor",
+        name: "find",
+        summary: "Search for a regex pattern across project source files.",
+        description: "Uses R's grep() to search all matching files under the active \
+                      project root (or working directory). Returns a list of hits with \
+                      file path, line number, and matched text. With --markers the hits \
+                      are also pushed to the RStudio Markers pane so the user can \
+                      click to navigate.",
+        params: &[
+            ParamSpec {
+                name: "pattern",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Regex passed to R's grep() (Perl-compatible, case-sensitive by default).",
+            },
+            ParamSpec {
+                name: "--path",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Root directory to search (default: active project root, \
+                              or working directory if no project is open).",
+            },
+            ParamSpec {
+                name: "--ext",
+                kind: ParamKind::String,
+                required: false,
+                default: Some("R,r,Rmd,qmd,md"),
+                allowed: &[],
+                description: "Comma-separated extensions to include (no leading dot).",
+            },
+            ParamSpec {
+                name: "--ignore-case",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Case-insensitive matching.",
+            },
+            ParamSpec {
+                name: "--markers",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Also populate the RStudio Markers pane with the hits \
+                              (navigable by clicking).",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio editor find 'lm\\('",
+                explanation: "Find all calls to lm() in R/Rmd/qmd/md files under the project.",
+            },
+            ExampleSpec {
+                cmd: "rstudio editor find 'TODO' --ext R,r --markers",
+                explanation: "Find TODO comments in R files and show them in the Markers pane.",
+            },
+        ],
+        returns: "{hits: [{file, line, text}], total: int}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Invalid regex pattern.",
+        }],
+        rstudioapi_fn: None,
+        rpc_method: Some("execute_r_code"),
+    },
 ];
 
 #[derive(Subcommand, Debug)]
@@ -932,6 +1003,22 @@ pub enum EditorCmd {
         #[arg(long, conflicts_with = "id")]
         path: Option<PathBuf>,
     },
+    /// Search for a regex pattern across project source files.
+    Find {
+        pattern: String,
+        /// Root directory to search (default: active project or working directory).
+        #[arg(long)]
+        path: Option<String>,
+        /// Comma-separated extensions to include (default: R,r,Rmd,qmd,md).
+        #[arg(long, default_value = "R,r,Rmd,qmd,md")]
+        ext: String,
+        /// Case-insensitive matching.
+        #[arg(long)]
+        ignore_case: bool,
+        /// Also populate the RStudio Markers pane with the hits.
+        #[arg(long)]
+        markers: bool,
+    },
 }
 
 pub fn run(
@@ -986,6 +1073,13 @@ pub fn run(
         EditorCmd::SetCursor { position, id, path } => {
             set_cursor(rpc, session, position, id.as_deref(), path.as_deref())
         }
+        EditorCmd::Find {
+            pattern,
+            path,
+            ext,
+            ignore_case,
+            markers,
+        } => find_in_files(rpc, pattern, path.as_deref(), ext, *ignore_case, *markers),
     }
 }
 
@@ -1681,4 +1775,58 @@ fn parse_range(s: &str) -> Option<((u32, u32), (u32, u32))> {
         let pos = parse_line_col(s)?;
         Some((pos, pos))
     }
+}
+
+fn find_in_files(
+    rpc: &RpcClient<'_>,
+    pattern: &str,
+    path: Option<&str>,
+    ext: &str,
+    ignore_case: bool,
+    show_markers: bool,
+) -> Result<Option<Value>, CliError> {
+    let ext_vec: Vec<String> = ext.split(',').map(|e| format!("\\\\.{}$", e.trim())).collect();
+    let ext_pattern = ext_vec.join("|");
+    let ic = if ignore_case { "TRUE" } else { "FALSE" };
+    let root_r = match path {
+        Some(p) => format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\"")),
+        None => "{ p <- tryCatch(rstudioapi::getActiveProject(), error=function(e) NULL); \
+                  if (is.null(p)) getwd() else p }"
+            .to_string(),
+    };
+    let markers_r = if show_markers { "TRUE" } else { "FALSE" };
+    let pat_r = r_quote(pattern);
+
+    let r_code = format!(
+        r#"local({{
+  root <- {root_r}
+  ext_rx <- "{ext_pattern}"
+  files <- list.files(path = root, pattern = ext_rx, recursive = TRUE, full.names = TRUE)
+  hits <- list()
+  for (f in files) {{
+    lines <- tryCatch(readLines(f, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+    m <- grep({pat_r}, lines, perl = TRUE, ignore.case = {ic})
+    for (i in m) {{
+      hits <- c(hits, list(list(file = f, line = as.integer(i), text = trimws(lines[[i]]))))
+    }}
+  }}
+  if ({markers_r} && length(hits) > 0) {{
+    markers <- lapply(hits, function(h) list(
+      type = "info", file = h$file, line = h$line, column = 1L, message = h$text
+    ))
+    rstudioapi::sourceMarkers("find", markers, basePath = root, autoSelect = "first")
+  }}
+  cat(jsonlite::toJSON(list(hits = hits, total = length(hits)), auto_unbox = TRUE))
+}})"#,
+        root_r = root_r,
+        ext_pattern = ext_pattern,
+        pat_r = pat_r,
+        ic = ic,
+        markers_r = markers_r,
+    );
+
+    let raw = r_eval::run(rpc, &r_code)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("editor find: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
 }
