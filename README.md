@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.5.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.7.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 15 categories and 80 actions. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
@@ -199,7 +199,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.6.3
+rstudio version                 # 0.7.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

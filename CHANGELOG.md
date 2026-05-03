@@ -4,6 +4,67 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-05-04
+
+### Added — `rstudio observe`: live JSONL stream of session-state changes
+
+New top-level command that polls the rsession at a configurable interval
+and emits one JSON Line per detected change on stdout. Three coverage
+tiers, selected with `--tier` (default 2):
+
+- **Tier 1** — file-watching only, never invokes R. Detects document
+  open / close / save / dirty / typing / renamed; tails
+  `history_database` for `console.input` events with the authoritative
+  `rstudio_ts_ms` timestamp; tails the rsession log for `rsession.error`
+  lines; tracks project, markers, files-pane dir, find-in-files state,
+  source-pane active column.
+- **Tier 2** (default) — Tier 1 + one cheap `execute_r_code` per tick.
+  Adds `r.busy_changed` (latency heuristic), `r.error`, `env.added` /
+  `env.removed`, `wd.changed`, `search.added` / `search.removed`,
+  `namespaces.added` / `namespaces.removed`.
+- **Tier 3** — Tier 2 + heavier introspection. Adds `env.typed_changed`
+  (per-name class + length), `last_value.changed`, `plot.count_changed`.
+
+Tier-2/3 events are buffered for up to 3 ticks waiting for the matching
+`console.input` to land in `history_database` (RStudio writes the
+history file *after* R has finished executing, so a naive emit order
+would produce effects before causes). When flushed because of an
+arriving `console.input`, each event is stamped with `caused_by_ts_ms`
+pointing to the input's `rstudio_ts_ms` — a strong correlation key for
+downstream agents. On timeout flush, the field is omitted (cause was
+likely non-console: addin / `r exec` / external RPC).
+
+Output is JSONL on stdout (NOT the AI-native envelope contract).
+SIGPIPE is reset to default so `rstudio observe | head -n 5` exits
+cleanly. With `--once`, takes a single snapshot and exits.
+
+No competing R/MCP tool exposes a comparable live event stream — this
+is a genuine differentiator. See the README's "Observability (live
+JSONL stream)" section in the comparative table.
+
+### Added — `rstudio policy`: per-user block list
+
+New top-level command to manage `~/.config/rstudio-cli/policy.json`.
+Three subcommands (no live session required): `policy show`,
+`policy block <key>`, `policy unblock <key>`. Two granularities: bare
+category (`session` blocks every session subcommand) or
+`category.action` (`session.restart` blocks one specific action).
+
+Policy is checked at dispatch time, before opening the RPC socket, so
+it applies on Server and Desktop alike. Carve-outs that bypass policy:
+`version`, `status`, `schema`, `skill`, and `policy` itself. The
+destructive session subcommands (`restart`, `open-project`) and `r exec`
+/ `r send` are mapped to their full key, so fine-grained rules work
+without having to block the entire category.
+
+### Added — Internal convention: README + help + schema sync on every command change
+
+`CLAUDE.md` now records the project convention: any user-visible CLI
+change must update three surfaces in the same commit — README's
+command-summary table and comparative table; clap doc-comments
+(rendered as `--help`); and the schema registry (`CATEGORIES` +
+`registry()` in `src/schema.rs`).
+
 ## [0.6.3] — 2026-05-03
 
 ### Added — `rstudio status --format text` rendering
