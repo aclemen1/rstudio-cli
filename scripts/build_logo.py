@@ -44,6 +44,8 @@ OUT = "/home/endreas/code/aclemen1/rstudio-cli/assets/logo.svg"
 
 COLOR_BORDER = "#4878B0"
 COLOR_TYPE = "#1A3654"
+COLOR_FILL = "#F1F2F5"  # very light grey interior
+HEX_STROKE_WIDTH = 50    # thicker than the original Gemini stroke (~30 px)
 
 FONT_INTER_BOLD = "/nix/store/3cfynhzaw9nlk3afzg6vfbrvpbrx6fjz-inter-68966-tex/fonts/opentype/public/inter/Inter-Bold.otf"
 
@@ -131,11 +133,22 @@ def main():
     wm_x = (W - target_w_px) / 2
     wm_y = 830
 
+    # Hex polygon vertices (points-up, inscribed in the source-image bbox of
+    # the original Gemini raster). The polygon underlies the trace and
+    # provides the light-grey interior fill plus a slightly wider stroke;
+    # the existing trace overlays the polygon's stroke at the original
+    # border location.
+    hex_pts = "640,140 1172,453 1172,1079 640,1392 108,1079 108,453"
+
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">
   <!-- rstudio-cli logo: hex outline + R + >_ traced from the Gemini source
        raster (preserves original geometry exactly); the "rstudio-cli"
        wordmark is rendered from Inter-Bold and traced for crisp typography.
-       Self-contained vector — no font dependency at render time. -->
+       Self-contained vector — no font dependency at render time.
+       Programmatic hex polygon underneath provides the light-grey interior
+       fill and a slightly wider blue stroke (the traced ring overlays it). -->
+  <polygon points="{hex_pts}"
+           fill="{COLOR_FILL}" stroke="{COLOR_BORDER}" stroke-width="{HEX_STROKE_WIDTH}" stroke-linejoin="miter"/>
   <g transform="{border_t}" fill="{COLOR_BORDER}"><path d="{border_d}"/></g>
   <g transform="{type_t}" fill="{COLOR_TYPE}"><path d="{type_d}"/></g>
   <g transform="translate({wm_x:.2f},{wm_y:.2f}) scale({scale:.6f}) {wordmark_t}" fill="{COLOR_TYPE}"><path d="{wordmark_d}"/></g>

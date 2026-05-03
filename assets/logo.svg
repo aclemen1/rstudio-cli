@@ -2,7 +2,11 @@
   <!-- rstudio-cli logo: hex outline + R + >_ traced from the Gemini source
        raster (preserves original geometry exactly); the "rstudio-cli"
        wordmark is rendered from Inter-Bold and traced for crisp typography.
-       Self-contained vector — no font dependency at render time. -->
+       Self-contained vector — no font dependency at render time.
+       Programmatic hex polygon underneath provides the light-grey interior
+       fill and a slightly wider blue stroke (the traced ring overlays it). -->
+  <polygon points="640,140 1172,453 1172,1079 640,1392 108,1079 108,453"
+           fill="#F1F2F5" stroke="#4878B0" stroke-width="50" stroke-linejoin="miter"/>
   <g transform="translate(0.000000,1480.000000) scale(0.100000,-0.100000)" fill="#4878B0"><path d="M6285 13622 c-296 -173 -1032 -604 -1315 -772 -468 -277 -687 -406
 -1505 -885 -401 -235 -831 -487 -955 -560 -124 -73 -466 -273 -760 -445 -294
 -172 -566 -331 -605 -355 l-70 -41 -2 -3150 -3 -3149 243 -142 c215 -126 485
