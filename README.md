@@ -14,6 +14,20 @@ of the **same** RStudio Server session it runs inside, sharing the
 active browser client so visible actions land in the user's open tab
 without disrupting it.
 
+## In Claude Code
+
+Claude Code's `/ide` slash command connects the agent to VS Code or
+JetBrains (as of this writing — the list may evolve). The agent and
+the IDE share state: open files, diagnostics, selection. `/ide` does
+not cover RStudio.
+
+Installing the skill (`rstudio skill install`) closes that gap by
+adding `/rstudio` as a slash command in Claude Code. Typing
+`/rstudio` invokes the skill, which tells the agent how to drive
+your live RStudio session — open files, run R, surface markers,
+inspect the live environment, manage Jobs — through the CLI, without
+disrupting your browser tab.
+
 ## Status
 
 **v0.5.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
