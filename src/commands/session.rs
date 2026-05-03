@@ -1,10 +1,11 @@
 use clap::Subcommand;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::error::CliError;
 use crate::r_eval;
 use crate::rpc::{RpcClient, r_quote};
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+use crate::session;
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
@@ -122,6 +123,27 @@ pub const ACTIONS: &[ActionSpec] = &[
         rstudioapi_fn: Some("restartSession"),
         rpc_method: Some("execute_r_code"),
     },
+    ActionSpec {
+        category: "session",
+        name: "list",
+        summary: "List all active RStudio Server sessions for the current user.",
+        description: "Scans $RS_SESSION_TMP_DIR for rsession Unix sockets owned by \
+                      the current user. Each entry includes the --socket path to \
+                      pass to any other command to target that specific session. \
+                      Does not require a live session — safe to call even when \
+                      $RSTUDIO_SESSION_STREAM is unset or ambiguous. \
+                      Server mode only; Desktop multi-process listing is not yet supported.",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio session list",
+            explanation: "Returns {sessions: [{socket}]}. Use `--socket <path>` with \
+                          any other command to target a specific session.",
+        }],
+        returns: "{sessions: [{socket: string}]}",
+        errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: None,
+    },
 ];
 
 #[derive(Subcommand, Debug)]
@@ -146,6 +168,8 @@ pub enum SessionCmd {
         #[arg(long)]
         confirm: bool,
     },
+    /// List all active RStudio Server sessions for the current user (no session required).
+    List,
 }
 
 pub fn run(cmd: &SessionCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
@@ -154,7 +178,19 @@ pub fn run(cmd: &SessionCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliEr
         SessionCmd::Project => project(rpc),
         SessionCmd::OpenProject { path, new_session } => open_project(rpc, path, *new_session),
         SessionCmd::Restart { command, confirm } => restart(rpc, command.as_deref(), *confirm),
+        // List is handled upstream (no session needed); unreachable here.
+        SessionCmd::List => unreachable!("session list is dispatched before Session::detect"),
     }
+}
+
+/// List active rsession sockets — called directly from the dispatcher, no RPC needed.
+pub fn list_sessions() -> Result<Option<Value>, CliError> {
+    let sockets = session::list_server_sockets();
+    let entries: Vec<Value> = sockets
+        .iter()
+        .map(|p| json!({ "socket": p.display().to_string() }))
+        .collect();
+    Ok(Some(json!({ "sessions": entries })))
 }
 
 fn info(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {

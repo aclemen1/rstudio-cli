@@ -229,10 +229,37 @@ fn resolve_user(user_override: Option<String>) -> Result<String, CliError> {
     }
 }
 
-/// Scan `$RS_SESSION_TMP_DIR` for an rsession Unix socket owned by the current
-/// uid. Used when `$RSTUDIO_SESSION_STREAM` is unset — typical for a process
-/// (Claude Code, a plain shell) running on the same machine as the rsession
-/// but not inside its embedded terminal.
+/// Scan `$RS_SESSION_TMP_DIR` for rsession Unix sockets owned by the current
+/// uid. Returns all matches sorted by path. Returns an empty Vec when the
+/// directory doesn't exist or isn't readable (caller decides how to handle).
+pub fn list_server_sockets() -> Vec<PathBuf> {
+    let dir =
+        env::var("RS_SESSION_TMP_DIR").unwrap_or_else(|_| DEFAULT_SESSION_TMP_DIR.to_string());
+    let dir_path = PathBuf::from(&dir);
+
+    if !dir_path.is_dir() {
+        return Vec::new();
+    }
+
+    // SAFETY: getuid() is always-safe; it has no failure mode.
+    let our_uid = unsafe { libc::getuid() };
+
+    let Ok(entries) = std::fs::read_dir(&dir_path) else {
+        return Vec::new();
+    };
+
+    let mut sockets: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let Ok(ft) = e.file_type() else { return false };
+            ft.is_socket() && e.metadata().map(|m| m.uid() == our_uid).unwrap_or(false)
+        })
+        .map(|e| e.path())
+        .collect();
+    sockets.sort();
+    sockets
+}
+
 fn auto_discover_server_socket() -> Result<PathBuf, CliError> {
     let dir =
         env::var("RS_SESSION_TMP_DIR").unwrap_or_else(|_| DEFAULT_SESSION_TMP_DIR.to_string());
@@ -246,32 +273,7 @@ fn auto_discover_server_socket() -> Result<PathBuf, CliError> {
         )));
     }
 
-    // SAFETY: getuid() is always-safe; it has no failure mode.
-    let our_uid = unsafe { libc::getuid() };
-
-    let entries = std::fs::read_dir(&dir_path).map_err(|e| {
-        CliError::session(format!(
-            "$RSTUDIO_SESSION_STREAM is not set and cannot list {}: {e}. \
-             Pass --socket <path>.",
-            dir_path.display()
-        ))
-    })?;
-
-    let mut sockets: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let Ok(ft) = e.file_type() else { return false };
-            if !ft.is_socket() {
-                return false;
-            }
-            // Filter by ownership: a single user can have multiple sessions, and
-            // multiple users can share the host. We only consider sockets owned
-            // by the current uid — the only ones we can connect to anyway.
-            e.metadata().map(|m| m.uid() == our_uid).unwrap_or(false)
-        })
-        .map(|e| e.path())
-        .collect();
-    sockets.sort();
+    let sockets = list_server_sockets();
 
     match sockets.len() {
         0 => Err(CliError::session(format!(

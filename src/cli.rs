@@ -215,6 +215,10 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         // Skill returns Reply directly: 'show' is text-raw markdown,
         // 'install' is human-friendly with ✓/✗ marks.
         Command::Skill(cmd) => skill::run(&cmd),
+        // `session list` does not need a live session — dispatch before detect.
+        Command::Session(session::SessionCmd::List) => {
+            session::list_sessions().map(Reply::Wrapped)
+        }
         Command::Session(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
