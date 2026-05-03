@@ -62,6 +62,86 @@ across 13 categories and 76 actions. Live-tested end-to-end on both
 
 Run `rstudio schema` for the auto-generated catalog of every action.
 
+## Why rstudio-cli?
+
+Several tools let an LLM agent interact with R or RStudio.
+Here is an honest, best-effort comparison as of May 2026. If we have
+misrepresented what another tool can do, please open an issue and we
+will correct it promptly.
+
+> ✓ supported · ~ partial or indirect · ✗ not supported · — not applicable
+
+| Feature | rstudio&#8209;cli | [clauder](https://github.com/imnmv/clauder) | [rstudiomcp](https://github.com/zygi/rstudiomcp) | [mcptools](https://github.com/posit-dev/mcptools) | [Rstudio&#8209;mcp](https://github.com/cafferychen777/Rstudio-mcp) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Transport & architecture** | | | | | |
+| Direct socket — no HTTP server, no open port | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Zero runtime dependency (single static binary) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Runs from any external terminal, outside RStudio | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Homebrew or binary install, no R/Python required | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Platform** | | | | | |
+| RStudio Server (Linux) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| RStudio Desktop (macOS) — documented & tested | ✓ | ~ | ~ | ~ | ~ |
+| **AI integration** | | | | | |
+| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Cursor / Cline / VS Code Copilot | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Usable by any shell, script or Makefile (no MCP) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Self-describing schema with lazy drill-down | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Full `rstudioapi` traceability per action | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **R execution** | | | | | |
+| Evaluate code, capture output | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Send code to the visible R console | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Configurable per-call timeout | ✓ | ✗ | ✗ | ✗ | ✓ |
+| Structured error kinds (`r_error`, `timeout`, …) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Async R subprocess (long-running workloads) | ✗ | ✓ | ✗ | ✗ | ✗ |
+| **Environment inspection** | | | | | |
+| List R objects | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Object type, class, structure detail | ✓ | ✓ | ✓ | ~ | ✓ |
+| Pattern filter on object list | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Multi-session support | ✗ | ✓ | ✗ | ✗ | ✗ |
+| **Editor** | | | | | |
+| Open / close / save / reload documents | ✓ | ✗ | ~ | ✗ | ✗ |
+| Read document content | ✓ | ~ | ~ | ✗ | ✗ |
+| Insert text / replace text ranges | ✓ | ~ | ~ | ✗ | ✗ |
+| Set cursor position | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Operate on any open document (not only the active one) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Read arbitrary disk files (paginated) | ~ | ✓ | ✗ | ✗ | ✗ |
+| Search project source files (regex) | ~ | ✓ | ✗ | ✗ | ✗ |
+| **Visualizations & panes** | | | | | |
+| Capture current plot | ✓ | ✓ | ✓ | ✗ | ✓ |
+| Read Viewer pane HTML content | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Surface lint markers | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Terminal pane** | | | | | |
+| List / create / kill terminals | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Read terminal buffer | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Send keys / run shell commands | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Background Jobs pane** | | | | | |
+| List / add / remove jobs | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Progress tracking (units, state, output stream) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Run an R script as a background job | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Modal UI** | | | | | |
+| Dialog / prompt / question modals | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Password / secret prompts | ✓ | ✗ | ✗ | ✗ | ✗ |
+| File / directory picker | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Preferences & session** | | | | | |
+| Read / write RStudio preferences | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Persistent key-value store | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Open / restart project | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Package & project (beyond rstudioapi)** | | | | | |
+| Install / update R packages | ✗ | ✗ | ✗ | ✗ | ✓ |
+| Git integration | ✗ | ✗ | ✗ | ✗ | ✓ |
+| **Safety & output** | | | | | |
+| `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
+| Block dangerous R calls (`system`, `unlink`, …) | ✗ | ✓ | ✗ | ✗ | ✓ |
+| Per-agent execution audit log | ✗ | ✓ | ✗ | ✗ | ✗ |
+| Structured JSON output with typed error envelope | ✓ | ✗ | ✗ | ✗ | ✗ |
+
+Notes on `~`:
+- **rstudio&#8209;cli / disk files & search**: indirect — achievable via `r exec` or `term exec`, no dedicated command.
+- **clauder / editor**: read and edit are limited to the currently active document.
+- **rstudiomcp / editor**: open and create work; close/save are not exposed; read and edit are active-document only.
+- **RStudio Desktop / clauder, rstudiomcp, mcptools**: these packages use `rstudioapi` internally, which works on Desktop, but Desktop support is not explicitly documented or tested by those projects.
+- **Rstudio&#8209;mcp / Desktop**: external Python server; Desktop connectivity is undocumented.
+
 ## [AI-native](https://github.com/aclemen1/ai-native-cli) pattern
 
 This CLI follows the [AI-native CLI](https://github.com/aclemen1/ai-native-cli)
