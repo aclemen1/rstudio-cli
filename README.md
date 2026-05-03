@@ -46,13 +46,13 @@ across 13 categories and 76 actions. Live-tested end-to-end on both
 
 | category | actions | summary |
 |---|---|---|
-| `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` | Source pane and document operations |
-| `r`      | `exec` `send` | Run R code (silent or visible) |
+| `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` `set-marks` | Source pane and document operations |
+| `r`      | `exec` `send` `poll` | Run R code (silent or visible; async via callr) |
 | `console`| `history` `actions` `context` | Console history + buffer + live editor context |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
 | `env`    | `list` `contents` `info` | Live R environment inspection |
 | `pane`   | `viewer` `files` `markers` `preview-rd` `preview-sql` `save-plot` `highlight-ui` | Non-editor panes |
-| `session`| `info` `project` `open-project` `restart` | Whole-session lifecycle |
+| `session`| `info` `project` `open-project` `restart` `list` | Whole-session lifecycle |
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
 | `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
@@ -97,7 +97,7 @@ will correct it promptly.
 | List R objects | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Object type, class, structure detail | ✓ | ✓ | ✓ | ~ | ✓ |
 | Pattern filter on object list | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Multi-session support | ✗ | ✓ | ✗ | ✗ | ✗ |
+| Multi-session support (list + target by socket) | ~ | ✓ | ✗ | ✗ | ✗ |
 | **Editor** | | | | | |
 | Open / close / save / reload documents | ✓ | ✗ | ~ | ✗ | ✗ |
 | Read document content | ✓ | ~ | ~ | ✗ | ✗ |
@@ -106,6 +106,7 @@ will correct it promptly.
 | Operate on any open document (not only the active one) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Read arbitrary disk files (paginated) | ~ | ✓ | ✗ | ✗ | ✗ |
 | Search project source files (regex) | ~ | ✓ | ✗ | ✗ | ✗ |
+| Pipe grep/rg hits to IDE Markers pane | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **Visualizations & panes** | | | | | |
 | Capture current plot | ✓ | ✓ | ✓ | ✗ | ✓ |
 | Read Viewer pane HTML content | ✓ | ✓ | ✓ | ✗ | ✗ |
@@ -131,16 +132,38 @@ will correct it promptly.
 | Git integration | ✗ | ✗ | ✗ | ✗ | ✓ |
 | **Safety & output** | | | | | |
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
+| Async R execution (non-blocking, via callr) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Block dangerous R calls (`system`, `unlink`, …) | ✗ | ✓ | ✗ | ✗ | ✓ |
 | Per-agent execution audit log | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Structured JSON output with typed error envelope | ✓ | ✗ | ✗ | ✗ | ✗ |
 
 Notes on `~`:
-- **rstudio&#8209;cli / disk files & search**: indirect — achievable via `r exec` or `term exec`, no dedicated command.
+- **rstudio&#8209;cli / disk files & search**: by design, rstudio-cli does not duplicate `grep`/`rg`. Search is left to the agent or shell; `editor set-marks` then surfaces the results in the IDE.
+- **rstudio&#8209;cli / multi-session**: `session list` enumerates Server sockets; switching is done via `--socket`. Desktop multi-process listing not yet supported.
 - **clauder / editor**: read and edit are limited to the currently active document.
 - **rstudiomcp / editor**: open and create work; close/save are not exposed; read and edit are active-document only.
 - **RStudio Desktop / clauder, rstudiomcp, mcptools**: these packages use `rstudioapi` internally, which works on Desktop, but Desktop support is not explicitly documented or tested by those projects.
 - **Rstudio&#8209;mcp / Desktop**: external Python server; Desktop connectivity is undocumented.
+
+## Design philosophy
+
+**Unix composability over duplication.** The CLI does not re-implement
+tools that already exist. File search is a prime example: `grep`, `rg`,
+`ag`, and any LLM agent's own file-reading tools do this better than any
+wrapper ever could. What the CLI adds — and what no shell tool provides
+— is the RStudio UI integration. `editor set-marks` therefore reads from
+stdin in standard grep format and populates the Markers pane; the search
+itself is left to the best available tool:
+
+```sh
+# agent or shell already knows how to search:
+grep -rn "TODO" src/ --include="*.R"  | rstudio editor set-marks
+rg --vimgrep "FIXME" .               | rstudio editor set-marks --type warning
+```
+
+This is why `editor find` does not exist: it would duplicate `grep`
+without adding value, and violate the single-responsibility principle
+that makes Unix pipelines composable.
 
 ## [AI-native](https://github.com/aclemen1/ai-native-cli) pattern
 

@@ -788,73 +788,53 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "editor",
-        name: "find",
-        summary: "Search for a regex pattern across project source files.",
-        description: "Uses R's grep() to search all matching files under the active \
-                      project root (or working directory). Returns a list of hits with \
-                      file path, line number, and matched text. With --markers the hits \
-                      are also pushed to the RStudio Markers pane so the user can \
-                      click to navigate.",
+        name: "set-marks",
+        summary: "Read grep-format lines from stdin and display them in the Markers pane.",
+        description: "Reads lines in grep -n format (file:line:text or file:line:col:text, \
+                      as produced by grep, ripgrep, ag, …) from stdin and sends the results \
+                      to rstudioapi::sourceMarkers(). Lines that do not match the pattern are \
+                      silently skipped. Pairs naturally with any search tool; the CLI adds \
+                      only the RStudio UI integration.",
         params: &[
             ParamSpec {
-                name: "pattern",
+                name: "--name",
                 kind: ParamKind::String,
-                required: true,
+                required: false,
+                default: Some("rstudio-cli"),
+                allowed: &[],
+                description: "Label shown in the Markers pane header.",
+            },
+            ParamSpec {
+                name: "--type",
+                kind: ParamKind::String,
+                required: false,
+                default: Some("info"),
+                allowed: &["info", "warning", "error"],
+                description: "Severity applied to every marker.",
+            },
+            ParamSpec {
+                name: "--base-path",
+                kind: ParamKind::String,
+                required: false,
                 default: None,
                 allowed: &[],
-                description: "Regex passed to R's grep() (Perl-compatible, case-sensitive by default).",
-            },
-            ParamSpec {
-                name: "--path",
-                kind: ParamKind::String,
-                required: false,
-                default: None,
-                allowed: &[],
-                description: "Root directory to search (default: active project root, \
-                              or working directory if no project is open).",
-            },
-            ParamSpec {
-                name: "--ext",
-                kind: ParamKind::String,
-                required: false,
-                default: Some("R,r,Rmd,qmd,md"),
-                allowed: &[],
-                description: "Comma-separated extensions to include (no leading dot).",
-            },
-            ParamSpec {
-                name: "--ignore-case",
-                kind: ParamKind::Bool,
-                required: false,
-                default: Some("false"),
-                allowed: &[],
-                description: "Case-insensitive matching.",
-            },
-            ParamSpec {
-                name: "--markers",
-                kind: ParamKind::Bool,
-                required: false,
-                default: Some("false"),
-                allowed: &[],
-                description: "Also populate the RStudio Markers pane with the hits \
-                              (navigable by clicking).",
+                description: "Base path for resolving relative file paths \
+                              (passed to sourceMarkers basePath).",
             },
         ],
         examples: &[
             ExampleSpec {
-                cmd: "rstudio editor find 'lm\\('",
-                explanation: "Find all calls to lm() in R/Rmd/qmd/md files under the project.",
+                cmd: "grep -rn 'TODO' . --include='*.R' | rstudio editor set-marks",
+                explanation: "Show all TODOs in R files as info markers.",
             },
             ExampleSpec {
-                cmd: "rstudio editor find 'TODO' --ext R,r --markers",
-                explanation: "Find TODO comments in R files and show them in the Markers pane.",
+                cmd: "rg --vimgrep 'FIXME' src/ | rstudio editor set-marks --name 'FIXMEs' --type warning",
+                explanation: "Show FIXME hits from ripgrep as warning markers.",
             },
         ],
-        returns: "{hits: [{file, line, text}], total: int}",
-        errors: &[ErrorSpec {
-            kind: "r_error",
-            when: "Invalid regex pattern.",
-        }],
-        rstudioapi_fn: None,
+        returns: "{total: int, name: string}",
+        errors: &[],
+        rstudioapi_fn: Some("sourceMarkers"),
         rpc_method: Some("execute_r_code"),
     },
 ];
@@ -1003,21 +983,17 @@ pub enum EditorCmd {
         #[arg(long, conflicts_with = "id")]
         path: Option<PathBuf>,
     },
-    /// Search for a regex pattern across project source files.
-    Find {
-        pattern: String,
-        /// Root directory to search (default: active project or working directory).
+    /// Read grep-format lines from stdin and show them in the Markers pane.
+    SetMarks {
+        /// Label shown in the Markers pane header.
+        #[arg(long, default_value = "rstudio-cli")]
+        name: String,
+        /// Severity applied to every marker.
+        #[arg(long, default_value = "info", value_parser = ["info", "warning", "error"])]
+        r#type: String,
+        /// Base path for resolving relative file paths.
         #[arg(long)]
-        path: Option<String>,
-        /// Comma-separated extensions to include (default: R,r,Rmd,qmd,md).
-        #[arg(long, default_value = "R,r,Rmd,qmd,md")]
-        ext: String,
-        /// Case-insensitive matching.
-        #[arg(long)]
-        ignore_case: bool,
-        /// Also populate the RStudio Markers pane with the hits.
-        #[arg(long)]
-        markers: bool,
+        base_path: Option<String>,
     },
 }
 
@@ -1073,13 +1049,11 @@ pub fn run(
         EditorCmd::SetCursor { position, id, path } => {
             set_cursor(rpc, session, position, id.as_deref(), path.as_deref())
         }
-        EditorCmd::Find {
-            pattern,
-            path,
-            ext,
-            ignore_case,
-            markers,
-        } => find_in_files(rpc, pattern, path.as_deref(), ext, *ignore_case, *markers),
+        EditorCmd::SetMarks {
+            name,
+            r#type,
+            base_path,
+        } => set_marks(rpc, name, r#type, base_path.as_deref()),
     }
 }
 
@@ -1777,56 +1751,94 @@ fn parse_range(s: &str) -> Option<((u32, u32), (u32, u32))> {
     }
 }
 
-fn find_in_files(
+fn set_marks(
     rpc: &RpcClient<'_>,
-    pattern: &str,
-    path: Option<&str>,
-    ext: &str,
-    ignore_case: bool,
-    show_markers: bool,
+    name: &str,
+    marker_type: &str,
+    base_path: Option<&str>,
 ) -> Result<Option<Value>, CliError> {
-    let ext_vec: Vec<String> = ext.split(',').map(|e| format!("\\\\.{}$", e.trim())).collect();
-    let ext_pattern = ext_vec.join("|");
-    let ic = if ignore_case { "TRUE" } else { "FALSE" };
-    let root_r = match path {
-        Some(p) => format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\"")),
-        None => "{ p <- tryCatch(rstudioapi::getActiveProject(), error=function(e) NULL); \
-                  if (is.null(p)) getwd() else p }"
-            .to_string(),
+    use std::io::BufRead;
+
+    struct Hit {
+        file: String,
+        line: u32,
+        col: u32,
+        text: String,
+    }
+
+    fn parse_line(s: &str) -> Option<Hit> {
+        let s = s.trim();
+        if s.is_empty() { return None; }
+        // Split into at most 4 fields on ':'.
+        // Handles grep -n  (file:line:text)
+        //         grep -rn (file:line:text)
+        //         rg --vimgrep (file:line:col:text)
+        let mut it = s.splitn(4, ':');
+        let file = it.next()?.to_string();
+        let line: u32 = it.next()?.trim().parse().ok()?;
+        let third = it.next()?;
+        let fourth = it.next();
+        let (col, text) = match (third.trim().parse::<u32>(), fourth) {
+            (Ok(c), Some(t)) => (c, t.trim().to_string()),
+            _ => (1, match fourth {
+                Some(f) => format!("{}:{}", third, f),
+                None    => third.to_string(),
+            }),
+        };
+        Some(Hit { file, line, col, text })
+    }
+
+    let stdin = std::io::stdin();
+    let hits: Vec<Hit> = stdin
+        .lock()
+        .lines()
+        .filter_map(|l| l.ok())
+        .filter_map(|l| parse_line(&l))
+        .collect();
+
+    let total = hits.len();
+    if total == 0 {
+        return Ok(Some(json!({ "total": 0, "name": name })));
+    }
+
+    // Serialise hits to JSON, pass to R as a quoted string, parse with jsonlite.
+    let hits_json: Vec<Value> = hits
+        .iter()
+        .map(|h| {
+            json!({
+                "type":    marker_type,
+                "file":    h.file,
+                "line":    h.line,
+                "column":  h.col,
+                "message": h.text,
+            })
+        })
+        .collect();
+    let hits_json_str = serde_json::to_string(&hits_json)
+        .map_err(|e| CliError::internal(format!("set-marks: JSON serialise: {e}")))?;
+
+    let name_r      = r_quote(name);
+    let hits_r      = r_quote(&hits_json_str);
+    let base_path_r = match base_path {
+        Some(p) => r_quote(p),
+        None    => "NULL".to_string(),
     };
-    let markers_r = if show_markers { "TRUE" } else { "FALSE" };
-    let pat_r = r_quote(pattern);
 
     let r_code = format!(
         r#"local({{
-  root <- {root_r}
-  ext_rx <- "{ext_pattern}"
-  files <- list.files(path = root, pattern = ext_rx, recursive = TRUE, full.names = TRUE)
-  hits <- list()
-  for (f in files) {{
-    lines <- tryCatch(readLines(f, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
-    m <- grep({pat_r}, lines, perl = TRUE, ignore.case = {ic})
-    for (i in m) {{
-      hits <- c(hits, list(list(file = f, line = as.integer(i), text = trimws(lines[[i]]))))
-    }}
-  }}
-  if ({markers_r} && length(hits) > 0) {{
-    markers <- lapply(hits, function(h) list(
-      type = "info", file = h$file, line = h$line, column = 1L, message = h$text
-    ))
-    rstudioapi::sourceMarkers("find", markers, basePath = root, autoSelect = "first")
-  }}
-  cat(jsonlite::toJSON(list(hits = hits, total = length(hits)), auto_unbox = TRUE))
-}})"#,
-        root_r = root_r,
-        ext_pattern = ext_pattern,
-        pat_r = pat_r,
-        ic = ic,
-        markers_r = markers_r,
+  markers <- jsonlite::fromJSON({hits_r}, simplifyVector = FALSE)
+  rstudioapi::sourceMarkers(
+    name       = {name_r},
+    markers    = markers,
+    basePath   = {base_path_r},
+    autoSelect = "first"
+  )
+  cat(jsonlite::toJSON(list(total = length(markers), name = {name_r}), auto_unbox = TRUE))
+}})"#
     );
 
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("editor find: invalid JSON: {e}; raw: {raw}")))?;
+        .map_err(|e| CliError::internal(format!("editor set-marks: invalid JSON: {e}; raw: {raw}")))?;
     Ok(Some(parsed))
 }
