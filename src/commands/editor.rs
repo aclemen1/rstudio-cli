@@ -1082,14 +1082,7 @@ fn read_buffer(
         vec![Value::String(resolved_id.clone())],
     ) {
         Ok(v) => v,
-        // The rsession surfaces "No such file or directory" when the doc id
-        // doesn't match anything in the source database. Translate to a
-        // user-friendly error.
-        Err(e)
-            if e.message.contains("No such file or directory")
-                || e.message.contains("not found")
-                || e.message.contains("Unknown") =>
-        {
+        Err(e) if rpc_error_is_unknown_doc(&e) => {
             return Err(CliError::user(format!(
                 "no open document with id {resolved_id} \
                  (run `editor list` to see open docs)"
@@ -1282,6 +1275,15 @@ struct DocMeta {
     dirty: bool,
 }
 
+/// Heuristic for "the rsession couldn't find this doc id". rsession surfaces
+/// it under several different error messages — we treat them all as "not open".
+fn rpc_error_is_unknown_doc(err: &CliError) -> bool {
+    let msg = err.message.as_str();
+    msg.contains("not found")
+        || msg.contains("Unknown")
+        || msg.contains("No such file or directory")
+}
+
 /// Look up an open document's metadata by id. Returns None if the id is unknown.
 fn fetch_doc_meta(rpc: &RpcClient<'_>, id: &str) -> Result<Option<DocMeta>, CliError> {
     match rpc.rpc("get_source_document", vec![Value::String(id.to_string())]) {
@@ -1295,8 +1297,7 @@ fn fetch_doc_meta(rpc: &RpcClient<'_>, id: &str) -> Result<Option<DocMeta>, CliE
             dirty: map.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false),
         })),
         Ok(_) => Ok(None),
-        // Treat "doc not found" as not-open. Other RPC errors propagate.
-        Err(e) if e.message.contains("not found") || e.message.contains("Unknown") => Ok(None),
+        Err(e) if rpc_error_is_unknown_doc(&e) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -1307,6 +1308,11 @@ fn fetch_doc_meta(rpc: &RpcClient<'_>, id: &str) -> Result<Option<DocMeta>, CliE
 /// `--path <PATH>` (flag). Returns Some(id) on a positive resolution,
 /// None when both inputs are absent (caller decides whether that means
 /// "default to active" or "error").
+///
+/// Explicit `<id>` is validated against the open-doc set (one RPC call),
+/// so no action silently no-ops on a typoed id. The path resolver
+/// (`find_open_doc_by_path`) already does its own lookup, so it's
+/// inherently validated.
 fn resolve_target_id(
     rpc: &RpcClient<'_>,
     session: &Session,
@@ -1314,7 +1320,17 @@ fn resolve_target_id(
     path: Option<&Path>,
 ) -> Result<Option<String>, CliError> {
     match (id, path) {
-        (Some(id), _) => Ok(Some(id.to_string())),
+        (Some(id), _) => {
+            // Validate the id is actually open in the Source pane. rstudioapi
+            // wrappers (.rs.api.documentClose, documentSave, setDocumentContents)
+            // silently no-op on unknown ids, which would mask agent typos.
+            if fetch_doc_meta(rpc, id)?.is_none() {
+                return Err(CliError::user(format!(
+                    "no open document with id {id} (run `editor list` to see open docs)"
+                )));
+            }
+            Ok(Some(id.to_string()))
+        }
         (None, Some(p)) => match find_open_doc_by_path(rpc, session, p)? {
             Some(meta) => Ok(Some(meta.id)),
             None => Err(CliError::user(format!(
@@ -1425,16 +1441,24 @@ fn save(
     id: Option<&str>,
     path: Option<&Path>,
 ) -> Result<Option<Value>, CliError> {
-    // None target → R-side default (active document).
+    // None target → resolve to the active source doc id R-side, then save.
+    // We can't rely on .rs.api.documentSave's return value: it gives TRUE
+    // (logical), not the id. So we capture the resolved id ourselves and
+    // return that to the caller.
     let resolved = resolve_target_id(rpc, session, id, path)?;
-    let id_arg = match resolved {
+    let id_expr = match resolved {
         Some(s) => r_quote(&s),
-        None => "NULL".into(),
+        None => "rstudioapi::documentId(allowConsole = FALSE)".into(),
     };
     let r_code = format!(
         r#"local({{
-  .__id <- .rs.api.documentSave({id_arg})
-  if (is.null(.__id)) cat("null") else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
+  .__id <- {id_expr}
+  if (is.null(.__id)) {{
+    cat("null")
+    return(invisible())
+  }}
+  .rs.api.documentSave(id = .__id)
+  cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
 }})"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
