@@ -1,6 +1,6 @@
 [package]
 name = "rstudio-cli"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 description = "AI-native CLI bridge to drive an RStudio Server (Linux) or RStudio Desktop (macOS) IDE from a terminal"
 license = "MIT"

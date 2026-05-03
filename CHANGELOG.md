@@ -4,6 +4,35 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — 2026-05-03
+
+### Added — `rstudio status --format text` rendering
+
+`rstudio status` now ships a polished human-readable rendering for
+`--format text`:
+
+```
+rstudio-cli 0.6.3 — Server (unix:///var/run/.../endreas-d)
+user            endreas
+session         761ca43e
+client_id       f6938b37-d079-4d59-8f87-a7da41336ff8
+project         (none)
+R / RStudio     3.6.3 / 2026.4.0.526
+documents open  22 (active: PLAN_TST_ASSEMBLY.md)
+```
+
+The default output (no `--format`) stays JSON — agents are still
+the primary consumer.
+
+### Internal — `Reply::Adaptive` gains `default_text`
+
+The output `Reply` enum now carries an explicit `default_text: bool`
+on the `Adaptive` variant. Meta-CLI commands (`version`, `skill show`,
+`skill install`) keep `default_text = true` (text-by-default). Action
+commands with a custom text mode (`status`, future others) use
+`default_text = false` (JSON-by-default, text on demand). Removes the
+ambiguity of overloading `Adaptive` for both audiences.
+
 ## [0.6.2] — 2026-05-03
 
 ### Added — `rstudio status`

@@ -26,26 +26,43 @@ impl FromStr for Format {
 /// Outcome of a successful command dispatch.
 ///
 /// `Wrapped` is the AI-native default contract: a JSON envelope
-/// `{"ok": true, "result": ...}` (or its text-mode pretty-printed
-/// equivalent) used by every command that talks to the rsession.
+/// `{"ok": true, "result": ...}` used by every command that talks to
+/// the rsession. Default format = JSON.
 ///
-/// `Adaptive` is reserved for "meta-CLI" commands that don't talk to
-/// the rsession (`version`, `skill show`, `skill install`): JSON mode
-/// keeps the envelope, text mode prints `text` raw — so `rstudio
-/// version` outputs `0.5.0` and `rstudio skill show` outputs the
-/// markdown clean enough to pipe.
+/// `Adaptive` ships both a structured value AND a custom text rendering.
+/// `default_text` controls which is shown when `--format` isn't passed:
+///   - `true` for meta-CLI commands (`version`, `skill show`,
+///     `skill install`) where humans are the primary audience.
+///   - `false` for action commands with a polished text rendering
+///     (e.g. `status`) where agents are still the primary audience but
+///     a human-friendly text mode is available on demand.
 pub enum Reply {
     Wrapped(Option<Value>),
-    Adaptive { value: Value, text: String },
+    Adaptive {
+        value: Value,
+        text: String,
+        default_text: bool,
+    },
 }
 
 pub fn print_reply(reply: Reply, format: Option<Format>) {
     match reply {
         Reply::Wrapped(value) => print_ok(value, format.unwrap_or(Format::Json)),
-        Reply::Adaptive { value, text } => match format.unwrap_or(Format::Text) {
-            Format::Json => print_ok(Some(value), Format::Json),
-            Format::Text => print!("{text}"),
-        },
+        Reply::Adaptive {
+            value,
+            text,
+            default_text,
+        } => {
+            let resolved = format.unwrap_or(if default_text {
+                Format::Text
+            } else {
+                Format::Json
+            });
+            match resolved {
+                Format::Json => print_ok(Some(value), Format::Json),
+                Format::Text => print!("{text}"),
+            }
+        }
     }
 }
 

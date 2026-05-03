@@ -141,6 +141,7 @@ pub fn run(cmd: &SkillCmd) -> Result<Reply, CliError> {
             Ok(Reply::Adaptive {
                 value: json!(md),
                 text: md,
+                default_text: true,
             })
         }
         SkillCmd::Install {
@@ -262,7 +263,11 @@ fn install(tool: &str, force: bool, target: Option<&Path>) -> Result<Reply, CliE
         target_file.display(),
         layout.tool,
     );
-    Ok(Reply::Adaptive { value, text })
+    Ok(Reply::Adaptive {
+        value,
+        text,
+        default_text: true,
+    })
 }
 
 /// Find the nearest ancestor of cwd containing `rel_dir` (e.g.

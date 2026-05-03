@@ -175,11 +175,12 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         Command::Version => Ok(Reply::Adaptive {
             value: json!({ "version": VERSION }),
             text: format!("{VERSION}\n"),
+            default_text: true,
         }),
         Command::Status => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            status::run(&rpc, &session).map(Reply::Wrapped)
+            status::run(&rpc, &session)
         }
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
