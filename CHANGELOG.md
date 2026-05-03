@@ -4,6 +4,95 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-05-03
+
+Editor-surface consolidation pass: one breaking rename, one consistent
+addressing pattern across every mutator, and multi-agent skill install.
+
+### Changed (BREAKING) — `context` and `active-context` merged
+
+The standalone `editor active-context` action is **removed**. Its
+behavior is preserved as `editor context --include-console`. The
+unified action also gains the ability to query a non-active document
+via `editor context --id <ID>`.
+
+Migration:
+
+| before                                  | after                                             |
+| --------------------------------------- | ------------------------------------------------- |
+| `rstudio editor context`                | `rstudio editor context` (unchanged)              |
+| `rstudio editor active-context`         | `rstudio editor context --include-console`        |
+| (no equivalent)                         | `rstudio editor context --id <ID>` (new)          |
+
+`--include-contents` is preserved on every variant. `--id` and
+`--include-console` are mutually exclusive (the console doesn't accept
+an id).
+
+Rationale: the previous split confused agents and humans alike. Both
+actions named "context" — the difference (one excludes the console,
+one doesn't) was not obvious from the name. The merged form makes the
+dispatch explicit via flags.
+
+### Added — `--path` on every editor mutator
+
+`close`, `save`, `set-contents`, `modify-range`, `set-cursor` now
+accept `--path <PATH>` in addition to id-based addressing. The path
+is resolved against the open-doc listing. Same id-or-path pattern as
+`reload` and `read-buffer` from 0.5.4.
+
+| action          | id                       | path                       | active default |
+| --------------- | ------------------------ | -------------------------- | -------------- |
+| `close`         | `close <id>`             | `close --path <p>`         | n/a (required) |
+| `save`          | `save --id <id>`         | `save --path <p>`          | yes            |
+| `set-contents`  | `set-contents <t> --id`  | `set-contents <t> --path`  | yes            |
+| `modify-range`  | `modify-range <r> <t> --id` | `modify-range <r> <t> --path` | yes      |
+| `set-cursor`    | `set-cursor <p> --id`    | `set-cursor <p> --path`    | yes            |
+
+Internal: factored the resolution into a single `resolve_target_id`
+helper used by all five sites.
+
+### Added — multi-agent skill install via `--for <tool>`
+
+`rstudio skill install --for {claude-code|cursor|cline}` writes the
+SKILL.md to the conventional location for that tool. The content is
+the same Anthropic open-format markdown across every tool — only the
+directory and filename extension vary. Default remains `claude-code`
+for backward compatibility.
+
+| `--for`       | location                                      |
+| ------------- | --------------------------------------------- |
+| `claude-code` | `<root>/.claude/skills/rstudio/SKILL.md`      |
+| `cursor`      | `<root>/.cursor/rules/rstudio.mdc`            |
+| `cline`       | `<root>/.clinerules/rstudio.md`               |
+
+For other agents, `rstudio skill show > <path>` is the universal
+fallback. `--target <path>` still overrides the auto-resolved
+directory entirely.
+
+### Fixed — `editor save` returned `{"id": true}`
+
+`.rs.api.documentSave` returns a logical (TRUE on success), not the
+doc id. The CLI now captures the resolved id explicitly and returns
+that. The active-default case looks up the id via
+`documentId(allowConsole = FALSE)` first, saves it, and returns it.
+
+### Fixed — silent no-ops on unknown ids
+
+`editor close <bogus-id>`, `editor save --id <bogus-id>`, and
+`editor set-contents <text> --id <bogus-id>` previously returned
+`ok=true` with no work done — the rstudioapi wrappers no-op silently
+on unknown ids, masking agent typos. `resolve_target_id` now validates
+explicit ids by calling `get_source_document` and returns a clear
+`user_error` if the doc isn't open. Cost: one extra RPC per
+id-validating action.
+
+### Fixed — `editor reload <bogus-id>` surfaced an OS error
+
+The rsession's "No such file or directory" leaked to the user. Now
+matched by the shared `rpc_error_is_unknown_doc` helper, so reload
+returns `action: skipped-not-open` consistent with the path-based
+no-op contract.
+
 ## [0.5.4] — 2026-05-03
 
 ### Added — `editor reload`
