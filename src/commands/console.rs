@@ -71,6 +71,23 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "console",
+        name: "activate",
+        summary: "Move keyboard focus to the R console pane.",
+        description: "Wraps the named RStudio command `activateConsole` (via \
+                      .rs.api.executeCommand). Symmetric counterpart to `term activate <id>` \
+                      for the R console (which has no id — there's only one).",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio console activate",
+            explanation: "User's cursor lands in the R console, ready for typing.",
+        }],
+        returns: "void",
+        errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "console",
         name: "context",
         summary: "Context of the R console editor (currently typed input + cursor position).",
         description: "Wraps rstudioapi::getConsoleEditorContext(). Returns what the user is \
@@ -108,6 +125,8 @@ pub enum ConsoleCmd {
     },
     /// Context of the R console editor (currently typed input + cursor position). Live.
     Context,
+    /// Move keyboard focus to the R console pane.
+    Activate,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,7 +167,13 @@ pub fn run(
         ConsoleCmd::History { limit } => history(rpc, *limit),
         ConsoleCmd::Actions { limit, types } => actions(session, *limit, types),
         ConsoleCmd::Context => context(rpc),
+        ConsoleCmd::Activate => activate(rpc),
     }
+}
+
+fn activate(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    r_eval::run_silent(rpc, ".rs.api.executeCommand(\"activateConsole\")")?;
+    Ok(None)
 }
 
 fn context(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {

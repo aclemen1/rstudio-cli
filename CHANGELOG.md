@@ -4,6 +4,22 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-05-03
+
+### Added — `console activate`
+
+Move keyboard focus to the R console pane. Symmetric counterpart to
+`term activate <id>` for the console (which has no id — there's only
+one). Wraps the named RStudio command `activateConsole` via
+`.rs.api.executeCommand`.
+
+```sh
+rstudio console activate
+```
+
+Closes a small but real gap: bringing the R console to focus
+previously required `rstudio rpc` or `rstudio r exec` workarounds.
+
 ## [0.6.0] — 2026-05-03
 
 Editor-surface consolidation pass: one breaking rename, one consistent
