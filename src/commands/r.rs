@@ -80,7 +80,8 @@ pub const ACTIONS: &[ActionSpec] = &[
             required: true,
             default: None,
             allowed: &[],
-            description: "R code to send (a trailing newline is appended if absent).",
+            description: "R code to send. Pass it without a trailing newline — \
+                          rsession adds the one that triggers execution.",
         }],
         examples: &[ExampleSpec {
             cmd: "rstudio r send 'print(Sys.time())'",
@@ -120,13 +121,17 @@ pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
             Ok(Some(json!({ "output": output })))
         }
         RCmd::Send { code } => {
-            let mut text = code.clone();
-            if !text.ends_with('\n') {
-                text.push('\n');
-            }
+            // Do NOT append a trailing '\n' — rsession's console_input
+            // already terminates the input with a newline before pushing it
+            // to the R input queue. Appending our own would inject a blank
+            // line between the typed command and its output.
             rpc.rpc(
                 "console_input",
-                vec![Value::String(text), Value::String(String::new()), json!(0)],
+                vec![
+                    Value::String(code.clone()),
+                    Value::String(String::new()),
+                    json!(0),
+                ],
             )?;
             Ok(None)
         }

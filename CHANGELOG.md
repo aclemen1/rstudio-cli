@@ -4,6 +4,33 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-05-03
+
+### Fixed — `r send` no longer inserts a blank line before the output
+
+`rstudio r send '<code>'` previously appended `\n` to the input before
+sending it through the `console_input` RPC. rsession itself already
+terminates the input with a newline before pushing it to the R input
+queue, so the extra one rendered as a blank line between the typed
+command and its output:
+
+```
+> print("hello")
+
+[1] "hello"
+```
+
+The CLI now sends the code as-is. The output renders cleanly and the
+command executes immediately, exactly as if the user had typed it:
+
+```
+> print("hello")
+[1] "hello"
+```
+
+The schema entry for `r send`'s `code` parameter is updated to reflect
+the new contract: pass the code *without* a trailing newline.
+
 ## [0.5.2] — 2026-05-02
 
 ### Added — Server socket auto-discovery
