@@ -4,6 +4,33 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-05-04
+
+### Changed — `observe` becomes a multi-subcommand category
+
+The single `rstudio observe` action shipped in 0.7.0 is now split into
+two explicit subcommands:
+
+- **`rstudio observe stream`** — the live JSONL streamer. Same flags
+  as before (`--interval`, `--once`, `--tier`).
+- **`rstudio observe events`** — static catalog of every event type
+  this version emits. Per-type: tier (1 / 2 / 3), source (which file
+  or RPC populates it), payload schema, whether it appears in the
+  initial snapshot, one-line description. Useful for agents
+  discovering the surface, downstream parsers / validators, and
+  documentation.
+
+A subcommand is now mandatory. `rstudio observe` (no subcommand)
+prints help and exits non-zero. Migration is a one-token edit:
+`rstudio observe X` → `rstudio observe stream X`.
+
+This fixes the awkward `rstudio schema observe observe` drill-down
+that resulted from a single-action category. Drill-down is now
+symmetric with every other multi-action category:
+`rstudio schema observe stream` / `rstudio schema observe events`.
+
+The schema action count is 81 (was 80 in 0.7.0).
+
 ## [0.7.0] — 2026-05-04
 
 ### Added — `rstudio observe`: live JSONL stream of session-state changes
