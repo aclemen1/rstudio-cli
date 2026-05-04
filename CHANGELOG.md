@@ -4,6 +4,25 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] — 2026-05-04
+
+### Fixed — `pane preview-md` compatibility with `markdown` < 1.0
+
+`markdown::mark_html()` was introduced in the `markdown` package >= 1.0
+(API rewrite). Environments running an older version only expose
+`markdownToHTML()`. The R code now dispatches at runtime:
+
+```r
+if (utils::packageVersion("markdown") >= "1.0") {
+  markdown::mark_html(f, output = out)
+} else {
+  markdown::markdownToHTML(f, output = out)
+}
+```
+
+`pane preview-md` and `pane preview` (when auto-dispatching to Markdown)
+are both affected.
+
 ## [0.11.0] — 2026-05-03
 
 ### Added — document preview actions (`pane preview`, `preview-md`, `preview-rmd`, `preview-qmd`)

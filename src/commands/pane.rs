@@ -704,10 +704,16 @@ fn preview_md(
         format!("rstudioapi::viewer({})\n  ", r_quote(&out_str))
     };
 
+    // mark_html() was introduced in markdown >= 1.0 (API rewrite).
+    // Older installations only export markdownToHTML().
     let r_code = format!(
         r#"local({{
   f <- normalizePath({path_r}, mustWork = TRUE)
-  markdown::mark_html(f, output = {out_r})
+  if (utils::packageVersion("markdown") >= "1.0") {{
+    markdown::mark_html(f, output = {out_r})
+  }} else {{
+    markdown::markdownToHTML(f, output = {out_r})
+  }}
   {viewer}invisible(NULL)
 }})"#,
         path_r = r_quote(&abs_str),
