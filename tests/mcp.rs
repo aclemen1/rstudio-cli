@@ -108,6 +108,37 @@ fn initialize_returns_capabilities_and_server_info() {
 }
 
 #[test]
+fn initialize_carries_mcp_skill_instructions() {
+    let mut c = McpClient::spawn();
+    c.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test"}}
+    }));
+    let resp = c.next_response().unwrap();
+    let instructions = resp["result"]["instructions"]
+        .as_str()
+        .expect("initialize must carry instructions");
+    // Spot-check the cross-cutting rules an agent connected via this
+    // server needs to know — these are exactly the things they CAN'T
+    // deduce from per-tool descriptions alone.
+    assert!(
+        instructions.contains("tx_begin"),
+        "instructions mention tx_begin"
+    );
+    assert!(
+        instructions.contains("Always wrap"),
+        "instructions state the defensive multi-call rule"
+    );
+    assert!(
+        instructions.contains("client_init"),
+        "instructions warn about client_init blacklist"
+    );
+    // Version substitution wired correctly.
+    assert!(!instructions.contains("__VERSION__"));
+    c.shutdown();
+}
+
+#[test]
 fn tools_list_contains_tx_and_registry_actions() {
     let mut c = McpClient::spawn();
     c.send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));

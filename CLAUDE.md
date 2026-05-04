@@ -58,26 +58,38 @@ Conversation with the user: French.
 
 ## Source of truth for non-deducible knowledge
 
-Two documents must contain everything an agent (or a future contributor)
-**cannot deduce** from the codebase, the CLI `--help`, or the schema:
+Three documents must contain everything an agent (or a future
+contributor) **cannot deduce** from the codebase, the CLI `--help`,
+or the schema:
 
-1. **`src/skills/rstudio.md`** — the embedded skill that ships to
-   Claude Code. Anything an LLM-driven agent needs to know to use the
-   CLI correctly that isn't already obvious from `rstudio schema` or
-   `rstudio <cmd> --help`. Examples: when to use `tx` vs single calls,
-   how `--timeout` interacts with R's FIFO, why `client_init` is
-   blacklisted, the read-modify-write atomicity pattern, what
-   `RSTUDIO_TX_HELD` means inside a tx.
+1. **`src/skills/rstudio.md`** — the embedded **CLI skill** that ships
+   to Claude Code. For agents that drive the CLI from a shell
+   (`rstudio editor read X | jq …`). Installed via `rstudio skill
+   install` into the user's global Claude Code `~/.claude/skills/`.
+   Talks in terms of `rstudio` invocations, `--format json`, `rstudio
+   tx -- bash`, pipes, `--no-lock`, etc.
 
-2. **`CLAUDE.md`** (this file) — non-deducible facts about the project
+2. **`src/skills/rstudio-mcp.md`** — the embedded **MCP skill**.
+   Returned in the `instructions` field of the MCP server's
+   `initialize` response. For agents connected via MCP (Claude Code,
+   Cline, Cursor, Continue, Claude Desktop). Talks in terms of MCP
+   tool names (`editor_read_buffer`, not `rstudio editor read-buffer`),
+   `tx_begin`/`tx_end`/`tx_run` (not `rstudio tx --`), `meta_status`
+   for lock visibility (not shell pipes). The two skills overlap on
+   semantics — they describe the same RStudio bridge — but the
+   vocabulary differs because the surface differs.
+
+3. **`CLAUDE.md`** (this file) — non-deducible facts about the project
    itself: release pipeline, VCS choice, language conventions, code-
    ownership patterns. Things a contributor reading the source tree
    alone would miss or get wrong.
 
-Both should be **minimal**: anything provable from the code or schema
-belongs in code/schema, not in these docs. When you add a feature
-whose use requires non-obvious knowledge, update the skill in the same
-commit.
+All three should be **minimal**: anything provable from the code or
+schema belongs in code/schema, not in these docs. When you add a
+feature whose use requires non-obvious knowledge, update the relevant
+skill (often both) in the same commit. Keep the two skills in sync on
+shared semantics — multi-agent rules in particular must say the same
+thing in both places (only the spelling of how to invoke a tx differs).
 
 ## When adding or changing a CLI command
 

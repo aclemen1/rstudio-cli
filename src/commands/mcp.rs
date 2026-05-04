@@ -48,6 +48,17 @@ use crate::session::{Session, SessionOverrides};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// MCP-flavored agent guidance, returned in the `instructions` field
+/// of the `initialize` response. The CLI skill (`src/skills/rstudio.md`)
+/// targets shell-driven agents; this one targets MCP-driven agents.
+/// Different vocabulary (tool names not `rstudio` invocations,
+/// `tx_begin`/`tx_end`/`tx_run` not `rstudio tx -- bash`, etc.).
+const MCP_SKILL_RAW: &str = include_str!("../skills/rstudio-mcp.md");
+
+fn rendered_mcp_skill() -> String {
+    MCP_SKILL_RAW.replace("__VERSION__", crate::VERSION)
+}
+
 #[derive(Args, Debug)]
 pub struct McpCmd {
     /// Lock timeout (seconds) used when `tx_begin` waits to acquire
@@ -248,7 +259,15 @@ impl McpServer {
             "serverInfo": {
                 "name": "rstudio-cli",
                 "version": crate::VERSION,
-            }
+            },
+            // The MCP spec (since 2024-11-05) lets the server return
+            // `instructions` here — clients (Claude Code etc.) inject
+            // this into the LLM's system context as guidance about
+            // the server. We use it to deliver the cross-cutting
+            // rules an agent can't infer from per-tool descriptions
+            // alone: defensive tx pattern, what NOT to put in tx,
+            // R FIFO semantics, hard constraints.
+            "instructions": rendered_mcp_skill(),
         })
     }
 
@@ -628,6 +647,23 @@ mod tests {
         assert_eq!(init["protocolVersion"], PROTOCOL_VERSION);
         assert!(init["capabilities"]["tools"].is_object());
         assert_eq!(init["serverInfo"]["name"], "rstudio-cli");
+    }
+
+    #[test]
+    fn initialize_includes_mcp_skill_instructions() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let init = server.handle_initialize();
+        let instructions = init["instructions"]
+            .as_str()
+            .expect("initialize must carry `instructions` string");
+        // Sanity: contains the cross-cutting rules an agent needs.
+        assert!(instructions.contains("tx_begin"));
+        assert!(instructions.contains("tx_end"));
+        assert!(instructions.contains("multi-call sequence"));
+        assert!(instructions.contains("client_init"));
+        // Version substitution actually happened.
+        assert!(instructions.contains(crate::VERSION));
+        assert!(!instructions.contains("__VERSION__"));
     }
 
     #[test]

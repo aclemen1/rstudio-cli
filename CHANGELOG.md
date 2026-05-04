@@ -4,6 +4,34 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-05-04
+
+### Added — MCP server returns agent guidance via `initialize.instructions`
+
+The MCP server's `initialize` response now carries an `instructions`
+field with cross-cutting agent guidance — the things an agent connected
+via MCP can't infer from per-tool descriptions alone:
+
+- the defensive `tx_begin`/`tx_end`/`tx_run` rule for multi-call
+  sequences and the "you can't reliably know if you're alone" framing
+- which tools NOT to put inside a tx (`observe_stream`, `ui_dialog` /
+  `ui_*` modals)
+- R FIFO concurrency model and what `r_send` / `r_exec` differ on
+- hard constraints (never call `rpc` with `client_init`, etc.)
+- patterns worth knowing (markers, async R, env_info vs env_contents,
+  editor_reload after external file write)
+
+The content lives in `src/skills/rstudio-mcp.md`, embedded at compile
+time via `include_str!` and substituted with the binary version at
+runtime — same pattern as the existing CLI skill (`src/skills/rstudio.md`).
+Two distinct skills now: the CLI skill is for shell-driven agents
+(installed into `~/.claude/skills/` via `rstudio skill install`); the
+MCP skill is for MCP-driven agents (returned by the server during
+handshake). They overlap on semantics but the vocabulary differs.
+
+CLAUDE.md updated to record the dual-skill convention so future
+features land in both surfaces in sync.
+
 ## [0.9.0] — 2026-05-04
 
 ### Added — `rstudio mcp`: native MCP server over stdio
