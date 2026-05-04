@@ -108,10 +108,39 @@ and meta-CLI never lock. Default timeout when waiting: 30 s. If you
 hit a timeout, the error includes the holder's PID and command — that
 is another agent (or a previous run of yours that hasn't finished).
 
-Single calls are protected automatically — you don't need to do
-anything. **But across calls**, the lock is released between
-invocations. If you need an atomic sequence (e.g. read a buffer →
-modify → write back), wrap it in `rstudio tx`:
+### How do I know if I'm alone?
+
+**You can't know reliably.** Any check races against new agents
+appearing between your check and your action. Don't try to gate
+behaviour on it. The defensive rule below works whether you're alone
+or not.
+
+You CAN, however, get a moment-in-time read for awareness or
+debugging:
+
+```sh
+rstudio status | jq '.result.session.lock'
+# {state: "free" | "held", holder: {pid, command, started_ms} | null,
+#  inside_tx: bool}
+```
+
+Use this to debug a timeout or to surface "another agent is active"
+to the user — not as a control-flow gate.
+
+### The defensive rule
+
+| Operation | What you must do |
+|---|---|
+| Single read (`editor list`, `env list`, …) | Nothing. Reads don't lock. |
+| `observe stream` | Nothing. It's a read; runs alongside everything. |
+| Single write (one `rstudio` invocation) | Nothing. Per-call mutex protects you. |
+| Multi-call sequence where any call reads state used by a later call | **Always wrap in `rstudio tx --`.** |
+
+The third row covers everything where you'd be tempted to "just check
+first and then write". Don't. The check and the write are two CLI
+invocations; another agent can interleave. Wrap.
+
+### `rstudio tx --` in practice
 
 ```sh
 # Atomic read-modify-write — no other agent can interleave.
@@ -128,31 +157,36 @@ the env var and skips its own per-call lock acquisition (the parent
 already holds it). Kernel cleanup on parent exit — there are no
 stale locks.
 
-Use `tx` when:
-- You read state and then conditionally write based on what you read.
-- You need a multi-step edit on the same document (`select` then
-  `insert`, etc.) without another agent moving the cursor mid-flight.
-- You're orchestrating R state setup followed by execution.
+Cost when alone: ~10ms (one fork). Cost of NOT using tx when not
+alone: silent data loss. Always wrap multi-call write sequences.
 
-Don't put inside a `tx`:
+### What NOT to put inside a `tx`
+
 - `rstudio observe stream` — it never returns and would hold the lock
   indefinitely. (Read-only; doesn't need tx anyway.)
-- `rstudio ui dialog` and other `ui` commands — they block until the
-  user dismisses the modal, which freezes the rsession for everyone.
+- `rstudio ui dialog` and other `ui` commands — they block the
+  rsession until the user dismisses the modal, which freezes every
+  other agent's RPC during that time.
+- Anything else that you can't ensure terminates promptly.
 
-Interactive mode is just `rstudio tx -- bash` (or `rstudio tx` for
-`$SHELL`). The whole shell session runs inside the transaction. Use
-this when you want a series of commands with results fed back to you
-between calls (the LLM-agent equivalent of a REPL inside a lock).
+### Interactive mode
 
-`tx` provides **serialization**, not full transactionality — if your
-3rd command fails, the first two are already applied. Tx assures no
-other agent interleaves; rollback is your responsibility (snapshot
-state before, restore on error).
+`rstudio tx -- bash` (or `rstudio tx` for `$SHELL`) gives you a shell
+with the lock held — the whole shell session runs inside the
+transaction. Useful when you want a series of commands with results
+fed back to you between calls (the LLM-agent equivalent of a REPL
+inside a lock). Exit the shell to release the lock.
 
-The global `--no-lock` flag bypasses all locking — for debugging or
-when you're certain no other agent is active. Don't use it from
-within an LLM-driven agent unless you understand the consequences.
+### Serialisation, not full ACID
+
+`tx` provides serialisation (no other agent interleaves), not
+transactionality. If your 3rd command fails, the first two are
+already applied. Rollback is your responsibility (snapshot state
+before, restore on error).
+
+The global `--no-lock` flag bypasses all locking. Don't use it from
+within an LLM-driven agent unless you understand the consequences —
+it's intended for debugging and solo scripts.
 
 ## Patterns worth knowing
 

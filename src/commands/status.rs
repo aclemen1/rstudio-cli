@@ -53,6 +53,7 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
 
     let session_id = derive_session_id(session);
     let client_id = client_id::resolve_client_id(session).ok();
+    let lock_block = lock_block(session_id.as_deref());
 
     let session_block = json!({
         "id": session_id,
@@ -60,6 +61,7 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
         "sources_dir": session.sources_dir.as_ref().map(|p| p.display().to_string()),
         "state_path": session.state_path.as_ref().map(|p| p.display().to_string()),
         "active_project": r_info.get("active_project").cloned().unwrap_or(Value::Null),
+        "lock": lock_block,
     });
 
     let rsession = json!({
@@ -191,6 +193,35 @@ fn derive_session_id(session: &Session) -> Option<String> {
         .or(session.sources_dir.as_ref())?;
     let name = dir.file_name()?.to_str()?;
     name.strip_prefix("session-").map(str::to_string)
+}
+
+/// Snapshot of the per-session writer lock. Information-only: a holder
+/// shown here may have released by the time the agent acts on it. The
+/// real protection is the per-call mutex (Phase 1) and `rstudio tx`
+/// for multi-call atomicity. Use this field to debug timeouts, audit
+/// who's currently active, or signal awareness — never to gate logic.
+fn lock_block(session_id: Option<&str>) -> Value {
+    let inside = crate::lock::SessionLock::inside_tx();
+    let Some(id) = session_id else {
+        return json!({ "state": "unknown", "holder": null, "inside_tx": inside });
+    };
+    let state = crate::lock::inspect(id);
+    let (state_label, holder) = match state.holder {
+        Some(h) => (
+            "held",
+            json!({
+                "pid": h.pid,
+                "command": h.command,
+                "started_ms": h.started_ms,
+            }),
+        ),
+        None => ("free", Value::Null),
+    };
+    json!({
+        "state": state_label,
+        "holder": holder,
+        "inside_tx": inside,
+    })
 }
 
 /// Count documents currently open in the Source pane by enumerating the

@@ -40,8 +40,8 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.8.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 15 categories and 81 actions, with multi-agent safety via
+**v0.8.1** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 16 categories and 84 actions, with multi-agent safety via
 per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
@@ -206,7 +206,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.8.0
+rstudio version                 # 0.8.1
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

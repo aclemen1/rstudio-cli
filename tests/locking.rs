@@ -13,9 +13,29 @@
 //! the test binary still passes everywhere.
 
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_rstudio");
+
+/// Tests in this file all target the same per-session `flock` (the
+/// dev machine's live RStudio session). Running them in parallel —
+/// cargo's default — makes them contend with each other: a test that
+/// expects to acquire the lock immediately may instead wait for
+/// another test's `sleep`. We serialise everything that takes or
+/// observes the lock through this global mutex. The four meta-CLI
+/// tests at the top (version, observe events, policy show, env var
+/// echo) don't touch the lock and don't need it.
+static LOCK_TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    // PoisonError handling: if a previous test panicked while holding
+    // the mutex, the lock is "poisoned". We don't care — clear and go.
+    match LOCK_TEST_SERIAL.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
 
 fn rstudio_available() -> bool {
     Command::new(BIN)
@@ -82,6 +102,7 @@ fn tx_serializes_two_writers() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let start = Instant::now();
     let mut a = Command::new(BIN)
         .args(["tx", "--", "sleep", "0.4"])
@@ -118,6 +139,7 @@ fn no_lock_allows_parallel_writers() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let start = Instant::now();
     let mut a = Command::new(BIN)
         .args(["--no-lock", "tx", "--", "sleep", "0.5"])
@@ -144,6 +166,7 @@ fn tx_sets_held_env_var() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let out = Command::new(BIN)
         .args(["tx", "--", "bash", "-c", "echo \"$RSTUDIO_TX_HELD\""])
         .output()
@@ -170,6 +193,7 @@ fn tx_propagates_exit_code() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let status = Command::new(BIN)
         .args(["tx", "--", "bash", "-c", "exit 42"])
         .status()
@@ -186,6 +210,7 @@ fn nested_rstudio_inside_tx_does_not_deadlock() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let bin = BIN;
     let script = format!("{bin} status > /dev/null && {bin} observe events > /dev/null && echo ok");
     let out = Command::new(BIN)
@@ -213,6 +238,7 @@ fn reads_dont_block_on_active_tx() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let mut tx = Command::new(BIN)
         .args(["tx", "--", "sleep", "2"])
         .spawn()
@@ -240,6 +266,7 @@ fn lock_timeout_reports_holder() {
         eprintln!("skipping: RStudio not running");
         return;
     }
+    let _serial = serial();
     let mut holder = Command::new(BIN)
         .args(["tx", "--", "sleep", "1"])
         .spawn()

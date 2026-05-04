@@ -130,6 +130,10 @@ pub const CATEGORIES: &[CategorySpec] = &[
         name: "policy",
         description: "Security policy: block / unblock commands by category or action. No session required.",
     },
+    CategorySpec {
+        name: "meta",
+        description: "Meta-CLI commands (version, status, tx) — not RPC-bound but documented here so agents discovering surface via `schema` can find them.",
+    },
 ];
 
 /// Aggregated registry. Each module that owns actions exposes them as a
@@ -150,6 +154,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::ui::ACTIONS,
         crate::commands::observe::ACTIONS,
         crate::commands::policy_cmd::ACTIONS,
+        crate::commands::meta::ACTIONS,
     ] {
         out.extend(slice.iter());
     }

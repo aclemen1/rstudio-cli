@@ -4,6 +4,48 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-05-04
+
+### Added — `session.lock` field in `rstudio status`, plus `meta` schema category
+
+Three small additions that make the multi-agent locking design
+discoverable by an agent that's reading the schema and querying status,
+without having to read the README or skill first:
+
+- **`status.session.lock`** — a moment-in-time read of the per-session
+  lock state: `{state: "free" | "held", holder: {pid, command,
+  started_ms} | null, inside_tx: bool}`. Information-only; the holder
+  can release between the read and the next call. Use to debug
+  timeouts or surface "another agent is active" awareness, never as a
+  control-flow gate.
+
+- **`schema meta`** category, with three actions: `version`, `status`,
+  `tx`. These were previously top-level commands without schema
+  entries, invisible to agents discovering surface via `rstudio
+  schema`. The `meta tx` action description carries the full
+  multi-agent transactional contract: when to use tx, what
+  `RSTUDIO_TX_HELD` means, what NOT to put inside it, the
+  serialisation-vs-ACID note, the defensive-default rule.
+
+- **Embedded skill update** (`src/skills/rstudio.md`) — explicit
+  defensive rule for agents: there's no reliable "am I alone" check,
+  so always wrap multi-call write sequences in `rstudio tx --`,
+  regardless of perceived solitude. Cost when alone: ~10ms (fork);
+  cost when not alone without tx: silent data loss.
+
+Bumps action count 81 → 84 (one per meta-CLI command), category count
+15 → 16 (the new `meta` category).
+
+### Fixed — Integration tests serialise on shared session lock
+
+`tests/locking.rs` now uses a global `Mutex` to serialise tests that
+all target the same per-session `flock` on the dev machine's live
+RStudio session. Previously cargo's parallel test runner caused them
+to contend with each other (a test expecting an immediate acquire
+would instead wait for another test's `sleep`). All 11 integration
+tests now pass under `cargo test --test locking` without
+`--test-threads=1`.
+
 ## [0.8.0] — 2026-05-04
 
 ### Added — Multi-agent safety: per-session lock + `rstudio tx`

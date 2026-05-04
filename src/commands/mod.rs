@@ -2,6 +2,7 @@ pub mod console;
 pub mod editor;
 pub mod env;
 pub mod job;
+pub mod meta;
 pub mod observe;
 pub mod pane;
 pub mod policy_cmd;

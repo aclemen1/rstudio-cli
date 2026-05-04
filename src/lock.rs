@@ -112,6 +112,50 @@ impl SessionLock {
     }
 }
 
+/// Snapshot of the lock state for a given session, read without
+/// acquiring. Used by `rstudio status` to report `session.lock` and
+/// help agents/humans understand whether another agent is currently
+/// writing to the session.
+///
+/// Note: this is a *moment-in-time* read. The state can change between
+/// the inspect and the next operation — agents must not gate behaviour
+/// on it (use `rstudio tx --` for atomicity instead). Information-only.
+#[derive(Debug)]
+pub struct LockState {
+    pub holder: Option<LockHolder>,
+}
+
+#[derive(Debug)]
+pub struct LockHolder {
+    pub pid: u64,
+    pub command: String,
+    pub started_ms: u64,
+}
+
+pub fn inspect(session_id: &str) -> LockState {
+    let dir = match lock_dir() {
+        Ok(d) => d,
+        Err(_) => return LockState { holder: None },
+    };
+    let sidecar = dir.join(format!("session-{session_id}.holder.json"));
+    let v = match read_sidecar(&sidecar) {
+        Some(v) => v,
+        None => return LockState { holder: None },
+    };
+    let holder = LockHolder {
+        pid: v.get("pid").and_then(|x| x.as_u64()).unwrap_or(0),
+        command: v
+            .get("command")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        started_ms: v.get("started_ms").and_then(|x| x.as_u64()).unwrap_or(0),
+    };
+    LockState {
+        holder: Some(holder),
+    }
+}
+
 fn lock_dir() -> Result<PathBuf, CliError> {
     dirs::config_dir()
         .map(|p| p.join("rstudio-cli").join("locks"))
