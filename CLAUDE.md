@@ -11,15 +11,33 @@ embedded skill markdown via `__VERSION__` at compile time).
 1. Bump `Cargo.toml`, add a `[X.Y.Z] — YYYY-MM-DD` section to
    `CHANGELOG.md`, update any `README.md` example that hard-codes a
    version (e.g. `rstudio version # X.Y.Z`).
-2. Commit on `main` of `aclemen1/rstudio-cli` (Conventional Commits,
+2. **Run the local preflight gauntlet** — same checks as CI on `main`,
+   plus `cargo build --release` to mirror what `release.yml` does:
+
+   ```sh
+   cargo fmt --check && \
+     cargo clippy --all-targets -- -D warnings && \
+     cargo test --lib && \
+     cargo build --release
+   ```
+
+   Why this step exists: `.github/workflows/release.yml` runs only
+   `cargo build` (no `cargo clippy`, no `cargo test`). A tag whose
+   source has a clippy lint will still produce valid release binaries
+   — but the CI workflow on `main` (`.github/workflows/ci.yml`) WILL
+   fail on the same commit. Ship 0.8.2 hit exactly this: lint slipped
+   through, binaries shipped fine, but CI on `main` went red until a
+   follow-up `fix(ci)` commit. Run the gauntlet first; tag second.
+
+3. Commit on `main` of `aclemen1/rstudio-cli` (Conventional Commits,
    no `Co-Authored-By` trailers).
-3. Push tag `vX.Y.Z`. This triggers `.github/workflows/release.yml`,
+4. Push tag `vX.Y.Z`. This triggers `.github/workflows/release.yml`,
    which builds 4 targets
    (`{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}`) and publishes
    the GitHub Release with `tar.gz` artifacts.
-4. Wait for the Actions run to publish the release (≈10 min;
+5. Wait for the Actions run to publish the release (≈10 min;
    `gh run watch`, then `gh release view vX.Y.Z`).
-5. Update tap `aclemen1/homebrew-tap`, file `Formula/rstudio-cli.rb`:
+6. Update tap `aclemen1/homebrew-tap`, file `Formula/rstudio-cli.rb`:
    - `gh release download vX.Y.Z -R aclemen1/rstudio-cli -p '*.tar.gz' --dir <tmp>`.
      Don't `curl` the asset URL — GitHub returns a redirect to a signed
      S3 URL needing `gh` auth; raw curl yields a 9-byte error file.
