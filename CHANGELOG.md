@@ -4,6 +4,74 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-05-04
+
+### Changed (BREAKING) — `project` is now a top-level category
+
+Project lifecycle commands move out of `session` into a dedicated
+`project` category. Migration is a one-token edit:
+
+| Before (v0.9.x) | After (v0.10.0) |
+|---|---|
+| `rstudio session project` | `rstudio project current` |
+| `rstudio session open-project <path>` | `rstudio project open <path>` |
+| MCP tool `session_project` | `project_current` |
+| MCP tool `session_open_project` | `project_open` |
+
+The `session` category retains only what genuinely concerns the R
+session: `info`, `restart`, `list`. This is a clean break — the old
+spellings don't work anymore. Pre-1.0 SemVer permits breaking changes
+in a minor bump; we believe adoption is low enough that the
+ergonomics win is worth the migration cost.
+
+### Added — three new project creation actions
+
+Three new actions under the `project` category cover the full
+lifecycle from directory to open RStudio project:
+
+- **`project new <path>`** — creates a NEW directory + a default
+  `.Rproj`, optionally scaffolds (`R/` + `README.md` + `.gitignore`),
+  optionally `git init`, then (by default) opens. Refuses if the
+  path already exists.
+- **`project init <path>`** — makes an EXISTING directory a project:
+  writes a `.Rproj` (refuses if one already exists), optional
+  scaffold/git, then opens. Useful to upgrade plain R workspaces.
+- **`project clone <url> [<path>]`** — `git clone` the URL, add a
+  `.Rproj` if the repo doesn't have one, then open. The destination
+  path defaults to the URL's basename minus `.git`.
+
+The three creation commands share helpers (`write_rproj_file`,
+`scaffold_dir`, `git_init`, `git_clone`) and emit a uniform JSON
+result `{path, rproj, scaffolded, git_initialized, opened}`.
+
+**Pure-Rust filesystem path**: with `--no-open`, `project new` /
+`init` / `clone` do not require RStudio to be running. They only
+write files (and optionally invoke `git`). This makes them safe to
+use in CI scripts, headless setup, or before launching RStudio for
+the first time.
+
+Auto-exposed via MCP as `project_new`, `project_init`, `project_clone`
+(plus `project_open` / `project_current`).
+
+Action count: 85 → 88. Categories: 16 → 17.
+
+Tests: 5 unit tests in `src/commands/project.rs` cover the helpers
+(URL parsing for clone, .Rproj template write + overwrite refusal,
+scaffold idempotence, .Rproj detection).
+
+### Added — `Skill change ⇒ version bump` convention in CLAUDE.md
+
+Both skill files (`src/skills/rstudio.md` and
+`src/skills/rstudio-mcp.md`) are embedded at compile time, so any
+non-trivial change requires a new binary version for users to see
+the update. Codified explicitly in CLAUDE.md so future contributors
+remember to bump.
+
+### Internal — `.gitignore` hardened
+
+Added `.Rhistory`, `.RData`, `.Ruserdata` to the project's `.gitignore`
+so working in the repo doesn't leak R session state.
+
 ## [0.9.2] — 2026-05-04
 
 ### Documentation — MCP server installation procedure

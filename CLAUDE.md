@@ -91,6 +91,15 @@ skill (often both) in the same commit. Keep the two skills in sync on
 shared semantics — multi-agent rules in particular must say the same
 thing in both places (only the spelling of how to invoke a tx differs).
 
+**Skill change ⇒ version bump.** Both skill files (`src/skills/rstudio.md`
+and `src/skills/rstudio-mcp.md`) are baked into the binary at compile
+time via `include_str!` and substituted with the binary version at
+runtime. Any non-trivial change to either content warrants a new
+binary version (patch bump is fine for clarifications; minor for
+substantive additions) — otherwise users who installed the skill at
+the prior version keep seeing the old text. Trivial typo fixes that
+don't change the conveyed information can ship in any next release.
+
 ## When adding or changing a CLI command
 
 A user-visible command change is not done until three surfaces agree.

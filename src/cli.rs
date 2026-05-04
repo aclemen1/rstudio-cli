@@ -8,8 +8,8 @@ use crate::VERSION;
 use std::time::Duration;
 
 use crate::commands::{
-    console, editor, env, job, mcp, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session,
-    skill, status, term, tx, ui,
+    console, editor, env, job, mcp, observe, pane, policy_cmd, pref, project, r, raw, schema_cmd,
+    session, skill, status, term, tx, ui,
 };
 use crate::error::CliError;
 use crate::lock::SessionLock;
@@ -120,7 +120,11 @@ enum Command {
     #[command(subcommand)]
     Skill(skill::SkillCmd),
 
-    /// Whole-session info and lifecycle (version, project, restart).
+    /// Project lifecycle: create / init existing dir / clone from git / open / current.
+    #[command(subcommand)]
+    Project(project::ProjectCmd),
+
+    /// Whole-session info and lifecycle (info, restart, list).
     #[command(subcommand)]
     Session(session::SessionCmd),
 
@@ -219,8 +223,13 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         | Command::Skill(_)
         | Command::Policy(_) => None,
         // Session: differentiate the two destructive actions for fine-grained blocking.
+        // Project: differentiate the destructive / disk-mutating actions.
+        Command::Project(project::ProjectCmd::Open { .. }) => Some("project.open"),
+        Command::Project(project::ProjectCmd::New { .. }) => Some("project.new"),
+        Command::Project(project::ProjectCmd::Init { .. }) => Some("project.init"),
+        Command::Project(project::ProjectCmd::Clone { .. }) => Some("project.clone"),
+        Command::Project(_) => Some("project"),
         Command::Session(session::SessionCmd::Restart { .. }) => Some("session.restart"),
-        Command::Session(session::SessionCmd::OpenProject { .. }) => Some("session.open-project"),
         Command::Session(_) => Some("session"),
         // R: differentiate code execution from poll.
         Command::R(r::RCmd::Exec { .. }) => Some("r.exec"),
@@ -335,6 +344,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         // Skill returns Reply directly: 'show' is text-raw markdown,
         // 'install' is human-friendly with ✓/✗ marks.
         Command::Skill(cmd) => skill::run(&cmd),
+        Command::Project(cmd) => project::run(&cmd, overrides).map(Reply::Wrapped),
         // `session list` does not need a live session — dispatch before detect.
         Command::Session(session::SessionCmd::List) => session::list_sessions().map(Reply::Wrapped),
         Command::Session(cmd) => {
@@ -429,9 +439,12 @@ fn needs_write_lock(cmd: &Command) -> bool {
         // Pane: all writes (open viewer / save plot / preview / markers / highlight-ui all mutate).
         Command::Pane(_) => true,
 
-        // Session: info / project / list are reads; restart / open-project are writes.
+        // Project: `current` is a read; everything else mutates IDE state.
+        Command::Project(project::ProjectCmd::Current) => false,
+        Command::Project(_) => true,
+
+        // Session: info / list are reads; restart is a write.
         Command::Session(session::SessionCmd::Info)
-        | Command::Session(session::SessionCmd::Project)
         | Command::Session(session::SessionCmd::List) => false,
         Command::Session(_) => true,
 

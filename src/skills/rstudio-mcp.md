@@ -111,6 +111,31 @@ wall time ≈ sum of per-call time. Implications:
   to force a reload — safe to call unconditionally (no-op when the
   file isn't open or has unsaved edits).
 
+## Project lifecycle
+
+Five tools under the `project_` prefix:
+
+- **`project_current`** — return the active project path (null if
+  none). Read.
+- **`project_open(path, new_session?)`** — open an existing project.
+  Replaces the session (R restarts) unless `new_session` is true.
+- **`project_new(path, scaffold?, git?, no_open?, new_session?)`** —
+  create a NEW directory + `.Rproj` template, optionally scaffold
+  `R/` + `README.md` + `.gitignore`, optionally `git init`, then
+  (default) open. Refuses if the path already exists.
+- **`project_init(path, scaffold?, git?, no_open?, new_session?)`** —
+  make an EXISTING directory a project: writes a `.Rproj` (refuses
+  if one already exists), optional scaffold/git, then open.
+- **`project_clone(url, path?, no_open?, new_session?)`** — `git
+  clone` the URL, add a `.Rproj` if missing, then open.
+
+`project_open` / `project_new` / `project_init` / `project_clone` are
+DISRUPTIVE — they restart the R session unless `new_session: true`.
+Make sure you've snapshotted any in-flight R state you care about
+before calling these. Same defensive rule as for any sequence: wrap
+in a tx if you're chaining (`project_clone` → `editor_open` → … must
+use tx_begin/end to be atomic with respect to other agents).
+
 ## Hard constraints
 
 - **Never invoke `rpc` with method `client_init`**. It's blacklisted at

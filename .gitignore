@@ -4,3 +4,6 @@ Cargo.lock.bak
 /scratch/
 .Rproj.user
 *.Rproj
+.Rhistory
+.RData
+.Ruserdata

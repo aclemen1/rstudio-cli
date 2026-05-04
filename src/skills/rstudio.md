@@ -268,6 +268,22 @@ it's intended for debugging and solo scripts.
 - **Inspect a variable without loading it**: `rstudio env info <name>`
   returns class/typeof/length/dim/size_bytes only. For the formatted
   contents, `rstudio env contents <name>`.
+- **Project lifecycle** — under `rstudio project`:
+  - `project current` — return the active project path (null if none).
+  - `project open <path>` — open an existing project (replaces session
+    unless `--new-session`).
+  - `project new <path> [--scaffold] [--git] [--no-open]` — create a
+    NEW directory + a `.Rproj`, optionally scaffold `R/` + `README.md`
+    + `.gitignore`, optionally `git init`. With `--no-open` works
+    even without RStudio running (pure filesystem).
+  - `project init <path> [--scaffold] [--git] [--no-open]` — make
+    an EXISTING directory a project (writes `.Rproj`, optionally
+    scaffolds, optionally initialises git). Refuses if a `.Rproj`
+    already exists.
+  - `project clone <git-url> [<path>] [--no-open]` — `git clone`
+    the URL, then add a `.Rproj` if the repo doesn't have one, then
+    open. Useful to bring an external R codebase into the IDE in
+    one shot.
 - **Sync the editor buffer after an external file write**: if you
   modify a file's content via tools other than `rstudio editor *`
   (e.g. `Edit`, `Write`, `MultiEdit`, shell redirection, `git`), the

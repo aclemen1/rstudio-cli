@@ -8,6 +8,7 @@ pub mod observe;
 pub mod pane;
 pub mod policy_cmd;
 pub mod pref;
+pub mod project;
 pub mod r;
 pub mod raw;
 pub mod schema_cmd;

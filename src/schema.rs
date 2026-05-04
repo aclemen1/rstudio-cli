@@ -107,8 +107,12 @@ pub const CATEGORIES: &[CategorySpec] = &[
         description: "Manage the embedded Claude Code skill (show / install).",
     },
     CategorySpec {
+        name: "project",
+        description: "Project lifecycle: create / init existing dir / clone from git / open / current.",
+    },
+    CategorySpec {
         name: "session",
-        description: "Whole-session info and lifecycle (version, mode, project, restart).",
+        description: "Whole-session info and lifecycle (version, mode, restart, list).",
     },
     CategorySpec {
         name: "pref",
@@ -148,6 +152,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::env::ACTIONS,
         crate::commands::pane::ACTIONS,
         crate::commands::skill::ACTIONS,
+        crate::commands::project::ACTIONS,
         crate::commands::session::ACTIONS,
         crate::commands::pref::ACTIONS,
         crate::commands::job::ACTIONS,
