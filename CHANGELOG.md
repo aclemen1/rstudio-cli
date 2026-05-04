@@ -4,6 +4,71 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-05-04
+
+### Added — `rstudio mcp`: native MCP server over stdio
+
+Exposes the entire CLI surface as **Model Context Protocol** tools.
+Configure once with your MCP client and Claude Code / Cline / Cursor /
+Continue / Claude Desktop see ~90 native tools (`editor_open`,
+`editor_read_buffer`, `r_exec`, `observe_events`, `meta_status`, …)
+in their tool catalog. No more shell-quoting issues, no more parsing
+JSON envelopes manually — the LLM calls them like any other tool.
+
+```sh
+# One-time setup with Claude Code:
+claude mcp add rstudio --scope user -- rstudio mcp
+```
+
+The protocol is JSON-RPC 2.0 over stdio. We implement `initialize`,
+`tools/list`, `tools/call`, `ping`, and gracefully handle
+notifications, parse errors (-32700), unknown methods (-32601).
+
+**Tool dispatch** = subprocess spawn (`rstudio <category> <action>
+[args]`), which reuses 100% of the existing dispatch + per-call lock
+infrastructure. Subprocess overhead (~10ms) is negligible at LLM
+pace. The category-action arg translation is auto-derived from the
+`ActionSpec` registry: positionals stay positional, `--flag` params
+become object properties in the tool's `inputSchema`.
+
+**Multi-agent transactionality** transposes from CLI to MCP via three
+new MCP-native tools:
+
+- `tx_begin` — server acquires the per-session writer lock, holds it
+  in struct state.
+- `tx_end` — drops the lock (kernel close on FD).
+- `tx_run` — script-style: takes `{operations: [{tool, arguments}]}`,
+  runs all under one tx with auto-cleanup on error.
+
+While in tx, the server sets `RSTUDIO_TX_HELD=1` on every subprocess;
+child rstudio invocations detect the env var and skip their own
+per-call lock — same fork-inherit pattern as `rstudio tx -- <child>`.
+The MCP server plays the role of "tx parent" instead of a shell.
+
+**Cross-surface coherence**: a Claude Code MCP server, a Cline MCP
+server, a shell `rstudio editor write`, and a human in `rstudio tx --
+bash` all contend on the same `~/.config/rstudio-cli/locks/session-<id>.lock`.
+The kernel arbitrates. No competing tool offers comparable
+cross-surface multi-agent safety.
+
+Tests:
+- 6 unit tests in `src/commands/mcp.rs` cover name mapping (mcp_name
+  / build_argv / build_input_schema), initialize handler, tools/list
+  shape.
+- 12 integration tests in `tests/mcp.rs` drive the binary as a
+  subprocess: initialize, tools/list, ping, notification produces no
+  response, parse error → -32700, unknown method → -32601, unknown
+  tool → isError=true, observe_events without RStudio. The
+  RStudio-dependent ones (tx_begin, tx_run, status visible in tx)
+  skip cleanly when no session is reachable.
+
+Skipped via MCP: `meta_tx` (replaced by tx_begin/end/run), `observe
+stream` (long-running — agent should invoke via Bash if needed),
+`tx` itself (CLI-only). Everything else flows through.
+
+Bumps Cargo.toml 0.8.2 → 0.9.0 (minor — substantial new feature, no
+breaking changes to existing surface).
+
 ## [0.8.2] — 2026-05-04
 
 ### Added — `rstudio observe replay`

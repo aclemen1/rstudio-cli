@@ -99,6 +99,41 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 - Postbacks (`editor edit`) and console_input (`r send`) don't go
   through the R queue and therefore aren't subject to that limit.
 
+## MCP server mode
+
+`rstudio mcp` exposes the entire CLI surface as MCP tools over stdio.
+A user configures their MCP client (Claude Code, Cline, Cursor,
+Continue, Claude Desktop) once with:
+
+```sh
+claude mcp add rstudio --scope user -- rstudio mcp
+```
+
+After that, `~90` tools appear in the agent's tool catalog. Naming:
+`{category}_{action}` with hyphens replaced by underscores —
+`editor.read-buffer` becomes `editor_read_buffer`, `meta.status`
+becomes `meta_status`, etc.
+
+For multi-call atomicity (the same use cases that warrant `rstudio tx
+--` from the CLI), three MCP-native tools mirror the lock semantics:
+
+- **`tx_begin`** — acquire the per-session writer lock; hold across
+  subsequent tool-calls.
+- **`tx_end`** — release. Pair with tx_begin.
+- **`tx_run`** — `{operations: [{tool, arguments}]}` — execute a list
+  under one tx with auto-cleanup on error. Use when you can pre-
+  compute the entire sequence.
+
+The same defensive rule from the CLI applies: any sequence of MCP
+tool-calls that depends on intermediate state read from earlier calls
+must run inside a tx (begin/end pair, or tx_run). Cost when alone:
+~10ms (one extra tool-call). Cost of skipping: silent data loss when
+another agent shows up between your read and your write.
+
+The MCP server's lock contends with shell `rstudio` invocations and
+other MCP servers via the same `flock` — there's no special MCP-only
+coordination.
+
 ## Multi-agent safety: the per-session lock and `rstudio tx`
 
 When two agents run `rstudio` against the same RStudio session, write

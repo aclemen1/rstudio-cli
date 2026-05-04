@@ -8,8 +8,8 @@ use crate::VERSION;
 use std::time::Duration;
 
 use crate::commands::{
-    console, editor, env, job, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session, skill,
-    status, term, tx, ui,
+    console, editor, env, job, mcp, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session,
+    skill, status, term, tx, ui,
 };
 use crate::error::CliError;
 use crate::lock::SessionLock;
@@ -146,6 +146,14 @@ enum Command {
     ///   rstudio tx            # same, defaults to $SHELL
     Tx(tx::TxCmd),
 
+    /// Run as an MCP (Model Context Protocol) server over stdio.
+    /// Exposes the entire CLI surface as MCP tools so Claude Code,
+    /// Cline, Cursor, Continue, etc. can invoke them natively. Includes
+    /// `tx_begin` / `tx_end` / `tx_run` tools that map the per-session
+    /// writer lock onto the LLM's tool-call sequence. Configure the
+    /// client with `claude mcp add rstudio --scope user -- rstudio mcp`.
+    Mcp(mcp::McpCmd),
+
     /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
 
@@ -229,6 +237,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         Command::Ui(_) => Some("ui"),
         Command::Observe(_) => Some("observe"),
         Command::Tx(_) => Some("tx"),
+        Command::Mcp(_) => Some("mcp"),
         Command::Rpc(_) => Some("rpc"),
         Command::Postback(_) => Some("postback"),
     };
@@ -239,6 +248,17 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
     // Tx: holds its own lock and execs a child. Never returns through
     // the standard reply path — std::process::exit propagates the
     // child's status code.
+    // MCP: long-running stdio server. No top-level lock; the server
+    // itself manages locks via tx_begin / tx_end and per-tool-call
+    // subprocess spawns (which acquire their own per-call lock).
+    if matches!(&cli.command, Command::Mcp(_)) {
+        let Command::Mcp(mcp_cmd) = cli.command else {
+            unreachable!()
+        };
+        let code = mcp::run(&mcp_cmd, overrides)?;
+        std::process::exit(code);
+    }
+
     if matches!(&cli.command, Command::Tx(_)) {
         let Command::Tx(tx_cmd) = cli.command else {
             unreachable!()
@@ -353,6 +373,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         // Tx is handled by an earlier early-return branch. This arm
         // satisfies the exhaustiveness check.
         Command::Tx(_) => unreachable!("Tx handled before this match"),
+        Command::Mcp(_) => unreachable!("Mcp handled before this match"),
     }
 }
 
@@ -370,8 +391,8 @@ fn needs_write_lock(cmd: &Command) -> bool {
         | Command::Schema(_)
         | Command::Skill(_)
         | Command::Policy(_) => false,
-        // Tx: handles its own locking.
-        Command::Tx(_) => false,
+        // Tx and Mcp: each handles its own locking.
+        Command::Tx(_) | Command::Mcp(_) => false,
 
         // Editor: read-only subcommands.
         Command::Editor(editor::EditorCmd::Read { .. })

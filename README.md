@@ -40,9 +40,10 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.8.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 16 categories and 85 actions, with multi-agent safety via
-per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
+**v0.9.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 16 categories and 85 actions. Multi-agent safety via per-session
+lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
+surface to Claude Code, Cline, Cursor, Continue and any other MCP client. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
@@ -62,7 +63,7 @@ per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |
 | escape   | `rpc` `postback` | Raw JSON-RPC / postback |
-| meta     | `version` `status` `tx` | Meta-CLI commands (no rsession schema entry) |
+| meta     | `version` `status` `tx` `mcp` | Meta-CLI commands (no rsession schema entry) |
 
 Run `rstudio schema` for the auto-generated catalog of every action.
 
@@ -88,6 +89,7 @@ will correct it promptly.
 | **AI integration** | | | | | |
 | Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Cursor / Cline / VS Code Copilot | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Native MCP server (stdio) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Usable by any shell, script or Makefile (no MCP) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Self-describing schema with lazy drill-down | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Full `rstudioapi` traceability per action | ✓ | ✗ | ✗ | ✗ | ✗ |
@@ -144,7 +146,9 @@ will correct it promptly.
 | **Multi-agent safety** | | | | | |
 | OS-enforced per-session writer mutex (flock) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Multi-call atomicity (`tx -- <cmd>`, fork-inherit) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Multi-call atomicity in MCP (`tx_begin` / `tx_end` / `tx_run` tools) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Lock-holder attribution (PID + command + timestamp) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Cross-surface lock (CLI agents and MCP agents share the same flock) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Multi-agent collaborative protocol (LLM convention) | ✗ | ✓ | ✗ | ✗ | ✗ |
 | **Safety & output** | | | | | |
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
@@ -206,7 +210,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.8.2
+rstudio version                 # 0.9.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
