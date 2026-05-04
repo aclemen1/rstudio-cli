@@ -3,3 +3,4 @@
 Cargo.lock.bak
 /scratch/
 .Rproj.user
+*.Rproj
