@@ -275,6 +275,65 @@ cargo build --release && cp target/release/rstudio ~/.local/bin/
 rstudio skill install   # ./.claude/skills/rstudio/SKILL.md
 ```
 
+The skill is for **shell-driven** agents — it teaches a Claude Code (or
+any LLM that sees the user's filesystem) how to use the `rstudio` CLI
+from a Bash context (pipes, `--format`, `rstudio tx -- bash`, etc.).
+
+### MCP server
+
+For agents that prefer **native tool integration** over shell
+invocations, `rstudio` can run as an MCP (Model Context Protocol)
+server over stdio. The agent's MCP client spawns the server, lists
+its tools, and invokes them like any other native tool — no shell
+quoting, no JSON parsing, automatic schema validation.
+
+**Claude Code** (CLI):
+
+```sh
+claude mcp add rstudio --scope user -- rstudio mcp
+```
+
+**Claude Desktop** — edit
+`~/Library/Application Support/Claude/claude_desktop_config.json`
+(macOS) or the equivalent on Linux:
+
+```json
+{
+  "mcpServers": {
+    "rstudio": {
+      "command": "rstudio",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Cline / Continue / Cursor** — most MCP-aware extensions accept the
+same `command` + `args` shape in their settings panel. Refer to the
+extension's docs; the entry point is always `rstudio mcp`.
+
+**What you get** after configuration: the LLM sees ~90 tools in its
+catalog (`editor_open`, `editor_read_buffer`, `r_exec`, `meta_status`,
+…). Plus three transactional control tools — `tx_begin`, `tx_end`,
+`tx_run` — for atomic multi-call sequences. The MCP server's
+`initialize` response carries an embedded skill (cross-cutting agent
+guidance: defensive `tx` rule, hard constraints, R FIFO semantics)
+that clients inject into the LLM's context automatically.
+
+**Verify** the server runs:
+
+```sh
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  | rstudio mcp \
+  | jq '.result | {protocolVersion, server: .serverInfo.name, tools_promised: .capabilities.tools}'
+```
+
+You can run the CLI **and** the MCP server simultaneously — they
+share the same per-session writer lock, so a Claude Code MCP server,
+a Cline MCP server, and a shell `rstudio editor write` invocation
+all serialise correctly via the kernel without any manual
+coordination.
+
 ## Auto-detection
 
 The CLI reads the following at each invocation:
