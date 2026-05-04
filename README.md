@@ -41,7 +41,7 @@ disrupting your browser tab.
 ## Status
 
 **v0.7.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 15 categories and 80 actions. Live-tested end-to-end on both
+across 15 categories and 81 actions. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
@@ -56,7 +56,7 @@ across 15 categories and 80 actions. Live-tested end-to-end on both
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
 | `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
-| `observe`| (single command) | Stream session-state changes as JSON Lines on stdout |
+| `observe`| `stream` `events` | Live JSONL stream of session changes; static catalog of event types |
 | `policy` | `show` `block` `unblock` | Per-user block list (category or action) |
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |

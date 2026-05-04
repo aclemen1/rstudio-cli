@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
 use crate::commands::editor::is_document_id;
@@ -48,11 +48,45 @@ use crate::session::Session;
 const MIN_INTERVAL_S: f64 = 0.25;
 const MAX_INTERVAL_S: f64 = 60.0;
 
-pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
-    category: "observe",
-    name: "observe",
-    summary: "Stream session-state changes as JSON Lines on stdout (live tail).",
-    description: "Polls the rsession at a configurable interval and emits one JSON \
+pub const ACTIONS: &[ActionSpec] = &[
+    ActionSpec {
+        category: "observe",
+        name: "events",
+        summary: "Print the static catalog of event types this version emits.",
+        description: "Returns a JSON document describing every event type emitted by `observe stream`, \
+             with per-type tier (1 / 2 / 3), source (which file / RPC / R script populates it), \
+             payload shape, whether it appears in the initial snapshot, and a one-line \
+             description. Useful for agents discovering the surface, for downstream consumers \
+             (parsers / validators), and for documentation. \
+             \
+             The catalog is static — it reflects the events this binary version COULD emit, \
+             not what it has actually emitted in the current session. Combine with \
+             `observe stream` for the live stream.",
+        params: &[],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio observe events",
+                explanation: "Full catalog as JSON envelope.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe events | jq '.result.events[] | select(.tier==1) | .type'",
+                explanation: "Just the event types available without R impact (Tier 1).",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe events | jq '.result.events[] | select(.type | startswith(\"env.\"))'",
+                explanation: "All env.* events with their payload shape.",
+            },
+        ],
+        returns: "{version: string, events: [{type, tier, source, description, payload, initial}]}",
+        errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: None,
+    },
+    ActionSpec {
+        category: "observe",
+        name: "stream",
+        summary: "Stream session-state changes as JSON Lines on stdout (live tail).",
+        description: "Polls the rsession at a configurable interval and emits one JSON \
          Line per detected change. Three coverage tiers, selected with --tier: \
          \
          Tier 1 (file-watching only, never touches R): document open / close / \
@@ -79,69 +113,87 @@ pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
          On startup, emits one event per piece of currently-known state so a \
          fresh observer sees the initial state. Output is JSONL on stdout (NOT \
          the AI-native envelope contract). SIGPIPE is reset to default so \
-         `rstudio observe | head -n 5` exits cleanly. \
+         `rstudio observe stream | head -n 5` exits cleanly. \
          \
          With --once, takes a single snapshot and exits — useful for scripts.",
-    params: &[
-        ParamSpec {
-            name: "--interval",
-            kind: ParamKind::Number,
-            required: false,
-            default: Some("1.0"),
-            allowed: &[],
-            description: "Polling interval in seconds. Clamped to [0.25, 60.0].",
-        },
-        ParamSpec {
-            name: "--once",
-            kind: ParamKind::Bool,
-            required: false,
-            default: Some("false"),
-            allowed: &[],
-            description: "Single snapshot then exit (no streaming loop).",
-        },
-        ParamSpec {
-            name: "--tier",
-            kind: ParamKind::Enum,
-            required: false,
-            default: Some("2"),
-            allowed: &["1", "2", "3"],
-            description: "Coverage tier. 1 = file-watching only, no R. 2 (default) = + cheap R \
+        params: &[
+            ParamSpec {
+                name: "--interval",
+                kind: ParamKind::Number,
+                required: false,
+                default: Some("1.0"),
+                allowed: &[],
+                description: "Polling interval in seconds. Clamped to [0.25, 60.0].",
+            },
+            ParamSpec {
+                name: "--once",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Single snapshot then exit (no streaming loop).",
+            },
+            ParamSpec {
+                name: "--tier",
+                kind: ParamKind::Enum,
+                required: false,
+                default: Some("2"),
+                allowed: &["1", "2", "3"],
+                description: "Coverage tier. 1 = file-watching only, no R. 2 (default) = + cheap R \
                  poll (env, busy, wd, search, namespaces). 3 = + heavy introspection \
                  (typed env, last_value, plot count).",
-        },
-    ],
-    examples: &[
-        ExampleSpec {
-            cmd: "rstudio observe",
-            explanation: "Stream forever at 1 Hz, Tier 2 (default).",
-        },
-        ExampleSpec {
-            cmd: "rstudio observe --tier 1",
-            explanation: "Pure file-watching, zero R impact (paranoid agent / busy R session).",
-        },
-        ExampleSpec {
-            cmd: "rstudio observe --tier 3 --interval 2",
-            explanation: "Full introspection + slower polling to limit R impact.",
-        },
-        ExampleSpec {
-            cmd: "rstudio observe | jq 'select(.type==\"console.input\")'",
-            explanation: "Live stream of every console command typed by the user.",
-        },
-        ExampleSpec {
-            cmd: "rstudio observe --once",
-            explanation: "Single snapshot of currently-known state, no loop.",
-        },
-    ],
-    returns: "JSON Lines stream on stdout (not the envelope contract). One line per event \
-         with shape {ts: string, type: string, payload: object}. Tier-2/3 events may \
-         carry `caused_by_ts_ms` referencing the rstudio_ts_ms of the triggering input.",
-    errors: &[],
-    rstudioapi_fn: None,
-    rpc_method: Some("get_source_document"),
-}];
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio observe stream",
+                explanation: "Stream forever at 1 Hz, Tier 2 (default).",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe stream --tier 1",
+                explanation: "Pure file-watching, zero R impact (paranoid agent / busy R session).",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe stream --tier 3 --interval 2",
+                explanation: "Full introspection + slower polling to limit R impact.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe stream | jq 'select(.type==\"console.input\")'",
+                explanation: "Live stream of every console command typed by the user.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe stream --once",
+                explanation: "Single snapshot of currently-known state, no loop.",
+            },
+        ],
+        returns: "JSON Lines stream on stdout (not the envelope contract). One line per event \
+             with shape {ts: string, type: string, payload: object}. Tier-2/3 events may \
+             carry `caused_by_ts_ms` referencing the rstudio_ts_ms of the triggering input.",
+        errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: Some("get_source_document"),
+    },
+];
 
+/// Top-level `observe` parser. A subcommand is mandatory: `stream` for
+/// the live JSONL flow, `events` for the static catalog.
 #[derive(Args, Debug)]
 pub struct ObserveCmd {
+    #[command(subcommand)]
+    pub sub: ObserveSub,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ObserveSub {
+    /// Stream session-state changes as JSON Lines on stdout.
+    Stream(StreamArgs),
+    /// Print the static catalog of event types this version emits
+    /// (per-type tier, payload schema, source).
+    Events,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct StreamArgs {
     /// Polling interval in seconds. Clamped to [0.25, 60.0].
     #[arg(long, default_value_t = 1.0)]
     pub interval: f64,
@@ -157,16 +209,360 @@ pub struct ObserveCmd {
 }
 
 pub fn run(cmd: &ObserveCmd, rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
-    // Reset SIGPIPE to default so `rstudio observe | head -n 5` terminates
+    match &cmd.sub {
+        ObserveSub::Events => Ok(Reply::Wrapped(Some(run_events()))),
+        ObserveSub::Stream(args) => run_stream(args, rpc, session),
+    }
+}
+
+/// Static catalog of every event type emitted by `observe stream`.
+///
+/// **Maintenance**: when you add a new `emit(...)` or `pending.push(...)`
+/// call site in this file, add a matching entry here. The catalog is
+/// part of the public surface — agents and downstream consumers rely on
+/// it for discovery and validation.
+struct EventTypeSpec {
+    /// Event `type` field as it appears in JSONL output (e.g. `"editor.saved"`).
+    name: &'static str,
+    /// Coverage tier required: 1 (file-watching), 2 (cheap R), 3 (deep R).
+    tier: u8,
+    /// Where the event comes from (file watched, RPC called, R script).
+    source: &'static str,
+    /// One-line semantic description: what triggers this event.
+    description: &'static str,
+    /// Lines of `name: type — description` describing the payload shape.
+    payload: &'static [&'static str],
+    /// True if also emitted on the initial snapshot (state seeding).
+    initial: bool,
+}
+
+const EVENT_CATALOG: &[EventTypeSpec] = &[
+    // ---- Tier 1: editor / sources ----
+    EventTypeSpec {
+        name: "editor.opened",
+        tier: 1,
+        source: "sources_dir + get_source_document RPC",
+        description: "Document opened in the source pane (initial snapshot or new tab).",
+        payload: &[
+            "id: string — 8-hex document id",
+            "path: string — filesystem path (empty for unsaved)",
+            "dirty: bool",
+            "type: string — RStudio doc type (r_source, r_markdown, ...)",
+        ],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "editor.closed",
+        tier: 1,
+        source: "sources_dir diff",
+        description: "Document closed.",
+        payload: &["id: string", "path: string"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "editor.saved",
+        tier: 1,
+        source: "get_source_document.last_known_write_time diff",
+        description: "Document buffer saved to disk.",
+        payload: &[
+            "id: string",
+            "path: string",
+            "last_write: integer — unix epoch ms",
+        ],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "editor.dirty",
+        tier: 1,
+        source: "get_source_document.dirty diff",
+        description: "Document dirty flag flipped (unsaved edits ⇄ saved).",
+        payload: &["id: string", "path: string", "dirty: bool"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "editor.renamed",
+        tier: 1,
+        source: "get_source_document.path diff",
+        description: "Document path changed (Save As, file move with handle kept).",
+        payload: &["id: string", "from: string", "to: string"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "editor.typing",
+        tier: 1,
+        source: "<docid>-contents file mtime",
+        description: "Live buffer file modified — user is typing in this document.",
+        payload: &["id: string", "path: string"],
+        initial: false,
+    },
+    // ---- Tier 1: console input (history_database tail) ----
+    EventTypeSpec {
+        name: "console.input",
+        tier: 1,
+        source: "tail history_database (line per command)",
+        description: "Console command submitted by the user (Enter pressed).",
+        payload: &[
+            "command: string — R code as typed",
+            "rstudio_ts_ms: integer — RStudio-authoritative submission time, unix epoch ms",
+        ],
+        initial: false,
+    },
+    // ---- Tier 1: rsession log ----
+    EventTypeSpec {
+        name: "rsession.error",
+        tier: 1,
+        source: "tail log/rsession-<user>.log (ERROR lines)",
+        description: "rsession server-side error logged (ERROR-level line).",
+        payload: &["line: string — full log line including timestamp"],
+        initial: false,
+    },
+    // ---- Tier 1: project ----
+    EventTypeSpec {
+        name: "project.opened",
+        tier: 1,
+        source: "projects_settings/last-project-path",
+        description: "Active project at startup (initial snapshot only).",
+        payload: &["path: string"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "project.changed",
+        tier: 1,
+        source: "projects_settings/last-project-path diff",
+        description: "Project switched (open / close / replace).",
+        payload: &["from: string|null", "to: string|null"],
+        initial: false,
+    },
+    // ---- Tier 1: markers / files / find / pane ----
+    EventTypeSpec {
+        name: "markers.active_set",
+        tier: 1,
+        source: "saved_source_markers JSON .active_set",
+        description: "Currently displayed Markers pane set (initial only).",
+        payload: &["name: string"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "markers.changed",
+        tier: 1,
+        source: "saved_source_markers JSON diff",
+        description: "Markers active set changed (new lint pass, manual switch, ...).",
+        payload: &["from: string|null", "to: string|null"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "files.dir_changed",
+        tier: 1,
+        source: "pcs/files-pane.pper JSON .path",
+        description: "Files pane navigated to a different directory.",
+        payload: &[
+            "from: string|null",
+            "to: string|null",
+            "path: string (initial)",
+        ],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "find.state",
+        tier: 1,
+        source: "pcs/find-replace-in-files.pper",
+        description: "Current Find-in-Files state (initial only).",
+        payload: &["query: string", "path: string"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "find.changed",
+        tier: 1,
+        source: "pcs/find-replace-in-files.pper diff",
+        description: "New Find-in-Files search query.",
+        payload: &["query: string", "path: string"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "pane.active_column",
+        tier: 1,
+        source: "client-state/source-column-manager.persistent",
+        description: "Active source-pane column at startup (initial only).",
+        payload: &["column: string"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "pane.active_column_changed",
+        tier: 1,
+        source: "client-state/source-column-manager.persistent diff",
+        description: "User switched source-pane column (multi-column layouts).",
+        payload: &["from: string|null", "to: string|null"],
+        initial: false,
+    },
+    // ---- Tier 2: R poll ----
+    EventTypeSpec {
+        name: "r.busy_changed",
+        tier: 2,
+        source: "execute_r_code latency heuristic (> 800 ms = busy)",
+        description: "R interpreter transitioned between idle and busy.",
+        payload: &[
+            "busy: bool",
+            "elapsed_ms: integer — duration of the probe call that detected the state",
+        ],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "r.error",
+        tier: 2,
+        source: "geterrmessage() diff",
+        description: "New R-level error captured by `geterrmessage()`.",
+        payload: &[
+            "message: string",
+            "caused_by_ts_ms: integer (optional) — rstudio_ts_ms of the triggering console.input",
+        ],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "env.added",
+        tier: 2,
+        source: "ls(envir=.GlobalEnv) diff",
+        description: "New variable in `.GlobalEnv`.",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "env.removed",
+        tier: 2,
+        source: "ls(envir=.GlobalEnv) diff",
+        description: "Variable removed from `.GlobalEnv` (rm, reassignment to NULL via list, ...).",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "wd.changed",
+        tier: 2,
+        source: "getwd() diff",
+        description: "R working directory changed.",
+        payload: &[
+            "from: string",
+            "to: string",
+            "caused_by_ts_ms: integer (optional)",
+        ],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "search.added",
+        tier: 2,
+        source: "search() diff",
+        description: "Item added to the R search path (library / attach / ...).",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "search.removed",
+        tier: 2,
+        source: "search() diff",
+        description: "Item removed from the R search path (detach / unloadNamespace).",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: false,
+    },
+    EventTypeSpec {
+        name: "namespaces.added",
+        tier: 2,
+        source: "loadedNamespaces() diff",
+        description: "Namespace loaded (library, requireNamespace, transitive load).",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "namespaces.removed",
+        tier: 2,
+        source: "loadedNamespaces() diff",
+        description: "Namespace unloaded.",
+        payload: &["name: string", "caused_by_ts_ms: integer (optional)"],
+        initial: false,
+    },
+    // ---- Tier 3: deep introspection ----
+    EventTypeSpec {
+        name: "env.typed_changed",
+        tier: 3,
+        source: "lapply(.GlobalEnv, ...) per-name class + length diff",
+        description: "A `.GlobalEnv` variable's class or length changed (reassigned with different shape).",
+        payload: &[
+            "name: string",
+            "class: string — class()[1]",
+            "length: integer",
+            "from: {class, length} — previous shape (omitted on first sight)",
+            "caused_by_ts_ms: integer (optional)",
+        ],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "last_value.changed",
+        tier: 3,
+        source: ".Last.value class + length diff",
+        description: "REPL's `.Last.value` summary changed (a new top-level expression was evaluated).",
+        payload: &[
+            "class: string",
+            "length: integer",
+            "caused_by_ts_ms: integer (optional)",
+        ],
+        initial: true,
+    },
+    EventTypeSpec {
+        name: "plot.count_changed",
+        tier: 3,
+        source: "length(grDevices::dev.list())",
+        description: "Number of open graphics devices changed (new plot rendered, dev.off called).",
+        payload: &[
+            "from: integer",
+            "to: integer",
+            "caused_by_ts_ms: integer (optional)",
+        ],
+        initial: true,
+    },
+    // ---- All tiers: internal ----
+    EventTypeSpec {
+        name: "session.error",
+        tier: 1,
+        source: "internal — emitted when the polling loop hits a recoverable error",
+        description: "A tick-level failure (RPC unavailable, R-state probe crashed, ...). Loop continues.",
+        payload: &["message: string"],
+        initial: false,
+    },
+];
+
+fn run_events() -> Value {
+    let events: Vec<Value> = EVENT_CATALOG
+        .iter()
+        .map(|e| {
+            json!({
+                "type": e.name,
+                "tier": e.tier,
+                "source": e.source,
+                "description": e.description,
+                "payload": e.payload,
+                "initial": e.initial,
+            })
+        })
+        .collect();
+    json!({
+        "version": crate::VERSION,
+        "count": events.len(),
+        "events": events,
+    })
+}
+
+fn run_stream(
+    args: &StreamArgs,
+    rpc: &RpcClient<'_>,
+    session: &Session,
+) -> Result<Reply, CliError> {
+    // Reset SIGPIPE to default so `rstudio observe stream | head -n 5` terminates
     // silently when the consumer closes stdout, rather than panicking on
     // EPIPE.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    let interval_s = cmd.interval.clamp(MIN_INTERVAL_S, MAX_INTERVAL_S);
+    let interval_s = args.interval.clamp(MIN_INTERVAL_S, MAX_INTERVAL_S);
     let dur = Duration::from_secs_f64(interval_s);
-    let tier = cmd.tier;
+    let tier = args.tier;
     let paths = DiskPaths::resolve(session)?;
 
     let stdout = io::stdout();
@@ -264,7 +660,7 @@ pub fn run(cmd: &ObserveCmd, rpc: &RpcClient<'_>, session: &Session) -> Result<R
     }
     out.flush().ok();
 
-    if cmd.once {
+    if args.once {
         std::process::exit(0);
     }
 
