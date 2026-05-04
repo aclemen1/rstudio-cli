@@ -52,8 +52,7 @@ pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
     category: "observe",
     name: "observe",
     summary: "Stream session-state changes as JSON Lines on stdout (live tail).",
-    description:
-        "Polls the rsession at a configurable interval and emits one JSON \
+    description: "Polls the rsession at a configurable interval and emits one JSON \
          Line per detected change. Three coverage tiers, selected with --tier: \
          \
          Tier 1 (file-watching only, never touches R): document open / close / \
@@ -106,8 +105,7 @@ pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
             required: false,
             default: Some("2"),
             allowed: &["1", "2", "3"],
-            description:
-                "Coverage tier. 1 = file-watching only, no R. 2 (default) = + cheap R \
+            description: "Coverage tier. 1 = file-watching only, no R. 2 (default) = + cheap R \
                  poll (env, busy, wd, search, namespaces). 3 = + heavy introspection \
                  (typed env, last_value, plot count).",
         },
@@ -134,8 +132,7 @@ pub const ACTIONS: &[ActionSpec] = &[ActionSpec {
             explanation: "Single snapshot of currently-known state, no loop.",
         },
     ],
-    returns:
-        "JSON Lines stream on stdout (not the envelope contract). One line per event \
+    returns: "JSON Lines stream on stdout (not the envelope contract). One line per event \
          with shape {ts: string, type: string, payload: object}. Tier-2/3 events may \
          carry `caused_by_ts_ms` referencing the rstudio_ts_ms of the triggering input.",
     errors: &[],
@@ -178,17 +175,17 @@ pub fn run(cmd: &ObserveCmd, rpc: &RpcClient<'_>, session: &Session) -> Result<R
     // Initial snapshot: emit one event per piece of currently-known state
     // so a fresh observer sees the initial picture. Tail offsets are seeded
     // from the current end-of-file (we don't replay history).
-    let mut state = WatcherState::default();
-    state.history_offset = file_size(&paths.history_database);
-    state.log_offset = file_size_opt(paths.log.as_deref());
-
     let docs = take_documents(rpc, session)?;
     for doc in docs.values() {
         emit(&mut out, "editor.opened", doc.to_payload())?;
     }
-    state.documents = docs;
-
-    state.contents_mtimes = take_contents_mtimes(session)?;
+    let mut state = WatcherState {
+        history_offset: file_size(&paths.history_database),
+        log_offset: file_size_opt(paths.log.as_deref()),
+        documents: docs,
+        contents_mtimes: take_contents_mtimes(session)?,
+        ..Default::default()
+    };
 
     if let Some(p) = read_text_file(&paths.project_path_file) {
         emit(&mut out, "project.opened", json!({ "path": p }))?;
@@ -199,27 +196,15 @@ pub fn run(cmd: &ObserveCmd, rpc: &RpcClient<'_>, session: &Session) -> Result<R
         state.files_dir = Some(d);
     }
     if let Some((q, p)) = read_find_state(&paths.find_state) {
-        emit(
-            &mut out,
-            "find.state",
-            json!({ "query": q, "path": p }),
-        )?;
+        emit(&mut out, "find.state", json!({ "query": q, "path": p }))?;
         state.find_query = Some(q);
     }
     if let Some(set_name) = read_active_marker_set(&paths.markers) {
-        emit(
-            &mut out,
-            "markers.active_set",
-            json!({ "name": set_name }),
-        )?;
+        emit(&mut out, "markers.active_set", json!({ "name": set_name }))?;
         state.markers_active_set = Some(set_name);
     }
     if let Some(col) = read_active_column(&paths.column_state) {
-        emit(
-            &mut out,
-            "pane.active_column",
-            json!({ "column": col }),
-        )?;
+        emit(&mut out, "pane.active_column", json!({ "column": col }))?;
         state.column_active = Some(col);
     }
     if tier >= 2 {
@@ -576,7 +561,9 @@ impl DiskPaths {
         Ok(Self {
             history_database: rstudio_root.join("history_database"),
             log: {
-                let p = rstudio_root.join("log").join(format!("rsession-{user}.log"));
+                let p = rstudio_root
+                    .join("log")
+                    .join(format!("rsession-{user}.log"));
                 if p.exists() { Some(p) } else { None }
             },
             project_path_file: rstudio_root
@@ -584,9 +571,7 @@ impl DiskPaths {
                 .join("last-project-path"),
             markers: rstudio_root.join("saved_source_markers"),
             files_pane: rstudio_root.join("pcs").join("files-pane.pper"),
-            find_state: rstudio_root
-                .join("pcs")
-                .join("find-replace-in-files.pper"),
+            find_state: rstudio_root.join("pcs").join("find-replace-in-files.pper"),
             column_state: rstudio_root
                 .join("client-state")
                 .join("source-column-manager.persistent"),
@@ -610,7 +595,11 @@ fn take_documents(
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if is_document_id(&name) { Some(name) } else { None }
+            if is_document_id(&name) {
+                Some(name)
+            } else {
+                None
+            }
         })
         .collect();
     ids.sort();
@@ -718,11 +707,7 @@ fn diff_contents_mtimes<W: Write>(
         if prev.get(id) != Some(mtime) {
             // Only emit for docs we know about; skip detached buffers.
             let path = docs.get(id).map(|d| d.path.clone()).unwrap_or_default();
-            emit(
-                out,
-                "editor.typing",
-                json!({ "id": id, "path": path }),
-            )?;
+            emit(out, "editor.typing", json!({ "id": id, "path": path }))?;
         }
     }
     Ok(())
@@ -738,11 +723,7 @@ fn read_new_lines(path: &Path, offset: &mut u64) -> Vec<String> {
         Ok(f) => f,
         Err(_) => return out,
     };
-    let size = file
-        .metadata()
-        .ok()
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
     if size == *offset {
         return out;
     }
@@ -764,8 +745,8 @@ fn read_new_lines(path: &Path, offset: &mut u64) -> Vec<String> {
         if i > 0 || s.starts_with('\n') {
             // not the trailing partial; the previous newline ended the prior line.
         }
-        if line.ends_with('\r') {
-            out.push(line[..line.len() - 1].to_string());
+        if let Some(stripped) = line.strip_suffix('\r') {
+            out.push(stripped.to_string());
         } else {
             // For the very last segment, if the source did not end with '\n',
             // it's a partial line — skip it; we'll re-read on next tick.
@@ -892,10 +873,7 @@ fn take_r_state(rpc: &RpcClient<'_>, tier: u8) -> Result<RStateSnapshot, CliErro
             }
         }
         snap.last_value = v.get("last_value").and_then(parse_summary);
-        snap.plot_count = v
-            .get("plot_count")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0) as u32;
+        snap.plot_count = v.get("plot_count").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
     }
     Ok(snap)
 }
@@ -914,7 +892,11 @@ fn string_array(v: &Value, key: &str) -> BTreeSet<String> {
 fn parse_summary(v: &Value) -> Option<GlobalSummary> {
     let obj = v.as_object()?;
     Some(GlobalSummary {
-        class: obj.get("class").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        class: obj
+            .get("class")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         length: obj.get("length").and_then(|x| x.as_i64()).unwrap_or(0),
     })
 }
@@ -955,7 +937,12 @@ fn r_state_script(tier: u8) -> String {
 /// resulting events to the pending buffer. Tier 2 covers globals (just
 /// names), error, wd, search, namespaces. Tier 3 additionally covers
 /// globals_typed, last_value, plot_count.
-fn diff_r_state(prev: &RStateSnapshot, curr: &RStateSnapshot, tier: u8, pending: &mut PendingRChanges) {
+fn diff_r_state(
+    prev: &RStateSnapshot,
+    curr: &RStateSnapshot,
+    tier: u8,
+    pending: &mut PendingRChanges,
+) {
     // r.error
     if curr.error != prev.error && !curr.error.is_empty() {
         pending.push("r.error", json!({ "message": curr.error }));
@@ -969,10 +956,7 @@ fn diff_r_state(prev: &RStateSnapshot, curr: &RStateSnapshot, tier: u8, pending:
     }
     // wd
     if curr.wd != prev.wd && !curr.wd.is_empty() {
-        pending.push(
-            "wd.changed",
-            json!({ "from": prev.wd, "to": curr.wd }),
-        );
+        pending.push("wd.changed", json!({ "from": prev.wd, "to": curr.wd }));
     }
     // search() — attached packages / environments.
     for s in curr.search.difference(&prev.search) {
@@ -1007,8 +991,9 @@ fn diff_r_state(prev: &RStateSnapshot, curr: &RStateSnapshot, tier: u8, pending:
         }
     }
     // last_value summary change.
-    if curr.last_value.is_some() && curr.last_value != prev.last_value {
-        let s = curr.last_value.as_ref().unwrap();
+    if let Some(s) = &curr.last_value
+        && curr.last_value != prev.last_value
+    {
         pending.push(
             "last_value.changed",
             json!({ "class": s.class, "length": s.length }),

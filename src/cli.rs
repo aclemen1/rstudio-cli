@@ -6,12 +6,12 @@ use serde_json::json;
 
 use crate::VERSION;
 use crate::commands::{
-    console, editor, env, job, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session,
-    skill, status, term, ui,
+    console, editor, env, job, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session, skill,
+    status, term, ui,
 };
-use crate::policy::Policy;
 use crate::error::CliError;
 use crate::output::{Format, Reply, print_err, print_reply};
+use crate::policy::Policy;
 use crate::rpc::RpcClient;
 use crate::session::{Mode, Session, SessionOverrides};
 
@@ -183,27 +183,30 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
     // Everything else is checked before session detection.
     let policy = Policy::load();
     let policy_key: Option<&str> = match &cli.command {
-        Command::Version | Command::Status | Command::Schema(_)
-        | Command::Skill(_) | Command::Policy(_) => None,
+        Command::Version
+        | Command::Status
+        | Command::Schema(_)
+        | Command::Skill(_)
+        | Command::Policy(_) => None,
         // Session: differentiate the two destructive actions for fine-grained blocking.
-        Command::Session(session::SessionCmd::Restart { .. })     => Some("session.restart"),
+        Command::Session(session::SessionCmd::Restart { .. }) => Some("session.restart"),
         Command::Session(session::SessionCmd::OpenProject { .. }) => Some("session.open-project"),
         Command::Session(_) => Some("session"),
         // R: differentiate code execution from poll.
         Command::R(r::RCmd::Exec { .. }) => Some("r.exec"),
         Command::R(r::RCmd::Send { .. }) => Some("r.send"),
-        Command::R(_)        => Some("r"),
+        Command::R(_) => Some("r"),
         // Everything else: category-level granularity is sufficient.
-        Command::Editor(_)   => Some("editor"),
-        Command::Console(_)  => Some("console"),
-        Command::Term(_)     => Some("term"),
-        Command::Env(_)      => Some("env"),
-        Command::Pane(_)     => Some("pane"),
-        Command::Pref(_)     => Some("pref"),
-        Command::Job(_)      => Some("job"),
-        Command::Ui(_)       => Some("ui"),
-        Command::Observe(_)  => Some("observe"),
-        Command::Rpc(_)      => Some("rpc"),
+        Command::Editor(_) => Some("editor"),
+        Command::Console(_) => Some("console"),
+        Command::Term(_) => Some("term"),
+        Command::Env(_) => Some("env"),
+        Command::Pane(_) => Some("pane"),
+        Command::Pref(_) => Some("pref"),
+        Command::Job(_) => Some("job"),
+        Command::Ui(_) => Some("ui"),
+        Command::Observe(_) => Some("observe"),
+        Command::Rpc(_) => Some("rpc"),
         Command::Postback(_) => Some("postback"),
     };
     if let Some(key) = policy_key {
@@ -256,9 +259,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         // 'install' is human-friendly with ✓/✗ marks.
         Command::Skill(cmd) => skill::run(&cmd),
         // `session list` does not need a live session — dispatch before detect.
-        Command::Session(session::SessionCmd::List) => {
-            session::list_sessions().map(Reply::Wrapped)
-        }
+        Command::Session(session::SessionCmd::List) => session::list_sessions().map(Reply::Wrapped),
         Command::Session(cmd) => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);

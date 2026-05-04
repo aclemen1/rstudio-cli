@@ -1768,7 +1768,9 @@ fn set_marks(
 
     fn parse_line(s: &str) -> Option<Hit> {
         let s = s.trim();
-        if s.is_empty() { return None; }
+        if s.is_empty() {
+            return None;
+        }
         // Split into at most 4 fields on ':'.
         // Handles grep -n  (file:line:text)
         //         grep -rn (file:line:text)
@@ -1780,19 +1782,27 @@ fn set_marks(
         let fourth = it.next();
         let (col, text) = match (third.trim().parse::<u32>(), fourth) {
             (Ok(c), Some(t)) => (c, t.trim().to_string()),
-            _ => (1, match fourth {
-                Some(f) => format!("{}:{}", third, f),
-                None    => third.to_string(),
-            }),
+            _ => (
+                1,
+                match fourth {
+                    Some(f) => format!("{}:{}", third, f),
+                    None => third.to_string(),
+                },
+            ),
         };
-        Some(Hit { file, line, col, text })
+        Some(Hit {
+            file,
+            line,
+            col,
+            text,
+        })
     }
 
     let stdin = std::io::stdin();
     let hits: Vec<Hit> = stdin
         .lock()
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .filter_map(|l| parse_line(&l))
         .collect();
 
@@ -1817,11 +1827,11 @@ fn set_marks(
     let hits_json_str = serde_json::to_string(&hits_json)
         .map_err(|e| CliError::internal(format!("set-marks: JSON serialise: {e}")))?;
 
-    let name_r      = r_quote(name);
-    let hits_r      = r_quote(&hits_json_str);
+    let name_r = r_quote(name);
+    let hits_r = r_quote(&hits_json_str);
     let base_path_r = match base_path {
         Some(p) => r_quote(p),
-        None    => "NULL".to_string(),
+        None => "NULL".to_string(),
     };
 
     let r_code = format!(
@@ -1838,7 +1848,8 @@ fn set_marks(
     );
 
     let raw = r_eval::run(rpc, &r_code)?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::internal(format!("editor set-marks: invalid JSON: {e}; raw: {raw}")))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("editor set-marks: invalid JSON: {e}; raw: {raw}"))
+    })?;
     Ok(Some(parsed))
 }
