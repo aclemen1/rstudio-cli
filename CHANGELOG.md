@@ -4,6 +4,54 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-05-03
+
+### Added — document preview actions (`pane preview`, `preview-md`, `preview-rmd`, `preview-qmd`)
+
+Four new actions in the `pane` category let an agent render and preview
+Markdown, R Markdown, and Quarto documents directly in the RStudio
+Viewer pane:
+
+| Action | Format | Render engine |
+|---|---|---|
+| `pane preview <path>` | auto-detect from extension | dispatches to one of the three below |
+| `pane preview-md <path>` | `.md` | `markdown::mark_html()` |
+| `pane preview-rmd <path>` | `.Rmd` / `.rmd` | `rmarkdown::render(output_format="html_document")` |
+| `pane preview-qmd <path>` | `.qmd` | `system2("quarto", c("render", …, "--to", "html"))` |
+
+Common flags:
+
+- `--no-view` — render to HTML but skip the `rstudioapi::viewer()` call
+  (useful for CI or when you only need the output file).
+- `--output-dir <dir>` — redirect the rendered HTML to a specific
+  directory (`preview-md` and `preview-rmd` only; quarto always
+  outputs next to the source).
+
+All four commands lift the socket timeout (via `EvalTimeout::NoLimit`)
+because rendering can take tens of seconds for complex documents.
+
+The unified `pane preview` auto-detects the format from the file
+extension. For full control (e.g. `--output-dir`), use the explicit
+per-format variants.
+
+Return value: `{input: string, output: string, format: "html", viewer_loaded: bool}`.
+
+Auto-exposed via MCP as `pane_preview`, `pane_preview_md`,
+`pane_preview_rmd`, `pane_preview_qmd`.
+
+Action count: 93 → 97.
+
+Tests: 8 unit tests in `src/commands/pane.rs` — `detect_format` for
+all four extensions + the no-extension / unknown-extension error paths;
+plus three output-path derivation tests (one per format).
+
+### Internal — skill files updated
+
+Both `src/skills/rstudio.md` and `src/skills/rstudio-mcp.md` updated
+with the new preview patterns. Per CLAUDE.md convention, any skill
+change requires a version bump (so `rstudio skill install --force`
+delivers the update).
+
 ## [0.10.0] — 2026-05-04
 
 ### Changed (BREAKING) — `project` is now a top-level category

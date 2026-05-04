@@ -265,6 +265,16 @@ it's intended for debugging and solo scripts.
 - **Surface lint-style feedback**: `rstudio pane markers --markers '<JSON>'`
   with `[{type, file, line, column?, message}, ...]`. Useful for
   batch-reporting issues you found.
+- **Render and preview a document in the Viewer pane**:
+  - `rstudio pane preview <path>` — auto-detects `.md`, `.Rmd`/`.rmd`,
+    or `.qmd` and renders to HTML in the Viewer pane. Add `--no-view`
+    to render without displaying.
+  - Explicit variants with full control: `pane preview-md` (requires
+    `markdown` R package), `pane preview-rmd` (requires `rmarkdown`),
+    `pane preview-qmd` (requires Quarto on PATH). Both `preview-md` and
+    `preview-rmd` accept `--output-dir` to redirect the HTML output.
+  - Return value: `{input, output, format: "html", viewer_loaded: bool}`.
+  - These commands lift the socket timeout for long renders.
 - **Inspect a variable without loading it**: `rstudio env info <name>`
   returns class/typeof/length/dim/size_bytes only. For the formatted
   contents, `rstudio env contents <name>`.

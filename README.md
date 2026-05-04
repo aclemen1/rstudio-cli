@@ -56,7 +56,7 @@ Dedicated `project` category for project lifecycle (new / init / clone
 | `console`| `history` `actions` `context` | Console history + buffer + live editor context |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
 | `env`    | `list` `contents` `info` | Live R environment inspection |
-| `pane`   | `viewer` `files` `markers` `preview-rd` `preview-sql` `save-plot` `highlight-ui` | Non-editor panes |
+| `pane`   | `viewer` `files` `markers` `preview-rd` `preview-sql` `preview` `preview-md` `preview-rmd` `preview-qmd` `save-plot` `highlight-ui` | Non-editor panes |
 | `project`| `current` `open` `new` `init` `clone` | Project lifecycle: create / init / clone / open / introspect |
 | `session`| `info` `restart` `list` | Whole-session lifecycle |
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
@@ -120,6 +120,7 @@ will correct it promptly.
 | **Visualizations & panes** | | | | | |
 | Capture current plot | ✓ | ✓ | ✓ | ✗ | ✓ |
 | Read Viewer pane HTML content | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Render Markdown / Rmd / Quarto → Viewer pane | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Surface lint markers | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **Terminal pane** | | | | | |
 | List / create / kill terminals | ✓ | ✗ | ✗ | ✗ | ✗ |

@@ -101,6 +101,14 @@ wall time ≈ sum of per-call time. Implications:
   `term_exec({id, code: "<bash>"})` then re-read `term_buffer` after.
 - **Surface lint-style markers in the IDE**: `pane_markers({markers: [...]})`
   with `[{type, file, line, column?, message}, ...]`.
+- **Render and preview a document in the Viewer pane**:
+  - `pane_preview({path})` — auto-detects `.md`, `.Rmd`/`.rmd`, `.qmd`
+    from the extension and renders to HTML in the Viewer pane.
+    Pass `no_view: true` to render without displaying.
+  - Explicit variants: `pane_preview_md`, `pane_preview_rmd`,
+    `pane_preview_qmd`. The md/rmd variants accept `output_dir`.
+  - Returns `{input, output, format: "html", viewer_loaded}`.
+  - These tools lift the socket timeout — long renders are safe.
 - **Inspect a variable without loading it**: `env_info({name})` returns
   class/typeof/length/dim/size_bytes only. Use `env_contents({name})`
   for formatted contents.
