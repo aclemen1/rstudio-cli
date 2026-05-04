@@ -656,7 +656,7 @@ fn run_replay(args: &ReplayArgs) -> Result<Reply, CliError> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    let reader: Box<dyn BufRead> = if args.file == std::path::PathBuf::from("-") {
+    let reader: Box<dyn BufRead> = if args.file == std::path::Path::new("-") {
         Box::new(BufReader::new(std::io::stdin().lock()))
     } else {
         let f = std::fs::File::open(&args.file).map_err(|e| {
