@@ -337,11 +337,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             let rpc = RpcClient::new(&session);
             ui::run(&cmd, &rpc).map(Reply::Wrapped)
         }
-        Command::Observe(cmd) => {
-            let session = Session::detect(overrides)?;
-            let rpc = RpcClient::new(&session);
-            observe::run(&cmd, &rpc, &session)
-        }
+        Command::Observe(cmd) => observe::run(&cmd, overrides),
         Command::Schema(cmd) => schema_cmd::run(&cmd).map(Reply::Wrapped),
         Command::Rpc(cmd) => {
             let session = Session::detect(overrides)?;

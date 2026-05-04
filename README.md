@@ -40,8 +40,8 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.8.1** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 16 categories and 84 actions, with multi-agent safety via
+**v0.8.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 16 categories and 85 actions, with multi-agent safety via
 per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
@@ -57,7 +57,7 @@ per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
 | `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
-| `observe`| `stream` `events` | Live JSONL stream of session changes; static catalog of event types |
+| `observe`| `stream` `events` `replay` | Live JSONL stream; event-type catalog; replay a captured stream |
 | `policy` | `show` `block` `unblock` | Per-user block list (category or action) |
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |
@@ -206,7 +206,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.8.1
+rstudio version                 # 0.8.2
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

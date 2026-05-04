@@ -42,8 +42,8 @@ use crate::commands::editor::is_document_id;
 use crate::error::CliError;
 use crate::output::Reply;
 use crate::rpc::RpcClient;
-use crate::schema::{ActionSpec, ExampleSpec, ParamKind, ParamSpec};
-use crate::session::Session;
+use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+use crate::session::{Session, SessionOverrides};
 
 const MIN_INTERVAL_S: f64 = 0.25;
 const MAX_INTERVAL_S: f64 = 60.0;
@@ -173,6 +173,75 @@ pub const ACTIONS: &[ActionSpec] = &[
         rstudioapi_fn: None,
         rpc_method: Some("get_source_document"),
     },
+    ActionSpec {
+        category: "observe",
+        name: "replay",
+        summary: "Replay a captured JSONL stream at the original cadence (or scaled).",
+        description: "Reads a JSONL file produced by `observe stream` (or `-` for stdin), forwards \
+             every line to stdout, and sleeps between lines to respect the original \
+             timestamps. The first line is emitted immediately; subsequent lines wait \
+             until `(line.ts - first.ts) / speed` ms have elapsed since the first emit. \
+             Lines that fail to parse, or that lack a `ts` field, are forwarded \
+             immediately and don't update the timing baseline. \
+             \
+             Does NOT require an RStudio session — reads a file and writes stdout, \
+             that's it. Useful for: \
+             1. Reproducible CI tests (`agent + canned stream → expected behavior`); \
+             2. Post-mortem debugging (`what happened at 14:32?`); \
+             3. Demoing a session offline; \
+             4. Stress-testing a downstream consumer (replay at --speed 100). \
+             \
+             SIGPIPE is reset to default so `rstudio observe replay session.jsonl | \
+             head -n 5` exits cleanly.",
+        params: &[
+            ParamSpec {
+                name: "file",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Path to a JSONL file produced by `observe stream`. Use `-` for stdin.",
+            },
+            ParamSpec {
+                name: "--speed",
+                kind: ParamKind::Number,
+                required: false,
+                default: Some("1.0"),
+                allowed: &[],
+                description: "Multiplier on the replay clock. 1.0 = original cadence; \
+                              10.0 = ten times faster; 0 = instant (no delays).",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio observe replay /tmp/session.jsonl",
+                explanation: "Replay at original speed.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe replay /tmp/session.jsonl --speed 10",
+                explanation: "Replay 10x faster.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe replay /tmp/session.jsonl --speed 0",
+                explanation: "Replay instantly — useful for testing downstream consumers.",
+            },
+            ExampleSpec {
+                cmd: "rstudio observe stream > capture.jsonl && rstudio observe replay capture.jsonl",
+                explanation: "Capture and replay round-trip.",
+            },
+            ExampleSpec {
+                cmd: "cat capture.jsonl | rstudio observe replay -",
+                explanation: "Replay from stdin.",
+            },
+        ],
+        returns: "JSON Lines stream on stdout, identical to input but timed.",
+        errors: &[ErrorSpec {
+            kind: "user_error",
+            when: "Cannot open the input file (missing, permissions).",
+        }],
+        rstudioapi_fn: None,
+        rpc_method: None,
+    },
 ];
 
 /// Top-level `observe` parser. A subcommand is mandatory: `stream` for
@@ -190,6 +259,21 @@ pub enum ObserveSub {
     /// Print the static catalog of event types this version emits
     /// (per-type tier, payload schema, source).
     Events,
+    /// Replay a previously captured JSONL stream at the original
+    /// cadence (or scaled by `--speed`). No RStudio session required.
+    Replay(ReplayArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ReplayArgs {
+    /// JSONL file to replay (`-` for stdin).
+    pub file: std::path::PathBuf,
+
+    /// Speed multiplier for the replay clock. 1.0 = original cadence
+    /// (default), 10.0 = ten times faster, 0 = instant (no delays;
+    /// useful for tests). Negative values clamp to 0.
+    #[arg(long, default_value_t = 1.0)]
+    pub speed: f64,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -208,10 +292,15 @@ pub struct StreamArgs {
     pub tier: u8,
 }
 
-pub fn run(cmd: &ObserveCmd, rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
+pub fn run(cmd: &ObserveCmd, overrides: SessionOverrides) -> Result<Reply, CliError> {
     match &cmd.sub {
         ObserveSub::Events => Ok(Reply::Wrapped(Some(run_events()))),
-        ObserveSub::Stream(args) => run_stream(args, rpc, session),
+        ObserveSub::Replay(args) => run_replay(args),
+        ObserveSub::Stream(args) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            run_stream(args, &rpc, &session)
+        }
     }
 }
 
@@ -546,6 +635,115 @@ fn run_events() -> Value {
         "count": events.len(),
         "events": events,
     })
+}
+
+/// Replay a previously captured JSONL stream. Forwards each input
+/// line to stdout, sleeping between lines to respect the original
+/// cadence (`ts` field).
+///
+/// The first line is emitted immediately; subsequent lines are emitted
+/// when `(line.ts - first.ts) / speed` ms have elapsed since the first
+/// emit. Lines that fail to parse, or that lack a `ts` field, are
+/// forwarded immediately and don't update the timing baseline.
+///
+/// `--speed 0` disables all delays (instant replay) — useful for tests.
+fn run_replay(args: &ReplayArgs) -> Result<Reply, CliError> {
+    use std::io::{BufRead, BufReader, Write};
+
+    // Reset SIGPIPE so `... | head -n 5` exits cleanly. Same rationale
+    // as `observe stream`.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
+    let reader: Box<dyn BufRead> = if args.file == std::path::PathBuf::from("-") {
+        Box::new(BufReader::new(std::io::stdin().lock()))
+    } else {
+        let f = std::fs::File::open(&args.file).map_err(|e| {
+            CliError::user(format!("replay: cannot open {}: {e}", args.file.display()))
+        })?;
+        Box::new(BufReader::new(f))
+    };
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let speed = args.speed.max(0.0);
+
+    let mut base_ts_ms: Option<i64> = None;
+    let start = std::time::Instant::now();
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| CliError::internal(format!("replay: read: {e}")))?;
+        if line.is_empty() {
+            continue;
+        }
+        let line_ts_ms: Option<i64> = serde_json::from_str::<Value>(&line)
+            .ok()
+            .and_then(|v| v.get("ts").and_then(|x| x.as_str()).map(String::from))
+            .and_then(|s| iso_to_epoch_ms(&s));
+
+        if let (Some(line_ms), Some(base)) = (line_ts_ms, base_ts_ms)
+            && speed > 0.0
+        {
+            let target_ms = ((line_ms - base) as f64 / speed) as u64;
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            if target_ms > elapsed_ms {
+                std::thread::sleep(std::time::Duration::from_millis(target_ms - elapsed_ms));
+            }
+        }
+
+        if base_ts_ms.is_none()
+            && let Some(t) = line_ts_ms
+        {
+            base_ts_ms = Some(t);
+        }
+
+        writeln!(out, "{line}").map_err(|e| CliError::internal(format!("replay: write: {e}")))?;
+        out.flush().ok();
+    }
+
+    std::process::exit(0);
+}
+
+/// Inverse of `iso_now()` from this module — parse the ISO 8601 UTC
+/// format we generate (`YYYY-MM-DDTHH:MM:SS.mmmZ`) into milliseconds
+/// since the Unix epoch. Returns `None` for any deviation.
+fn iso_to_epoch_ms(s: &str) -> Option<i64> {
+    if s.len() != 24 || !s.ends_with('Z') {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    if bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'.'
+    {
+        return None;
+    }
+    let year: i64 = s[0..4].parse().ok()?;
+    let month: u32 = s[5..7].parse().ok()?;
+    let day: u32 = s[8..10].parse().ok()?;
+    let hour: u32 = s[11..13].parse().ok()?;
+    let minute: u32 = s[14..16].parse().ok()?;
+    let second: u32 = s[17..19].parse().ok()?;
+    let ms: i64 = s[20..23].parse().ok()?;
+    let days = days_from_civil(year, month, day);
+    let secs = days * 86_400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+    Some(secs * 1000 + ms)
+}
+
+/// Howard Hinnant's `days_from_civil`: inverse of `epoch_to_components`
+/// in this module. Returns days since 1970-01-01.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y / 400 } else { (y - 399) / 400 };
+    let yoe = (y - era * 400) as u64;
+    let m_adj: i64 = if m > 2 { m as i64 - 3 } else { m as i64 + 9 };
+    let doy = (153 * m_adj + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy as u64;
+    era * 146_097 + doe as i64 - 719_468
 }
 
 fn run_stream(
@@ -1504,5 +1702,64 @@ mod tests {
             parse_history_line("1234:strsplit('a:b', ':')"),
             Some((1234, "strsplit('a:b', ':')".into()))
         );
+    }
+
+    #[test]
+    fn iso_to_epoch_roundtrip_unix_zero() {
+        assert_eq!(iso_to_epoch_ms("1970-01-01T00:00:00.000Z"), Some(0));
+    }
+
+    #[test]
+    fn iso_to_epoch_known_dates() {
+        // 2000-03-01T00:00:00Z = 951868800 sec = 951868800000 ms
+        assert_eq!(
+            iso_to_epoch_ms("2000-03-01T00:00:00.000Z"),
+            Some(951_868_800_000)
+        );
+        // Leap day: 2024-02-29T12:34:56.789Z
+        assert_eq!(
+            iso_to_epoch_ms("2024-02-29T12:34:56.789Z"),
+            Some(1_709_210_096_789)
+        );
+    }
+
+    #[test]
+    fn iso_to_epoch_round_trips_iso_now() {
+        // Whatever iso_now produces must parse back to ~now ± 1 ms.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let parsed = iso_to_epoch_ms(&iso_now()).unwrap();
+        assert!(
+            (parsed - now_ms).abs() <= 5,
+            "round-trip drift: {} vs {now_ms}",
+            parsed
+        );
+    }
+
+    #[test]
+    fn iso_to_epoch_rejects_malformed() {
+        assert_eq!(iso_to_epoch_ms(""), None);
+        assert_eq!(iso_to_epoch_ms("2026-05-04"), None); // too short
+        assert_eq!(iso_to_epoch_ms("2026-05-04T05:00:43.323"), None); // no Z
+        assert_eq!(iso_to_epoch_ms("not-a-date-at-all-here-Z"), None); // wrong shape
+    }
+
+    #[test]
+    fn days_from_civil_inverse_of_epoch_to_components() {
+        // Pick a few dates and check the round-trip.
+        for &(y, m, d) in &[
+            (1970, 1, 1),
+            (2000, 1, 1),
+            (2024, 2, 29),
+            (2026, 5, 4),
+            (1999, 12, 31),
+        ] {
+            let days = days_from_civil(y, m, d);
+            let secs = days as u64 * 86_400;
+            let (yy, mm, dd, _h, _mi, _s) = epoch_to_components(secs);
+            assert_eq!((yy as i64, mm, dd), (y, m, d), "civil_from_days mismatch");
+        }
     }
 }

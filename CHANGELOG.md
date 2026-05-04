@@ -4,6 +4,48 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-05-04
+
+### Added — `rstudio observe replay`
+
+Third subcommand under `observe`: replay a previously captured JSONL
+stream at the original cadence (or scaled). Reads the input file (or
+`-` for stdin), forwards every line to stdout, sleeping between lines
+to respect the original `ts` timestamps. Lines with malformed JSON or
+missing `ts` are forwarded as-is without affecting the timing baseline.
+
+```sh
+# Capture
+rstudio observe stream > /tmp/session.jsonl
+
+# Replay at original speed
+rstudio observe replay /tmp/session.jsonl
+
+# Replay 10x faster
+rstudio observe replay /tmp/session.jsonl --speed 10
+
+# Replay instantly (for tests / downstream consumer stress)
+rstudio observe replay /tmp/session.jsonl --speed 0
+
+# Stdin pipeline
+cat /tmp/session.jsonl | rstudio observe replay -
+```
+
+Does NOT require an RStudio session — reads disk, writes stdout, no
+RPC. Useful for: reproducible CI tests, post-mortem debugging,
+offline demos, stress-testing JSONL consumers.
+
+SIGPIPE is reset to default so `rstudio observe replay session.jsonl
+| head -n 5` exits cleanly.
+
+Bumps action count 84 → 85 (new `observe replay` action).
+
+Tests: 6 unit tests in `src/commands/observe.rs` cover the ISO 8601
+parser (`iso_to_epoch_ms`) and its round-trip with `iso_now()`. 7
+integration tests in `tests/replay.rs` exercise the binary with
+real JSONL fixtures (forwarding order, --speed 0/1/10 timing,
+stdin input, malformed lines, missing file).
+
 ## [0.8.1] — 2026-05-04
 
 ### Added — `session.lock` field in `rstudio status`, plus `meta` schema category
