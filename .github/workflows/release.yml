@@ -82,3 +82,12 @@ jobs:
         with:
           files: artifacts/**/*.tar.gz
           generate_release_notes: true
+          # Explicitly publish — without this, a partial upload failure
+          # can leave the release in `draft` state with assets uploaded
+          # but the public download URL returning 404 (the brew install
+          # path uses the public URL). v0.10.0 hit exactly this.
+          draft: false
+          make_latest: "true"
+          # Fail loudly if a file glob doesn't match — better than
+          # silently shipping an incomplete release.
+          fail_on_unmatched_files: true
