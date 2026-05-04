@@ -195,11 +195,13 @@ fn derive_session_id(session: &Session) -> Option<String> {
 
 /// Count documents currently open in the Source pane by enumerating the
 /// sources directory (cheap, no RPC). Returns 0 if the dir is unreachable.
+/// Uses `resolve_sources_dir` so the count stays consistent when a project
+/// is open and the dir has relocated to `<project>/.Rproj.user/<hash>/sources/`.
 fn count_open_docs(session: &Session) -> usize {
-    let Some(dir) = session.sources_dir.as_ref() else {
+    let Ok(dir) = session.resolve_sources_dir() else {
         return 0;
     };
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(&dir) else {
         return 0;
     };
     entries

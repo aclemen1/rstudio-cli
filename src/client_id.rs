@@ -64,6 +64,57 @@ pub fn sources_dir_for(session_id: &str) -> Option<PathBuf> {
     )
 }
 
+/// Path to RStudio's global `last-project-path` file. Holds the path of
+/// the .Rproj file currently associated with the active session
+/// (relocates from the global sources dir to the project's
+/// `.Rproj.user/<hash>/sources/session-<id>` whenever a project is
+/// open). Filesystem-only — never invokes R.
+pub fn last_project_path_file() -> Option<PathBuf> {
+    let home = env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".local/share/rstudio/projects_settings/last-project-path"))
+}
+
+/// Read the active project directory.
+///
+/// Two sources are tried, in this order:
+/// `session-persistent-state.active-project-file` (Server only) and the
+/// global `last-project-path`. Both files hold a path to a `.Rproj`
+/// file; its parent is the project root. Returns `None` when no project
+/// is active or the hint files cannot be read.
+pub fn read_active_project_dir(state_path: Option<&Path>) -> Option<PathBuf> {
+    // Server-only: session-persistent-state may carry `active-project-file`.
+    if let Some(p) = state_path
+        && let Ok(content) = fs::read_to_string(p)
+    {
+        for line in content.lines() {
+            if let Some(rest) = line.trim().strip_prefix("active-project-file=") {
+                let value = rest.trim().trim_matches('"');
+                if !value.is_empty() && value != "none" {
+                    return project_dir_from_rproj(Path::new(value));
+                }
+            }
+        }
+    }
+    // Both modes: the global last-project-path file.
+    let last = last_project_path_file()?;
+    let raw = fs::read_to_string(&last).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "none" {
+        return None;
+    }
+    project_dir_from_rproj(Path::new(trimmed))
+}
+
+fn project_dir_from_rproj(p: &Path) -> Option<PathBuf> {
+    if p.extension().is_some_and(|e| e == "Rproj") {
+        p.parent().map(Path::to_path_buf)
+    } else if p.is_dir() {
+        Some(p.to_path_buf())
+    } else {
+        None
+    }
+}
+
 /// Resolve the client id to use for JSON-RPC calls in this session. On
 /// Desktop, the value is the hardcoded `DESKTOP_CLIENT_ID` constant. On
 /// Server, we read it from `session-persistent-state` so the CLI shares

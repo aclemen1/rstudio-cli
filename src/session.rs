@@ -90,6 +90,74 @@ impl Session {
             )
         })
     }
+
+    /// Resolve the actual sources directory, taking project-relocation
+    /// into account.
+    ///
+    /// RStudio stores per-session source-document metadata at
+    /// `~/.local/share/rstudio/sources/session-<id>` while no project
+    /// is active. As soon as a project is opened, that whole directory
+    /// MOVES to `<project>/.Rproj.user/<hash>/sources/session-<id>` —
+    /// the session id is unchanged, only the parent path moves.
+    /// `self.sources_dir` is computed once at session detection from
+    /// the global path, so it is stale whenever a project is active.
+    ///
+    /// This method tries the global path first (cheap stat), then
+    /// falls back to reading the active project path from disk
+    /// (`last-project-path`, plus `active-project-file` from the
+    /// session-persistent-state file on Server) and globs the
+    /// `.Rproj.user/<hash>/sources/session-<id>` candidate.
+    ///
+    /// Filesystem-only — never invokes the R interpreter.
+    pub fn resolve_sources_dir(&self) -> Result<PathBuf, CliError> {
+        let configured = self.require_sources_dir()?.to_path_buf();
+        if configured.is_dir() {
+            return Ok(configured);
+        }
+        let session_id = configured
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.strip_prefix("session-"))
+            .ok_or_else(|| {
+                CliError::session(format!(
+                    "Cannot derive session id from sources_dir path {}",
+                    configured.display()
+                ))
+            })?
+            .to_string();
+
+        if let Some(project) = client_id::read_active_project_dir(self.state_path.as_deref())
+            && let Some(path) = find_project_sources_dir(&project, &session_id)
+        {
+            return Ok(path);
+        }
+
+        Err(CliError::session(format!(
+            "Cannot locate sources directory for session-{session_id}. \
+             Tried {} (no active project) and the active project's \
+             .Rproj.user/<hash>/sources/. Open RStudio in your browser \
+             first, or pass --session-id.",
+            configured.display()
+        )))
+    }
+}
+
+/// Glob `<project>/.Rproj.user/*/sources/session-<id>` and return the
+/// first match. The hash subdirectory is one-per-profile and a single
+/// OS user typically has exactly one.
+fn find_project_sources_dir(project: &Path, session_id: &str) -> Option<PathBuf> {
+    let rproj_user = project.join(".Rproj.user");
+    let entries = std::fs::read_dir(&rproj_user).ok()?;
+    for entry in entries.flatten() {
+        let candidate = entry
+            .path()
+            .join("sources")
+            .join(format!("session-{session_id}"));
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn auto_detect_mode(overrides: &SessionOverrides) -> Result<Mode, CliError> {

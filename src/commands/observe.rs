@@ -938,20 +938,16 @@ struct DiskPaths {
 }
 
 impl DiskPaths {
-    fn resolve(session: &Session) -> Result<Self, CliError> {
-        let sources = session.require_sources_dir()?;
-        // sources/<session-XX> → its grand-parent is ~/.local/share/rstudio
-        let rstudio_root = sources
-            .parent()
-            .and_then(|p| p.parent())
-            .ok_or_else(|| {
-                CliError::session(format!(
-                    "cannot derive rstudio data root from sources dir {}",
-                    sources.display()
-                ))
-            })?
-            .to_path_buf();
-
+    fn resolve(_session: &Session) -> Result<Self, CliError> {
+        // The global RStudio data root (`~/.local/share/rstudio`) is fixed
+        // regardless of which project is open. Only the per-session sources
+        // directory relocates inside `<project>/.Rproj.user/...` when a
+        // project is active — that is handled by `Session::resolve_sources_dir`.
+        // All the watcher targets in DiskPaths live at the global root.
+        let home = std::env::var("HOME").map_err(|e| {
+            CliError::session(format!("cannot read HOME for rstudio data root: {e}"))
+        })?;
+        let rstudio_root = PathBuf::from(home).join(".local/share/rstudio");
         let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
 
         Ok(Self {
@@ -979,8 +975,8 @@ fn take_documents(
     rpc: &RpcClient<'_>,
     session: &Session,
 ) -> Result<BTreeMap<String, DocSnapshot>, CliError> {
-    let dir = session.require_sources_dir()?;
-    let entries = fs::read_dir(dir).map_err(|e| {
+    let dir = session.resolve_sources_dir()?;
+    let entries = fs::read_dir(&dir).map_err(|e| {
         CliError::session(format!(
             "cannot read RStudio sources directory {}: {e}",
             dir.display()
@@ -1032,9 +1028,9 @@ fn take_documents(
 
 /// Per-document live-buffer mtime. Used to detect typing without RPC.
 fn take_contents_mtimes(session: &Session) -> Result<BTreeMap<String, SystemTime>, CliError> {
-    let dir = session.require_sources_dir()?;
+    let dir = session.resolve_sources_dir()?;
     let mut map = BTreeMap::new();
-    let entries = match fs::read_dir(dir) {
+    let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => return Ok(map),
     };

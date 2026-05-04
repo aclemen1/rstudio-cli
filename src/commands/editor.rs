@@ -1419,8 +1419,8 @@ fn find_open_doc_by_path(
         .canonicalize()
         .unwrap_or_else(|_| target.to_path_buf());
 
-    let dir = session.require_sources_dir()?;
-    let entries = fs::read_dir(dir).map_err(|e| {
+    let dir = session.resolve_sources_dir()?;
+    let entries = fs::read_dir(&dir).map_err(|e| {
         CliError::session(format!(
             "cannot read RStudio sources directory {}: {e}",
             dir.display()
@@ -1675,8 +1675,8 @@ fn set_cursor(
 }
 
 fn list_open(rpc: &RpcClient<'_>, session: &Session) -> Result<Option<Value>, CliError> {
-    let dir = session.require_sources_dir()?;
-    let entries = fs::read_dir(dir).map_err(|e| {
+    let dir = session.resolve_sources_dir()?;
+    let entries = fs::read_dir(&dir).map_err(|e| {
         CliError::session(format!(
             "cannot read RStudio sources directory {}: {e}",
             dir.display()

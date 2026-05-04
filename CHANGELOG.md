@@ -4,6 +4,41 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-05-04
+
+### Fixed — `editor list` / `status` / `observe stream` after opening a project
+
+Reported as #4. RStudio Server (and Desktop) RELOCATES the per-session
+sources directory when a project is opened: from
+`~/.local/share/rstudio/sources/session-<id>/` to
+`<project>/.Rproj.user/<hash>/sources/session-<id>/`. The session id
+is unchanged — only the parent path moves. Until 0.7.1 the CLI cached
+the global path at session-detection time, so once a project was open
+every command that walks the sources directory failed:
+
+- `editor list` returned `session_unavailable: cannot read RStudio
+  sources directory ... No such file or directory (os error 2)`.
+- `editor read-buffer --path` could not resolve open documents.
+- `status.documents.open_count` was always 0 even when documents were
+  open (computed from the missing dir), while `active_id` came from a
+  different RPC path and stayed correct — the two contradicted.
+- `observe stream` Tier 1 silently emitted no editor events.
+
+The fix adds `Session::resolve_sources_dir()` that tries the global
+path first (cheap stat) and falls back to scanning
+`<active-project>/.Rproj.user/*/sources/session-<id>` when missing.
+The active project is read from disk only — never invokes R — so
+`observe stream --tier 1` remains R-free:
+
+- Server: `active-project-file` key in `session-persistent-state`.
+- Both modes: `~/.local/share/rstudio/projects_settings/last-project-path`.
+
+`observe stream`'s `DiskPaths` was also brittle: it derived the
+RStudio data root from the sources directory's grand-parent, which is
+correct only outside a project. It now hard-codes
+`~/.local/share/rstudio/` (the data root is global; only the per-
+session sources directory relocates).
+
 ## [0.7.1] — 2026-05-04
 
 ### Changed — `observe` becomes a multi-subcommand category
