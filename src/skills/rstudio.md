@@ -102,14 +102,37 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 ## MCP server mode
 
 `rstudio mcp` exposes the entire CLI surface as MCP tools over stdio.
-A user configures their MCP client (Claude Code, Cline, Cursor,
-Continue, Claude Desktop) once with:
+A user configures their MCP client once. Variants per client:
+
+**Claude Code** (CLI):
 
 ```sh
 claude mcp add rstudio --scope user -- rstudio mcp
 ```
 
-After that, `~90` tools appear in the agent's tool catalog. Naming:
+**Claude Desktop** — edit `claude_desktop_config.json`
+(`~/Library/Application Support/Claude/` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "rstudio": { "command": "rstudio", "args": ["mcp"] }
+  }
+}
+```
+
+**Cline / Continue / Cursor** — same `{command, args}` shape in the
+extension's MCP settings panel.
+
+**Verify** the server runs:
+
+```sh
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  | rstudio mcp | jq '.result.serverInfo'
+```
+
+After configuration, `~90` tools appear in the agent's tool catalog.
+Naming:
 `{category}_{action}` with hyphens replaced by underscores —
 `editor.read-buffer` becomes `editor_read_buffer`, `meta.status`
 becomes `meta_status`, etc.

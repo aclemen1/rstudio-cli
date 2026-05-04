@@ -4,6 +4,24 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-05-04
+
+### Documentation — MCP server installation procedure
+
+Adds full MCP install coverage in two surfaces:
+
+- **README** (`## Install / ### MCP server`): per-client procedures
+  for Claude Code, Claude Desktop (with full `claude_desktop_config.json`
+  snippet), Cline / Continue / Cursor, plus a stdin verification
+  one-liner and a note on cross-surface coexistence.
+- **Embedded CLI skill** (`src/skills/rstudio.md`): the `## MCP server
+  mode` section now lists the same per-client variants instead of only
+  Claude Code. Since the skill is embedded at compile time, the binary
+  needs a new version to ship the updated content; that's the
+  motivation for the bump despite this being a doc-only release.
+
+No code changes. Bumps Cargo.toml 0.9.1 → 0.9.2.
+
 ## [0.9.1] — 2026-05-04
 
 ### Added — MCP server returns agent guidance via `initialize.instructions`
