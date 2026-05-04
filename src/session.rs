@@ -81,6 +81,17 @@ impl Session {
         })
     }
 
+    /// Best-effort extraction of the session id from `session_dir` /
+    /// `sources_dir` (both end with `session-<id>`). Used by the
+    /// session-scoped file lock.
+    pub fn session_id(&self) -> Option<String> {
+        let dir = self.session_dir.as_ref().or(self.sources_dir.as_ref())?;
+        dir.file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.strip_prefix("session-"))
+            .map(str::to_string)
+    }
+
     pub fn require_sources_dir(&self) -> Result<&Path, CliError> {
         self.sources_dir.as_deref().ok_or_else(|| {
             CliError::session(

@@ -3,6 +3,7 @@ pub mod client_id;
 pub mod commands;
 pub mod desktop_discovery;
 pub mod error;
+pub mod lock;
 pub mod output;
 pub mod policy;
 pub mod r_eval;

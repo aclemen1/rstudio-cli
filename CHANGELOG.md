@@ -4,6 +4,58 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-05-04
+
+### Added — Multi-agent safety: per-session lock + `rstudio tx`
+
+When two agents run `rstudio` against the same RStudio session, write
+commands now compete for an OS-level `flock` at
+`~/.config/rstudio-cli/locks/session-<id>.lock`. Reads, `observe stream`,
+and meta-CLI commands take no lock — `rsession` already serialises its
+own RPCs internally, so reader/writer races aren't a protocol hazard.
+Two new global flags:
+
+- `--no-lock` — bypass for power users / debugging.
+- `--lock-timeout <s>` — wait time before erroring (default 30 s).
+
+On timeout, the error message carries the holder's PID, command, and
+start timestamp (read from a sidecar JSON next to the lock file). When
+the holding process exits — cleanly, on `kill -9`, or on crash — the
+kernel releases the `flock`. No stale locks, no daemon, no PID files.
+
+For atomic multi-call sequences (the common read-modify-write pattern),
+new top-level command:
+
+```sh
+rstudio tx -- bash -c '
+  buf=$(rstudio editor read-buffer X | jq -r .result.contents)
+  new=$(printf "%s" "$buf" | sed "s/foo/bar/g")
+  rstudio editor set-contents X "$new"
+'
+```
+
+`rstudio tx -- <cmd>` acquires the session lock, sets
+`RSTUDIO_TX_HELD=1` in the child environment, and execs `<cmd>`. Every
+nested `rstudio` invocation inside detects the env var and skips its
+own per-call lock (the parent already holds it). Patterned after
+`flock(1)` from util-linux — kernel cleanup on parent exit handles
+every failure mode.
+
+With no args, `rstudio tx` defaults to `$SHELL` (interactive REPL
+inside a transaction). With `bash -c '...'`, it's a one-shot atomic
+script. Both compose naturally with shell variables, `jq`, and pipes —
+no new DSL or REPL grammar to learn. The shell *is* the monad.
+
+Tests: 6 unit tests in `lock.rs` cover the primitive (acquire / release
+/ timeout / serialization / sidecar / env detection); 11 integration
+tests in `tests/locking.rs` exercise the binary end-to-end (read-only
+without RStudio; live tests skip cleanly when no session is running).
+
+No competing tool in the R/MCP ecosystem provides comparable enforced
+multi-agent safety: clauder offers a collaborative protocol that
+relies on LLM compliance (no enforcement); the others ignore the
+problem entirely. See the comparative table in README.
+
 ## [0.7.2] — 2026-05-04
 
 ### Fixed — `editor list` / `status` / `observe stream` after opening a project

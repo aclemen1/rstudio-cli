@@ -5,11 +5,14 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use crate::VERSION;
+use std::time::Duration;
+
 use crate::commands::{
     console, editor, env, job, observe, pane, policy_cmd, pref, r, raw, schema_cmd, session, skill,
-    status, term, ui,
+    status, term, tx, ui,
 };
 use crate::error::CliError;
+use crate::lock::SessionLock;
 use crate::output::{Format, Reply, print_err, print_reply};
 use crate::policy::Policy;
 use crate::rpc::RpcClient;
@@ -63,6 +66,18 @@ struct Cli {
     /// and Unix pipelines. Pass `--format json|text` to force one.
     #[arg(long, global = true)]
     format: Option<Format>,
+
+    /// Skip the per-call session mutex. The session lock prevents two
+    /// agents from interleaving writes on the same RStudio session;
+    /// pass --no-lock when you're sure no other writer is active
+    /// (debugging, lone scripts). Read commands and meta-CLI never lock.
+    #[arg(long, global = true)]
+    no_lock: bool,
+
+    /// Timeout in seconds when waiting for the per-session mutex.
+    /// On timeout, errors with the holder's PID and command. Default 30s.
+    #[arg(long, global = true, default_value_t = 30.0)]
+    lock_timeout: f64,
 
     #[command(subcommand)]
     command: Command,
@@ -123,6 +138,13 @@ enum Command {
 
     /// Stream session-state changes as JSON Lines on stdout (live tail).
     Observe(observe::ObserveCmd),
+
+    /// Hold the session lock across a child process for atomic
+    /// multi-call sequences (style `flock(1)`). Examples:
+    ///   rstudio tx -- bash -c 'editor read X | jq ... | editor write X'
+    ///   rstudio tx -- bash    # interactive REPL inside the transaction
+    ///   rstudio tx            # same, defaults to $SHELL
+    Tx(tx::TxCmd),
 
     /// Self-describing command catalog (3-level drill-down).
     Schema(schema_cmd::SchemaCmd),
@@ -206,12 +228,47 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         Command::Job(_) => Some("job"),
         Command::Ui(_) => Some("ui"),
         Command::Observe(_) => Some("observe"),
+        Command::Tx(_) => Some("tx"),
         Command::Rpc(_) => Some("rpc"),
         Command::Postback(_) => Some("postback"),
     };
     if let Some(key) = policy_key {
         policy.check(key)?;
     }
+
+    // Tx: holds its own lock and execs a child. Never returns through
+    // the standard reply path — std::process::exit propagates the
+    // child's status code.
+    if matches!(&cli.command, Command::Tx(_)) {
+        let Command::Tx(tx_cmd) = cli.command else {
+            unreachable!()
+        };
+        let session = Session::detect(overrides)?;
+        let timeout = Duration::from_secs_f64(cli.lock_timeout);
+        let acquire = !cli.no_lock && !SessionLock::inside_tx();
+        let code = tx::run(&tx_cmd, &session, timeout, acquire)?;
+        std::process::exit(code);
+    }
+
+    // Phase 1 mutex: acquire a per-session exclusive lock for write
+    // commands. Skipped when --no-lock is set, when we're already
+    // inside an outer `tx -- ...` (RSTUDIO_TX_HELD), or when the
+    // command is read-only / meta-CLI. Held for the lifetime of this
+    // process — kernel cleanup on exit.
+    let _session_lock =
+        if needs_write_lock(&cli.command) && !cli.no_lock && !SessionLock::inside_tx() {
+            let session = Session::detect(overrides.clone())?;
+            let id = session.session_id().ok_or_else(|| {
+                CliError::session(
+                    "lock: cannot derive session id; pass --session-id, or --no-lock to bypass.",
+                )
+            })?;
+            let label = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+            let timeout = Duration::from_secs_f64(cli.lock_timeout);
+            Some(SessionLock::acquire(&id, timeout, &label)?)
+        } else {
+            None
+        };
 
     match cli.command {
         // Meta-CLI carve-out: text mode prints "0.5.0\n" raw, no envelope.
@@ -297,5 +354,89 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             raw::run_postback(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Policy(cmd) => policy_cmd::run(&cmd).map(Reply::Wrapped),
+        // Tx is handled by an earlier early-return branch. This arm
+        // satisfies the exhaustiveness check.
+        Command::Tx(_) => unreachable!("Tx handled before this match"),
+    }
+}
+
+/// Whether this command should acquire the per-session write lock
+/// before running. The principle: any command that mutates rsession
+/// state (R execution, document editing, project switch, modal UI,
+/// etc.) takes the lock. Pure reads (and meta-CLI like version /
+/// schema / policy) do not — rsession serializes its own RPCs, so
+/// reader/writer races can't happen at the protocol level.
+fn needs_write_lock(cmd: &Command) -> bool {
+    match cmd {
+        // Meta-CLI: no session, no lock.
+        Command::Version
+        | Command::Status
+        | Command::Schema(_)
+        | Command::Skill(_)
+        | Command::Policy(_) => false,
+        // Tx: handles its own locking.
+        Command::Tx(_) => false,
+
+        // Editor: read-only subcommands.
+        Command::Editor(editor::EditorCmd::Read { .. })
+        | Command::Editor(editor::EditorCmd::ReadBuffer { .. })
+        | Command::Editor(editor::EditorCmd::Context { .. })
+        | Command::Editor(editor::EditorCmd::ActiveId { .. })
+        | Command::Editor(editor::EditorCmd::Path { .. })
+        | Command::Editor(editor::EditorCmd::List) => false,
+        Command::Editor(_) => true,
+
+        // R: poll is read-only, exec / send are writes.
+        Command::R(r::RCmd::Poll { .. }) => false,
+        Command::R(_) => true,
+
+        // Console: history / actions / context are reads, activate is a write.
+        Command::Console(console::ConsoleCmd::History { .. })
+        | Command::Console(console::ConsoleCmd::Actions { .. })
+        | Command::Console(console::ConsoleCmd::Context) => false,
+        Command::Console(_) => true,
+
+        // Term: list / buffer / context / busy / running / exit-code / visible are reads.
+        Command::Term(term::TermCmd::List)
+        | Command::Term(term::TermCmd::Buffer { .. })
+        | Command::Term(term::TermCmd::Context { .. })
+        | Command::Term(term::TermCmd::Busy { .. })
+        | Command::Term(term::TermCmd::Running { .. })
+        | Command::Term(term::TermCmd::ExitCode { .. })
+        | Command::Term(term::TermCmd::Visible) => false,
+        Command::Term(_) => true,
+
+        // Env: all reads.
+        Command::Env(_) => false,
+
+        // Pane: all writes (open viewer / save plot / preview / markers / highlight-ui all mutate).
+        Command::Pane(_) => true,
+
+        // Session: info / project / list are reads; restart / open-project are writes.
+        Command::Session(session::SessionCmd::Info)
+        | Command::Session(session::SessionCmd::Project)
+        | Command::Session(session::SessionCmd::List) => false,
+        Command::Session(_) => true,
+
+        // Pref: read* and get-persistent are reads; write* and set-persistent are writes.
+        Command::Pref(pref::PrefCmd::Read { .. })
+        | Command::Pref(pref::PrefCmd::ReadRstudio { .. })
+        | Command::Pref(pref::PrefCmd::GetPersistent { .. }) => false,
+        Command::Pref(_) => true,
+
+        // Job: list / is-active are reads, everything else mutates.
+        Command::Job(job::JobCmd::List) | Command::Job(job::JobCmd::IsActive) => false,
+        Command::Job(_) => true,
+
+        // UI: every modal mutates IDE state and blocks until dismissed.
+        Command::Ui(_) => true,
+
+        // Observe: pure read-only — file watching + R-free RPCs (or one
+        // execute_r_code per tick that doesn't mutate). No lock.
+        Command::Observe(_) => false,
+
+        // Escape hatches: conservatively treat as writes since the
+        // method / postback name is arbitrary.
+        Command::Rpc(_) | Command::Postback(_) => true,
     }
 }

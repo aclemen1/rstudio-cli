@@ -40,8 +40,9 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.7.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 15 categories and 81 actions. Live-tested end-to-end on both
+**v0.8.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 15 categories and 81 actions, with multi-agent safety via
+per-session lock + `tx` transaction wrapper. Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
@@ -61,6 +62,7 @@ across 15 categories and 81 actions. Live-tested end-to-end on both
 | `skill`  | `show` `install` | Embedded Claude Code skill |
 | `schema` | (drill-down catalog) | Self-describing surface |
 | escape   | `rpc` `postback` | Raw JSON-RPC / postback |
+| meta     | `version` `status` `tx` | Meta-CLI commands (no rsession schema entry) |
 
 Run `rstudio schema` for the auto-generated catalog of every action.
 
@@ -139,6 +141,11 @@ will correct it promptly.
 | R busy / idle, env, wd, attached pkgs, namespaces (Tier 2) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Typed env, last_value, plot count (Tier 3) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Causal ordering: effects buffered until cause `console.input` lands | ✓ | ✗ | ✗ | ✗ | ✗ |
+| **Multi-agent safety** | | | | | |
+| OS-enforced per-session writer mutex (flock) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Multi-call atomicity (`tx -- <cmd>`, fork-inherit) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Lock-holder attribution (PID + command + timestamp) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Multi-agent collaborative protocol (LLM convention) | ✗ | ✓ | ✗ | ✗ | ✗ |
 | **Safety & output** | | | | | |
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
 | Async R execution (non-blocking, via callr) | ✓ | ✗ | ✗ | ✗ | ✗ |
@@ -199,7 +206,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.7.2
+rstudio version                 # 0.8.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -356,6 +363,50 @@ do **not** run in parallel — total wall time ≈ sum of per-call time.
   pty/process, not bound to the R FIFO.
 - Postbacks (`editor edit`) and `console_input` (`r send`) don't go
   through the R queue, so they aren't subject to the FIFO.
+
+## Multi-agent safety
+
+Two agents (or one agent + one script) running `rstudio` against the
+same session can interleave their writes in surprising ways. The CLI
+defends against this in two layers:
+
+**Per-call mutex** (Phase 1, transparent). Every write command — `r
+exec`, `editor write`, `pref write`, `ui *`, `session restart`, etc.
+— acquires an exclusive `flock` on
+`~/.config/rstudio-cli/locks/session-<id>.lock` for the duration of
+the call. Reads (`editor list`, `env list`, `console history`,
+`observe stream`, schema, version, …) take no lock — the rsession
+already serialises its own RPCs, so reader-writer races aren't a
+protocol hazard. Holder attribution (PID + command + timestamp) is
+written to a sidecar JSON, surfaced in the timeout error.
+
+**Multi-call atomicity via `rstudio tx`** (Phase 2). For sequences of
+operations that must be atomic across multiple invocations (e.g.
+`read-buffer X` → transform → `set-contents X`), wrap the sequence in
+a child process. `tx --` holds the lock for the lifetime of the child
+and sets `RSTUDIO_TX_HELD=1` so that every nested `rstudio` call
+inside skips its own per-call lock (the parent already holds it).
+Patterned after `flock(1)` from util-linux:
+
+```sh
+# Atomic read-modify-write
+rstudio tx -- bash -c '
+  buf=$(rstudio editor read-buffer X | jq -r .result.contents)
+  new=$(printf "%s" "$buf" | sed "s/foo/bar/g")
+  rstudio editor set-contents X "$new"
+'
+
+# Interactive REPL inside a transaction
+rstudio tx -- bash
+
+# Default: $SHELL with the lock held
+rstudio tx
+```
+
+Kernel cleanup: when the holding process exits — cleanly, on `kill
+-9`, or on crash — the OS releases the `flock` automatically. No PID
+files, no stale locks, no daemon. Bypass with the global `--no-lock`
+flag for power users.
 
 ## Hard "do not"
 

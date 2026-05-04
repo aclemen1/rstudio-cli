@@ -99,6 +99,61 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 - Postbacks (`editor edit`) and console_input (`r send`) don't go
   through the R queue and therefore aren't subject to that limit.
 
+## Multi-agent safety: the per-session lock and `rstudio tx`
+
+When two agents run `rstudio` against the same RStudio session, write
+commands compete for an OS-level `flock` at
+`~/.config/rstudio-cli/locks/session-<id>.lock`. Reads, `observe stream`,
+and meta-CLI never lock. Default timeout when waiting: 30 s. If you
+hit a timeout, the error includes the holder's PID and command — that
+is another agent (or a previous run of yours that hasn't finished).
+
+Single calls are protected automatically — you don't need to do
+anything. **But across calls**, the lock is released between
+invocations. If you need an atomic sequence (e.g. read a buffer →
+modify → write back), wrap it in `rstudio tx`:
+
+```sh
+# Atomic read-modify-write — no other agent can interleave.
+rstudio tx -- bash -c '
+  buf=$(rstudio editor read-buffer X | jq -r .result.contents)
+  new=$(printf "%s" "$buf" | sed "s/foo/bar/g")
+  rstudio editor set-contents X "$new"
+'
+```
+
+`rstudio tx -- <cmd>` acquires the lock, sets `RSTUDIO_TX_HELD=1`,
+and execs `<cmd>`. Every nested `rstudio` invocation inside detects
+the env var and skips its own per-call lock acquisition (the parent
+already holds it). Kernel cleanup on parent exit — there are no
+stale locks.
+
+Use `tx` when:
+- You read state and then conditionally write based on what you read.
+- You need a multi-step edit on the same document (`select` then
+  `insert`, etc.) without another agent moving the cursor mid-flight.
+- You're orchestrating R state setup followed by execution.
+
+Don't put inside a `tx`:
+- `rstudio observe stream` — it never returns and would hold the lock
+  indefinitely. (Read-only; doesn't need tx anyway.)
+- `rstudio ui dialog` and other `ui` commands — they block until the
+  user dismisses the modal, which freezes the rsession for everyone.
+
+Interactive mode is just `rstudio tx -- bash` (or `rstudio tx` for
+`$SHELL`). The whole shell session runs inside the transaction. Use
+this when you want a series of commands with results fed back to you
+between calls (the LLM-agent equivalent of a REPL inside a lock).
+
+`tx` provides **serialization**, not full transactionality — if your
+3rd command fails, the first two are already applied. Tx assures no
+other agent interleaves; rollback is your responsibility (snapshot
+state before, restore on error).
+
+The global `--no-lock` flag bypasses all locking — for debugging or
+when you're certain no other agent is active. Don't use it from
+within an LLM-driven agent unless you understand the consequences.
+
 ## Patterns worth knowing
 
 - **Run R silently and read its output**: `rstudio r exec '<R code>'`.

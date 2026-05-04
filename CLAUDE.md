@@ -38,6 +38,29 @@ Both repos are Jujutsu colocated with Git (`.jj/` + `.git/`). Only use
 Code, comments, README, CHANGELOG, commit messages: English.
 Conversation with the user: French.
 
+## Source of truth for non-deducible knowledge
+
+Two documents must contain everything an agent (or a future contributor)
+**cannot deduce** from the codebase, the CLI `--help`, or the schema:
+
+1. **`src/skills/rstudio.md`** — the embedded skill that ships to
+   Claude Code. Anything an LLM-driven agent needs to know to use the
+   CLI correctly that isn't already obvious from `rstudio schema` or
+   `rstudio <cmd> --help`. Examples: when to use `tx` vs single calls,
+   how `--timeout` interacts with R's FIFO, why `client_init` is
+   blacklisted, the read-modify-write atomicity pattern, what
+   `RSTUDIO_TX_HELD` means inside a tx.
+
+2. **`CLAUDE.md`** (this file) — non-deducible facts about the project
+   itself: release pipeline, VCS choice, language conventions, code-
+   ownership patterns. Things a contributor reading the source tree
+   alone would miss or get wrong.
+
+Both should be **minimal**: anything provable from the code or schema
+belongs in code/schema, not in these docs. When you add a feature
+whose use requires non-obvious knowledge, update the skill in the same
+commit.
+
 ## When adding or changing a CLI command
 
 A user-visible command change is not done until three surfaces agree.
