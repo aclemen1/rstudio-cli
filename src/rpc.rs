@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::thread;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -11,6 +12,7 @@ use crate::transport::{HttpResponse, request};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const RPC_INVALID_CLIENT_ID: i32 = 4;
+const RPC_INVALID_REQUEST: i32 = 6;
 
 pub struct RpcClient<'a> {
     session: &'a Session,
@@ -98,10 +100,20 @@ impl<'a> RpcClient<'a> {
     /// JSON-RPC call. Reads the active browser client's id from the session state file
     /// and uses it as `clientId` so events are routed to the user's open tab.
     /// On `Invalid client id` (code 4), re-reads the file once and retries.
+    /// On code 6 (`Invalid json-rpc request`), waits briefly and retries once —
+    /// speculative fix for the race observed when the user clicks a marker in
+    /// RStudio's Markers pane right before this call arrives (the click triggers a
+    /// browser→rsession state transition that causes transient code-6 rejections).
+    /// Remove if the root cause is identified via rsession source inspection.
     pub fn rpc(&self, method: &str, params: Vec<Value>) -> Result<Value, CliError> {
         let client_id = self.client_id(false)?;
         match self.rpc_with_client_id(method, &params, &client_id) {
             Err(e) if e.code == RPC_INVALID_CLIENT_ID => {
+                let refreshed = self.client_id(true)?;
+                self.rpc_with_client_id(method, &params, &refreshed)
+            }
+            Err(e) if e.code == RPC_INVALID_REQUEST => {
+                thread::sleep(Duration::from_millis(200));
                 let refreshed = self.client_id(true)?;
                 self.rpc_with_client_id(method, &params, &refreshed)
             }
@@ -299,5 +311,19 @@ mod tests {
         let err = parse_rpc_envelope("execute_r_code", &resp).expect_err("err");
         assert!(matches!(err.kind, ErrorKind::RError));
         assert_eq!(err.message, "intentional");
+    }
+
+    // Fix #2: the race-condition retry is triggered on code 6.
+    // parse_rpc_envelope must surface code 6 as an RpcError (not swallowed)
+    // so that RpcClient::rpc() can match on it.
+    #[test]
+    fn rpc_error_6_surfaces_as_rpc_error() {
+        let resp = resp_with_body(
+            r#"{"error":{"code":6,"message":"Invalid json-rpc request","error":null}}"#,
+        );
+        let err = parse_rpc_envelope("execute_r_code", &resp).expect_err("err");
+        assert!(matches!(err.kind, ErrorKind::RpcError));
+        assert_eq!(err.code, 6);
+        assert!(err.message.contains("6"));
     }
 }

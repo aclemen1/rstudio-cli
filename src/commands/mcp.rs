@@ -408,6 +408,8 @@ impl McpServer {
                 "mcp: subprocess output not JSON: {e}; stdout={stdout}"
             ))
         })?;
+        // Propagate subprocess errors as Err so handle_tools_call sets isError=true.
+        propagate_ok_false(&parsed)?;
         Ok(parsed)
     }
 
@@ -452,7 +454,7 @@ fn build_input_schema(params: &[ParamSpec]) -> Value {
             ParamKind::Integer => json!({"type": "integer"}),
             ParamKind::Number => json!({"type": "number"}),
             ParamKind::Bool => json!({"type": "boolean"}),
-            ParamKind::Json => json!({"type": "object"}),
+            ParamKind::Json => json!({"anyOf": [{"type": "object"}, {"type": "array"}]}),
             ParamKind::Enum => {
                 let allowed: Vec<Value> = p.allowed.iter().map(|s| json!(s)).collect();
                 json!({"type": "string", "enum": allowed})
@@ -528,6 +530,22 @@ fn error_envelope(id: Value, code: i32, message: &str) -> Value {
         "id": id,
         "error": { "code": code, "message": message },
     })
+}
+
+/// Convert a subprocess `{"ok": false, "error": {"message": ...}}` envelope
+/// into a `CliError`. Returns `Ok(())` for any other shape (including `ok: true`
+/// or envelopes where the `ok` field is absent or non-bool).
+fn propagate_ok_false(parsed: &Value) -> Result<(), CliError> {
+    if parsed.get("ok").and_then(|v| v.as_bool()) == Some(false) {
+        let message = parsed
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("subprocess error")
+            .to_string();
+        return Err(CliError::internal(message));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -680,5 +698,59 @@ mod tests {
         assert!(names.iter().any(|n| n.starts_with("editor_")));
         assert!(names.iter().any(|n| n.starts_with("r_")));
         assert!(names.iter().any(|n| n.starts_with("observe_")));
+    }
+
+    // Fix #3: ParamKind::Json must accept both arrays and objects in the schema.
+    #[test]
+    fn build_input_schema_json_param_uses_anyof() {
+        let params: &[ParamSpec] = &[ParamSpec {
+            name: "--markers",
+            kind: ParamKind::Json,
+            required: false,
+            default: None,
+            allowed: &[],
+            description: "JSON array of marker objects.",
+        }];
+        let schema = build_input_schema(params);
+        let prop = &schema["properties"]["markers"];
+        let any_of = prop["anyOf"].as_array().expect("Json param must use anyOf");
+        let types: Vec<&str> = any_of.iter().map(|v| v["type"].as_str().unwrap()).collect();
+        assert!(types.contains(&"array"), "anyOf must include array");
+        assert!(types.contains(&"object"), "anyOf must include object");
+        // Description must still be propagated alongside anyOf.
+        assert_eq!(prop["description"], "JSON array of marker objects.");
+    }
+
+    // Fix #1: propagate_ok_false must turn ok:false into Err, and leave ok:true alone.
+    #[test]
+    fn propagate_ok_false_returns_err_with_message() {
+        let v = json!({
+            "ok": false,
+            "error": {"code": 6, "kind": "rpc_error",
+                      "message": "jsonrpc error 6 (Invalid json-rpc request)"}
+        });
+        let err = propagate_ok_false(&v).unwrap_err();
+        assert_eq!(err.message, "jsonrpc error 6 (Invalid json-rpc request)");
+    }
+
+    #[test]
+    fn propagate_ok_false_falls_back_when_message_absent() {
+        let v = json!({"ok": false});
+        let err = propagate_ok_false(&v).unwrap_err();
+        assert_eq!(err.message, "subprocess error");
+    }
+
+    #[test]
+    fn propagate_ok_false_is_noop_for_ok_true() {
+        let v = json!({"ok": true, "result": {"count": 3}});
+        assert!(propagate_ok_false(&v).is_ok());
+    }
+
+    #[test]
+    fn propagate_ok_false_is_noop_when_ok_absent() {
+        // Envelopes that don't carry an `ok` field at all (e.g. partial
+        // JSON or legacy format) must pass through without error.
+        let v = json!({"result": "foo"});
+        assert!(propagate_ok_false(&v).is_ok());
     }
 }

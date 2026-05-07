@@ -4,6 +4,33 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] — 2026-05-07
+
+### Fixed — MCP error propagation and RPC race condition after Markers pane click
+
+**`invoke_action` now signals failures correctly (`isError: true`).** When the
+CLI subprocess returned `{"ok": false, …}`, the MCP server was forwarding it as
+`isError: false` — the LLM had no way to know the tool had failed. The envelope
+is now checked and any `ok: false` result is turned into an `Err`, which
+`handle_tools_call` maps to `isError: true`.
+
+**Retry on transient RPC error 6.** Clicking a marker in RStudio's Markers pane
+triggers a browser→rsession state transition. If a subsequent MCP tool call
+arrives during that transition, rsession rejects it with code 6 ("Invalid
+json-rpc request"). `RpcClient::rpc` now retries once after 200 ms and a
+client-id refresh when it receives code 6, matching the existing retry for
+code 4.
+
+**`ParamKind::Json` MCP schema now accepts arrays.** The `inputSchema` for JSON
+parameters was `{"type": "object"}`, causing schema-validators to reject `--markers`
+(which is an array). Changed to `{"anyOf": [{"type": "object"}, {"type": "array"}]}`.
+
+**Integer coercion in `pane markers`.** `rstudioapi::sourceMarkers` requires
+integer `line`/`column` values. JSON numbers are doubles by default; the R code
+now explicitly coerces both columns with `as.integer()`.
+
+12 new unit tests cover all four fixes.
+
 ## [0.11.1] — 2026-05-04
 
 ### Fixed — `pane preview-md` compatibility with `markdown` < 1.0

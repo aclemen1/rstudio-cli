@@ -903,11 +903,6 @@ fn markers_cmd(
     markers_inline: Option<&str>,
     auto_select: &str,
 ) -> Result<Option<Value>, CliError> {
-    if !["none", "first", "error"].contains(&auto_select) {
-        return Err(CliError::user(format!(
-            "invalid --auto-select '{auto_select}'. Expected: none, first, error."
-        )));
-    }
     let json_str = match markers_inline {
         Some(s) => s.to_string(),
         None => {
@@ -924,8 +919,24 @@ fn markers_cmd(
             buf
         }
     };
+    let (r_code, count) = build_markers_r_code(name, &json_str, auto_select)?;
+    r_eval::run_silent(rpc, &r_code)?;
+    Ok(Some(json!({ "count": count, "name": name })))
+}
 
-    let parsed: Value = serde_json::from_str(&json_str)
+/// Validate markers JSON and build the R code string for `sourceMarkers`.
+/// Extracted for unit-testability (the caller owns stdin/RPC plumbing).
+fn build_markers_r_code(
+    name: &str,
+    json_str: &str,
+    auto_select: &str,
+) -> Result<(String, usize), CliError> {
+    if !["none", "first", "error"].contains(&auto_select) {
+        return Err(CliError::user(format!(
+            "invalid --auto-select '{auto_select}'. Expected: none, first, error."
+        )));
+    }
+    let parsed: Value = serde_json::from_str(json_str)
         .map_err(|e| CliError::user(format!("invalid markers JSON: {e}")))?;
     let arr = parsed
         .as_array()
@@ -934,24 +945,23 @@ fn markers_cmd(
         return Err(CliError::user("markers array is empty"));
     }
     let count = arr.len();
-
     let r_code = format!(
         r#"local({{
   m <- jsonlite::fromJSON({json_q}, simplifyDataFrame = TRUE)
   if (!is.data.frame(m)) m <- as.data.frame(m, stringsAsFactors = FALSE)
-  if (is.null(m$column)) m$column <- 1L
+  m$line   <- as.integer(m$line)
+  if (is.null(m$column)) m$column <- 1L else m$column <- as.integer(m$column)
   rstudioapi::sourceMarkers(
     name = {name_q},
     markers = m,
     autoSelect = {auto_q}
   )
 }})"#,
-        json_q = r_quote(&json_str),
+        json_q = r_quote(json_str),
         name_q = r_quote(name),
         auto_q = r_quote(auto_select),
     );
-    r_eval::run_silent(rpc, &r_code)?;
-    Ok(Some(json!({ "count": count, "name": name })))
+    Ok((r_code, count))
 }
 
 #[cfg(test)]
@@ -1040,5 +1050,58 @@ mod tests {
         let stem = abs.file_stem().unwrap().to_string_lossy().into_owned();
         let out = abs.parent().unwrap().join(format!("{stem}.html"));
         assert_eq!(out, PathBuf::from("/home/user/slides.html"));
+    }
+
+    // build_markers_r_code tests — no RPC required.
+
+    #[test]
+    fn markers_rejects_invalid_json() {
+        let err = build_markers_r_code("lint", "not-json", "none").unwrap_err();
+        assert!(err.message.contains("invalid markers JSON"));
+    }
+
+    #[test]
+    fn markers_rejects_json_object_not_array() {
+        let err = build_markers_r_code("lint", r#"{"type":"error"}"#, "none").unwrap_err();
+        assert!(err.message.contains("JSON array"));
+    }
+
+    #[test]
+    fn markers_rejects_empty_array() {
+        let err = build_markers_r_code("lint", "[]", "none").unwrap_err();
+        assert!(err.message.contains("empty"));
+    }
+
+    #[test]
+    fn markers_rejects_invalid_auto_select() {
+        let json = r#"[{"type":"warning","file":"x.R","line":1,"message":"x"}]"#;
+        let err = build_markers_r_code("lint", json, "bad").unwrap_err();
+        assert!(err.message.contains("auto-select"));
+        assert!(err.message.contains("bad"));
+    }
+
+    #[test]
+    fn markers_count_matches_array_length() {
+        let json = r#"[
+            {"type":"error","file":"a.R","line":1,"message":"e1"},
+            {"type":"warning","file":"b.R","line":2,"message":"w1"}
+        ]"#;
+        let (_, count) = build_markers_r_code("lint", json, "none").unwrap();
+        assert_eq!(count, 2);
+    }
+
+    // Fix #4: R code must include as.integer coercions for line and column.
+    #[test]
+    fn markers_r_code_coerces_line_and_column_to_integer() {
+        let json = r#"[{"type":"error","file":"a.R","line":5,"column":3,"message":"e"}]"#;
+        let (r_code, _) = build_markers_r_code("lint", json, "none").unwrap();
+        assert!(
+            r_code.contains("as.integer(m$line)"),
+            "R code must coerce line to integer"
+        );
+        assert!(
+            r_code.contains("as.integer(m$column)"),
+            "R code must coerce column to integer"
+        );
     }
 }

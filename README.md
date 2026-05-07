@@ -215,7 +215,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.10.0
+rstudio version                 # 0.11.2
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
