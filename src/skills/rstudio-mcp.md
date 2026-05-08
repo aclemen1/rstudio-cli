@@ -87,11 +87,17 @@ wall time ≈ sum of per-call time. Implications:
 
 ## Patterns worth knowing
 
+- **Run R visibly and capture its output**: `r_send({code: "..."})`.
+  Returns `{stdout: string, messages: string[], error: string|null}`.
+  The user sees `ℝ(~{ code })` appear and run in their console.
+  **Prefer this over `r_exec` whenever the user should see what is
+  running** — you get the same output with full visibility. Pass
+  `no_capture: true` for true fire-and-forget (nothing returned). Pass
+  `timeout: T` to bound the poll wait.
 - **Run R silently and read its output**: `r_exec({code: "<R code>"})`.
-  Returns `{output: string}`. Default elapsed limit is 2s — pass
+  Returns `{output: string}`. Use when silent/background execution is
+  specifically required. Default elapsed limit is 2s — pass
   `timeout: T` to extend (or `0` to disable).
-- **Type into the user's visible R console**: `r_send({code: "..."})`.
-  Fire-and-forget; the user sees the command appear and run.
 - **Open a file at a specific line**: `editor_open({path, line})`.
   Non-modal — the file appears in the Source pane. Use `editor_edit`
   for the modal `edit()` dialog.
@@ -150,8 +156,10 @@ use tx_begin/end to be atomic with respect to other agents).
   the server level because it invalidates the user's browser client
   and resets their RStudio session.
 - **`r_send` and `term_send` / `term_exec` are visible**. The user
-  sees them in their UI. Use them when you want the user to see what
-  ran; for silent execution, use `r_exec`.
+  sees them in their UI. **Default to `r_send` when the user should
+  see what runs**; reserve `r_exec` for truly silent/background
+  operations. `r_send` (without `no_capture`) holds the session lock
+  while polling for the captured result.
 - **Modal UI tools (`ui_*`) BLOCK** until the user dismisses them.
   Don't chain them in long sequences — the user has to interact
   between every call.

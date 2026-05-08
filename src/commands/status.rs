@@ -75,6 +75,9 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
         "active_path": r_info.get("active_doc_path").cloned().unwrap_or(Value::Null),
     });
 
+    let update_available =
+        crate::update_check::check(VERSION).map(|u| serde_json::json!({"latest": u.latest}));
+
     let value = json!({
         "cli": cli,
         "transport": transport,
@@ -82,6 +85,7 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
         "session": session_block,
         "rsession": rsession,
         "documents": documents,
+        "update_available": update_available,
     });
     let text = format_as_text(&value);
     // Default to JSON for `status`: agents call this at the start of a

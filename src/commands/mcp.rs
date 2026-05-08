@@ -403,13 +403,20 @@ impl McpServer {
 
         // The CLI emits exactly one JSON envelope on stdout (the
         // AI-native contract). Parse and forward.
-        let parsed: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+        let mut parsed: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
             CliError::internal(format!(
                 "mcp: subprocess output not JSON: {e}; stdout={stdout}"
             ))
         })?;
         // Propagate subprocess errors as Err so handle_tools_call sets isError=true.
         propagate_ok_false(&parsed)?;
+        // Inject update notice into every tool response so the agent sees it
+        // regardless of which tool it called (not just meta_status).
+        if let Some(info) = crate::update_check::check(crate::VERSION)
+            && let Some(obj) = parsed.as_object_mut()
+        {
+            obj.insert("_update_available".to_string(), json!(info.latest));
+        }
         Ok(parsed)
     }
 

@@ -4,6 +4,32 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-05-08
+
+### Added — `r send` output capture + automatic update check
+
+**`r send` now captures output while keeping code visible.**
+Previously, `r send` was fire-and-forget: code appeared in the user's
+R console but the agent received nothing back, pushing agents toward
+`r exec` (silent). `r send` now installs a helper `ℝ` in `.GlobalEnv`,
+sends `ℝ(~{ code })` via `console_input`, polls a per-session sentinel
+file (`/tmp/rstudio_cap_<pid>.json`), and returns
+`{stdout, messages, error}` — the same payload as `r exec`, but fully
+visible to the user. `ℝ` uses a tilde-formula parameter (`f[[2]]`)
+instead of NSE, self-removes from `.GlobalEnv` via `rm()` at the end of
+its `on.exit`, and handles R-side interruptions gracefully. Pass
+`--no-capture` for the old fire-and-forget behaviour.
+
+**Automatic update check (background, TTL 24 h).**
+At each invocation the CLI reads a platform-appropriate cache file
+(`dirs::cache_dir()/rstudio-cli/update-check.json`). When the cache is
+older than 24 hours a background thread refreshes it via
+`curl api.github.com/repos/…/releases/latest` without blocking the
+call. In CLI mode a bare notice is printed on `stderr` when a newer
+version is cached. In MCP mode a `_update_available` field is injected
+into every tool response, so the agent sees it regardless of which tool
+it called. Set `RSTUDIO_CLI_NO_UPDATE_CHECK=1` to opt out.
+
 ## [0.11.2] — 2026-05-07
 
 ### Fixed — MCP error propagation and RPC race condition after Markers pane click

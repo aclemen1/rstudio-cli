@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::Subcommand;
 use serde_json::{Value, json};
@@ -9,6 +9,7 @@ use crate::rpc::{RpcClient, r_quote};
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
 const SOCKET_TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
+const SEND_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
@@ -117,25 +118,70 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "r",
         name: "send",
-        summary: "Type R code into the user's console and execute it (visible).",
-        description: "Uses the console_input RPC. The user sees the command appear \
-                      and run, exactly as if they had typed it. Fire-and-forget; no \
-                      structured return value.",
-        params: &[ParamSpec {
-            name: "code",
-            kind: ParamKind::String,
-            required: true,
-            default: None,
-            allowed: &[],
-            description: "R code to send. Pass it without a trailing newline — \
-                          rsession adds the one that triggers execution.",
-        }],
-        examples: &[ExampleSpec {
-            cmd: "rstudio r send 'print(Sys.time())'",
-            explanation: "User sees print(Sys.time()) typed into their R console and executed.",
-        }],
-        returns: "void",
-        errors: &[],
+        summary: "Send R code to the user's visible console and capture its output.",
+        description: "Installs a helper `ℝ` in the session, then sends `ℝ(~{ code })` \
+                      via console_input so the user sees it run. `ℝ` takes a formula \
+                      (`~expr`) and extracts its RHS for evaluation — no NSE quoting in \
+                      the call site. The helper captures stdout (cat, print, auto-print) \
+                      via sink(split=TRUE) and messages via withCallingHandlers, writing \
+                      the result as JSON to a tempfile that the CLI polls. Uses \
+                      sink.number() to restore sink depth safely even when the code calls \
+                      source() or opens its own sinks. Pass --no-capture for fire-and- \
+                      forget behaviour (no output returned). Pass --timeout to bound the wait.",
+        params: &[
+            ParamSpec {
+                name: "code",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "R code to execute visibly.",
+            },
+            ParamSpec {
+                name: "--no-capture",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Skip capture; send code as-is and return nothing (fire-and-forget).",
+            },
+            ParamSpec {
+                name: "--timeout",
+                kind: ParamKind::Number,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Seconds to wait for the result before giving up. \
+                              Default: no limit. Ignored with --no-capture.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio r send 'sqrt(144)'",
+                explanation: "Returns {stdout: \"[1] 12\", messages: [], error: null}; \
+                              user sees ℝ(~{ sqrt(144) }) in their console.",
+            },
+            ExampleSpec {
+                cmd: "rstudio r send 'message(\"hi\"); 1+1'",
+                explanation: "Returns {stdout: \"[1] 2\", messages: [\"hi\\n\"], error: null}.",
+            },
+            ExampleSpec {
+                cmd: "rstudio r send --no-capture 'print(Sys.time())'",
+                explanation: "Fire-and-forget; code runs visibly, nothing returned.",
+            },
+        ],
+        returns: "{stdout: string, messages: string[], error: string|null} \
+                  or void with --no-capture",
+        errors: &[
+            ErrorSpec {
+                kind: "r_error",
+                when: "The R code raised a condition (stop, syntax error, ...).",
+            },
+            ErrorSpec {
+                kind: "timeout",
+                when: "Waiting for the result exceeded --timeout seconds.",
+            },
+        ],
         rstudioapi_fn: None,
         rpc_method: Some("console_input"),
     },
@@ -155,8 +201,16 @@ pub enum RCmd {
     },
     /// Check the status of a background R job started with `r exec --async`.
     Poll { id: String },
-    /// Send R code to the user's console (visible) and execute it.
-    Send { code: String },
+    /// Send R code to the user's visible console and capture its output.
+    Send {
+        code: String,
+        /// Skip capture; send code as-is and return nothing (fire-and-forget).
+        #[arg(long)]
+        no_capture: bool,
+        /// Seconds to wait for the captured result. Default: no limit.
+        #[arg(long, short = 't')]
+        timeout: Option<f64>,
+    },
 }
 
 pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
@@ -180,20 +234,17 @@ pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
             Ok(Some(json!({ "output": output })))
         }
         RCmd::Poll { id } => poll_async(rpc, id),
-        RCmd::Send { code } => {
-            // Do NOT append a trailing '\n' — rsession's console_input
-            // already terminates the input with a newline before pushing it
-            // to the R input queue. Appending our own would inject a blank
-            // line between the typed command and its output.
-            rpc.rpc(
-                "console_input",
-                vec![
-                    Value::String(code.clone()),
-                    Value::String(String::new()),
-                    json!(0),
-                ],
-            )?;
-            Ok(None)
+        RCmd::Send {
+            code,
+            no_capture,
+            timeout,
+        } => {
+            if *no_capture {
+                console_input(rpc, code)?;
+                Ok(None)
+            } else {
+                send_with_capture(rpc, code, *timeout)
+            }
         }
     }
 }
@@ -209,6 +260,163 @@ fn apply_socket_timeout(rpc: &RpcClient<'_>, eval_timeout: &EvalTimeout) {
             rpc.set_timeout(Some(wall));
         }
     }
+}
+
+fn console_input(rpc: &RpcClient<'_>, code: &str) -> Result<(), CliError> {
+    // Do NOT append a trailing '\n' — rsession's console_input already
+    // terminates the input with a newline before pushing it to the R input
+    // queue. Appending our own would inject a blank line.
+    rpc.rpc(
+        "console_input",
+        vec![
+            Value::String(code.to_string()),
+            Value::String(String::new()),
+            json!(0),
+        ],
+    )?;
+    Ok(())
+}
+
+fn send_with_capture(
+    rpc: &RpcClient<'_>,
+    code: &str,
+    timeout: Option<f64>,
+) -> Result<Option<Value>, CliError> {
+    // Stable rsession PID — used both as the result-file name and for crash
+    // detection. One fixed file per rsession lifetime means no orphan
+    // proliferation: a leftover from a previous killed call is cleaned up
+    // at the start of the next one.
+    let rsession_pid: Option<u32> = r_eval::run(rpc, "Sys.getpid()")
+        .ok()
+        .and_then(|s| s.trim().strip_prefix("[1] ").and_then(|n| n.parse().ok()));
+
+    let result_path = std::env::temp_dir().join(match rsession_pid {
+        Some(pid) => format!("rstudio_cap_{pid}.json"),
+        None => format!(
+            "rstudio_cap_fallback_{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ),
+    });
+    let result_path_str = result_path.to_string_lossy();
+
+    // Remove any leftover from a previously killed call.
+    let _ = std::fs::remove_file(&result_path);
+
+    // Install R() with the result path baked into the function body.
+    r_eval::run_silent(rpc, &build_capture_fn(&result_path_str))?;
+
+    // Send the wrapper via console_input — visible to the user, no quotes or
+    // path argument exposed. Single-line code stays on one line; multi-line
+    // code gets a brace block.
+    let call = if code.contains('\n') {
+        format!("ℝ(~{{\n{code}\n}})")
+    } else {
+        format!("ℝ(~{{ {code} }})")
+    };
+    console_input(rpc, &call)?;
+
+    // Poll the filesystem until R() writes the result file.
+    // Two early-exit signals:
+    //   • the result file appears (normal completion or R-side interrupt sentinel)
+    //   • rsession process is no longer alive (crash / kill)
+    let deadline = timeout.map(|t| Instant::now() + Duration::from_secs_f64(t));
+    loop {
+        std::thread::sleep(SEND_POLL_INTERVAL);
+        if result_path.exists() {
+            break;
+        }
+        if rsession_pid.is_some_and(|pid| !process_alive(pid)) {
+            let _ = std::fs::remove_file(&result_path);
+            return Err(CliError::r(
+                "rsession process died while waiting for r send result".to_string(),
+            ));
+        }
+        if deadline.is_some_and(|d| Instant::now() > d) {
+            let _ = std::fs::remove_file(&result_path);
+            return Err(CliError::timeout(
+                "r send: timed out waiting for capture result",
+            ));
+        }
+    }
+
+    let content = std::fs::read_to_string(&result_path)
+        .map_err(|e| CliError::internal(format!("r send: failed to read result: {e}")))?;
+    let _ = std::fs::remove_file(&result_path);
+
+    let result: Value = serde_json::from_str(&content).map_err(|e| {
+        CliError::internal(format!("r send: invalid JSON result: {e}; raw: {content}"))
+    })?;
+
+    if result
+        .get("interrupted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(CliError::r("R execution was interrupted".to_string()));
+    }
+
+    if let Some(err_msg) = result.get("error").and_then(Value::as_str) {
+        return Err(CliError::r(err_msg.to_string()));
+    }
+
+    Ok(Some(result))
+}
+
+fn process_alive(pid: u32) -> bool {
+    // kill(pid, 0) returns 0 if the process exists and we have permission,
+    // -1 with ESRCH if it does not exist.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn build_capture_fn(result_path: &str) -> String {
+    let path_r = r_quote(result_path);
+    format!(
+        r#"assign("ℝ", function(f) {{
+  .expr <- f[[2]]
+  .start <- sink.number()
+  .out <- tempfile()
+  .oc <- file(.out, "w+")
+  .msgs <- character()
+  .ok <- TRUE
+  .err <- NULL
+  .interrupted <- TRUE
+  on.exit({{
+    while (sink.number() > .start) sink(NULL)
+    try(close(.oc), silent = TRUE)
+    .stdout <- paste(readLines(.out, warn = FALSE), collapse = "\n")
+    try(unlink(.out), silent = TRUE)
+    .payload <- if (.interrupted) {{
+      '{{"interrupted":true}}'
+    }} else {{
+      jsonlite::toJSON(list(
+        stdout = .stdout,
+        messages = as.list(.msgs),
+        error = if (.ok) NULL else .err
+      ), auto_unbox = TRUE, null = "null")
+    }}
+    try(writeLines(.payload, {path_r}), silent = TRUE)
+    try(rm("ℝ", envir = globalenv()), silent = TRUE)
+  }}, add = TRUE)
+  tryCatch({{
+    sink(.oc, split = TRUE)
+    withCallingHandlers({{
+      .v <- withVisible(eval(.expr, envir = globalenv()))
+      if (.v$visible) print(.v$value)
+    }}, message = function(m) {{
+      .msgs <<- c(.msgs, conditionMessage(m))
+    }})
+  }}, error = function(e) {{
+    .ok <<- FALSE
+    .err <<- conditionMessage(e)
+  }})
+  .interrupted <- FALSE
+  invisible(NULL)
+}}, envir = globalenv())
+"#
+    )
 }
 
 fn exec_async(rpc: &RpcClient<'_>, code: &str) -> Result<Option<Value>, CliError> {

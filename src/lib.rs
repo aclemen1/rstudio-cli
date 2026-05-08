@@ -11,5 +11,6 @@ pub mod rpc;
 pub mod schema;
 pub mod session;
 pub mod transport;
+pub mod update_check;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

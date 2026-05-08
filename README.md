@@ -40,11 +40,15 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.10.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.12.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 17 categories and 88 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
 with embedded MCP-flavored agent guidance via `initialize.instructions`.
+`r send` now captures stdout, messages and errors while keeping the code
+visible in the user's R console — agents get the output, users see the
+execution. Automatic update check (background, TTL 24 h): `_update_available`
+injected into every MCP tool response; bare notice on `stderr` in CLI mode.
 Dedicated `project` category for project lifecycle (new / init / clone
 / open / current). Live-tested end-to-end on both
 **RStudio Server** (Linux) and **RStudio Desktop** (macOS).
@@ -52,7 +56,7 @@ Dedicated `project` category for project lifecycle (new / init / clone
 | category | actions | summary |
 |---|---|---|
 | `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` `set-marks` | Source pane and document operations |
-| `r`      | `exec` `send` `poll` | Run R code (silent or visible; async via callr) |
+| `r`      | `exec` `send` `poll` | Run R code silently, or visibly with captured output; async via callr |
 | `console`| `history` `actions` `context` | Console history + buffer + live editor context |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
 | `env`    | `list` `contents` `info` | Live R environment inspection |
@@ -100,6 +104,7 @@ will correct it promptly.
 | **R execution** | | | | | |
 | Evaluate code, capture output | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Send code to the visible R console | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Send visible code AND capture its output | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Configurable per-call timeout | ✓ | ✗ | ✗ | ✗ | ✓ |
 | Structured error kinds (`r_error`, `timeout`, …) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Async R subprocess (long-running workloads) | ✗ | ✓ | ✗ | ✗ | ✗ |
@@ -162,6 +167,7 @@ will correct it promptly.
 | Persistent CLI-level block list (category or action) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Per-agent execution audit log | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Structured JSON output with typed error envelope | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Automatic update notification (CLI stderr + MCP tool response) | ✓ | ✗ | ✗ | ✗ | ✗ |
 
 Notes on `~`:
 - **rstudio&#8209;cli / disk files & search**: by design, rstudio-cli does not duplicate `grep`/`rg`. Search is left to the agent or shell; `editor set-marks` then surfaces the results in the IDE.
@@ -380,8 +386,10 @@ rstudio r exec 'summary(mtcars)'
 rstudio r exec --timeout 60 'Sys.sleep(10); summary(mtcars)'
 rstudio r exec --timeout 0  'long_running()'   # no limit
 
-# Make something appear and execute in the user's R console.
-rstudio r send 'print(Sys.time())'
+# Send code to the visible R console and capture its output.
+# Returns {stdout, messages, error}; user sees ℝ(~{ … }) in their console.
+rstudio r send 'summary(mtcars)'
+rstudio r send --no-capture 'print(Sys.time())'   # fire-and-forget
 
 # Spawn a shell command in a fresh terminal and watch its output.
 ID=$(rstudio --format text term run 'cargo build' --working-dir ~/projects/foo | jq -r .id)

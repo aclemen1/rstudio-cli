@@ -176,15 +176,22 @@ pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let format = cli.format;
 
+    // Read update notice from cache before dispatch (zero latency — cache
+    // read only; background thread refreshes when TTL has expired).
+    let update = crate::update_check::check(VERSION);
+
     match dispatch(cli) {
         Ok(reply) => {
             print_reply(reply, format);
+            if let Some(info) = update {
+                eprintln!(
+                    "rstudio-cli {} is available (installed: {}).",
+                    info.latest, VERSION
+                );
+            }
             ExitCode::from(0)
         }
         Err(err) => {
-            // Errors default to JSON: the AI-native contract is uniform,
-            // and bad-arg errors fire before any command-specific default
-            // is known. Explicit --format text still pretty-prints.
             print_err(&err, format.unwrap_or(Format::Json));
             ExitCode::from(1)
         }

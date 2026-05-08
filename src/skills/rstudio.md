@@ -248,11 +248,17 @@ it's intended for debugging and solo scripts.
 
 ## Patterns worth knowing
 
+- **Run R visibly and capture its output**: `rstudio r send '<R code>'`.
+  Returns `{stdout: string, messages: string[], error: string|null}`.
+  The user sees `ℝ(~{ code })` appear and run in their console.
+  **Prefer this over `r exec` whenever the user should see what is
+  running** — you get the same output with full visibility. Pass
+  `--no-capture` for true fire-and-forget (nothing returned). Pass
+  `--timeout T` to bound the poll wait.
 - **Run R silently and read its output**: `rstudio r exec '<R code>'`.
-  Returns `{output: string}`. Default elapsed limit is 2 s — pass
+  Returns `{output: string}`. Use when silent/background execution is
+  specifically required. Default elapsed limit is 2 s — pass
   `--timeout T` to extend (or `--timeout 0` to disable, see above).
-- **Type into the user's R console (visible)**: `rstudio r send '<R code>'`.
-  Fire-and-forget; the user sees the command appear and run.
 - **Open a file at a specific line in the editor**:
   `rstudio editor open <path> --line N`. This is the non-modal path —
   the file appears in the Source pane. `editor edit <path>` is the
@@ -314,6 +320,9 @@ it's intended for debugging and solo scripts.
   their RStudio session.
 - `rstudio r send` and `rstudio term send/exec` are **visible** in
   the user's UI — only use them when the action is meant to be seen.
+  `r send` (without `--no-capture`) holds the session lock while
+  polling for the captured result; sequential agents are unaffected,
+  but concurrent `r exec` calls from other agents queue behind it.
 - `rstudio editor insert/select/edit` operate on the **active** document
   (or open a modal). If you don't know which one is active, run
   `rstudio editor context` first.
