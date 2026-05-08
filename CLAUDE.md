@@ -37,14 +37,36 @@ embedded skill markdown via `__VERSION__` at compile time).
    the GitHub Release with `tar.gz` artifacts.
 5. Wait for the Actions run to publish the release (≈10 min;
    `gh run watch`, then `gh release view vX.Y.Z`).
-6. Update tap `aclemen1/homebrew-tap`, file `Formula/rstudio-cli.rb`:
-   - `gh release download vX.Y.Z -R aclemen1/rstudio-cli -p '*.tar.gz' --dir <tmp>`.
-     Don't `curl` the asset URL — GitHub returns a redirect to a signed
-     S3 URL needing `gh` auth; raw curl yields a 9-byte error file.
-   - `sha256sum <tmp>/*.tar.gz` → 4 hashes.
-   - Bump `version` and replace the four `sha256` lines (one per
-     `on_arm`/`on_intel` × `on_macos`/`on_linux`).
-   - Commit + push the tap's `main`.
+6. Update tap `aclemen1/homebrew-tap`, file `Formula/rstudio-cli.rb`.
+   Use the GitHub API directly — no local clone needed, no JJ risk:
+
+   ```sh
+   # 1. Download artifacts and compute hashes
+   tmpdir=$(mktemp -d)
+   gh release download vX.Y.Z -R aclemen1/rstudio-cli -p '*.tar.gz' --dir "$tmpdir"
+   sha256sum "$tmpdir"/*.tar.gz
+   # Don't curl the asset URL: GitHub redirects to a signed S3 URL that
+   # requires gh auth; raw curl yields a 9-byte error file.
+
+   # 2. Get the blob SHA of the current formula (required for the PUT)
+   file_sha=$(gh api repos/aclemen1/homebrew-tap/contents/Formula/rstudio-cli.rb --jq '.sha')
+
+   # 3. Build the updated formula, then push it in one API call
+   new_content=$(cat <<'FORMULA'
+   class RstudioCli < Formula
+     ...  # bump version, replace 4 sha256 lines, bump test do version
+   end
+   FORMULA
+   )
+   gh api --method PUT repos/aclemen1/homebrew-tap/contents/Formula/rstudio-cli.rb \
+     --field message="chore: bump rstudio-cli to X.Y.Z" \
+     --field content="$(echo "$new_content" | base64)" \
+     --field sha="$file_sha"
+   ```
+
+   - Four `sha256` lines to update: `on_arm`/`on_intel` × `on_macos`/`on_linux`.
+   - Also bump the `version` field and the version string in `test do`.
+   - Verify: `brew update && brew upgrade rstudio-cli && rstudio version`.
 
 ## VCS
 

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 545" width="500" height="545">
+  <!-- B — Fenêtre terminal sombre, ℝ en bleu, prompt >_ intégré -->
+  <!-- Fond de la fenêtre terminal -->
+  <rect x="30" y="30" width="440" height="370" rx="14" ry="14"
+        fill="#1A3654"/>
+  <!-- Barre de titre -->
+  <rect x="30" y="30" width="440" height="38" rx="14" ry="14" fill="#243F5E"/>
+  <rect x="30" y="52" width="440" height="16" fill="#243F5E"/>
+  <!-- Boutons traffic light -->
+  <circle cx="70"  cy="49" r="7" fill="#FF5F57"/>
+  <circle cx="93"  cy="49" r="7" fill="#FEBC2E"/>
+  <circle cx="116" cy="49" r="7" fill="#28C840"/>
+  <!-- Titre de la fenêtre -->
+  <text x="250" y="54"
+        font-family="'Courier New',Courier,monospace"
+        font-size="16" fill="#8BA9C5"
+        text-anchor="middle" dominant-baseline="central">rstudio-cli</text>
+  <!-- Grand ℝ -->
+  <text x="250" y="240"
+        font-family="'STIX Two Math','Latin Modern Math','Noto Serif',Georgia,'Times New Roman',serif"
+        font-size="230" fill="#4878B0"
+        text-anchor="middle" dominant-baseline="central">ℝ</text>
+  <!-- Prompt dans le coin bas-droit -->
+  <text x="388" y="370"
+        font-family="'Courier New',Courier,monospace"
+        font-size="44" fill="#28C840" text-anchor="middle">&gt;_</text>
+  <!-- Wordmark sous la fenêtre -->
+  <text x="250" y="455"
+        font-family="Inter,'Helvetica Neue',Arial,sans-serif"
+        font-size="40" font-weight="700" fill="#1A3654"
+        text-anchor="middle" letter-spacing="-0.5">rstudio-cli</text>
+</svg>

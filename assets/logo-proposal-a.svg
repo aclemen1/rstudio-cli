@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 545" width="500" height="545">
+  <!-- A — Hexagone clair, ℝ remplace le R, même palette que l'original -->
+  <polygon points="250,30 425,130 425,360 250,460 75,360 75,130"
+           fill="#F1F2F5" stroke="#4878B0" stroke-width="20" stroke-linejoin="miter"/>
+  <text x="248" y="268"
+        font-family="'STIX Two Math','Latin Modern Math','Noto Serif',Georgia,'Times New Roman',serif"
+        font-size="245" fill="#4878B0"
+        text-anchor="middle" dominant-baseline="central">ℝ</text>
+  <text x="356" y="415"
+        font-family="'Courier New',Courier,monospace"
+        font-size="54" fill="#1A3654" text-anchor="middle">&gt;_</text>
+  <text x="250" y="510"
+        font-family="Inter,'Helvetica Neue',Arial,sans-serif"
+        font-size="40" font-weight="700" fill="#1A3654"
+        text-anchor="middle" letter-spacing="-0.5">rstudio-cli</text>
+</svg>

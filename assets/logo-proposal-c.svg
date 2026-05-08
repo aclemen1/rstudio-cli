@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 545" width="500" height="545">
+  <!-- C — Badge circulaire minimaliste, ℝ blanc sur fond bleu -->
+  <!-- Cercle extérieur (bordure) -->
+  <circle cx="250" cy="240" r="205" fill="#1A3654"/>
+  <!-- Cercle intérieur -->
+  <circle cx="250" cy="240" r="188" fill="#4878B0"/>
+  <!-- Anneau décoratif intérieur -->
+  <circle cx="250" cy="240" r="165" fill="none" stroke="#F1F2F5" stroke-width="3" opacity="0.4"/>
+  <!-- Grand ℝ centré -->
+  <text x="250" y="243"
+        font-family="'STIX Two Math','Latin Modern Math','Noto Serif',Georgia,'Times New Roman',serif"
+        font-size="240" fill="#F1F2F5"
+        text-anchor="middle" dominant-baseline="central">ℝ</text>
+  <!-- Wordmark sous le cercle -->
+  <text x="250" y="505"
+        font-family="Inter,'Helvetica Neue',Arial,sans-serif"
+        font-size="40" font-weight="700" fill="#1A3654"
+        text-anchor="middle" letter-spacing="-0.5">rstudio-cli</text>
+</svg>

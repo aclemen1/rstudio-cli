@@ -4,6 +4,24 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-05-08
+
+### Fixed
+
+- **`r send` — suppress warning on `rm(list = ls())`.**
+  When user code called `rm(list = ls())` inside `ℝ(~{ ... })`, the helper
+  removed `ℝ` from `.GlobalEnv` before `on.exit` could do it. The subsequent
+  `rm("ℝ", ...)` in `on.exit` emitted a visible warning (`object 'ℝ' not
+  found`). Wrapped the call in `suppressWarnings()` — `try(..., silent =
+  TRUE)` only suppresses errors, not warnings.
+
+### Changed
+
+- **New logo** — hexagonal sticker in Posit proportions (W/H = √3/2). Dark
+  navy fill (`#1A3654`), blue accent border, ℝ (double-struck R, U+211D)
+  centred in blue, green terminal prompt `>` and cursor block, `rstudio-cli`
+  wordmark inside the hex. Replaces the previous light-background hexagon.
+
 ## [0.12.0] — 2026-05-08
 
 ### Added — `r send` output capture + automatic update check

@@ -398,7 +398,7 @@ fn build_capture_fn(result_path: &str) -> String {
       ), auto_unbox = TRUE, null = "null")
     }}
     try(writeLines(.payload, {path_r}), silent = TRUE)
-    try(rm("ℝ", envir = globalenv()), silent = TRUE)
+    try(suppressWarnings(rm("ℝ", envir = globalenv())), silent = TRUE)
   }}, add = TRUE)
   tryCatch({{
     sink(.oc, split = TRUE)
@@ -486,4 +486,36 @@ fn poll_async(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> 
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("r poll: invalid JSON: {e}; raw: {raw}")))?;
     Ok(Some(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cap(path: &str) -> String {
+        build_capture_fn(path)
+    }
+
+    #[test]
+    fn capture_fn_suppresses_rm_warning() {
+        let code = cap("/tmp/test.json");
+        assert!(
+            code.contains(r#"suppressWarnings(rm("ℝ""#),
+            "rm(\"ℝ\") must be wrapped in suppressWarnings to avoid a warning \
+             when user code runs rm(list = ls()) and removes ℝ first"
+        );
+    }
+
+    #[test]
+    fn capture_fn_sentinel_write_before_cleanup() {
+        let code = cap("/tmp/test.json");
+        let write_pos = code.find("writeLines").expect("writeLines not found");
+        let rm_pos = code
+            .find(r#"suppressWarnings(rm("ℝ""#)
+            .expect("rm(ℝ) not found");
+        assert!(
+            write_pos < rm_pos,
+            "sentinel must be written before ℝ is removed from globalenv"
+        );
+    }
 }
