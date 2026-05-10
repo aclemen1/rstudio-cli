@@ -71,7 +71,24 @@ embedded skill markdown via `__VERSION__` at compile time).
 ## VCS
 
 Both repos are Jujutsu colocated with Git (`.jj/` + `.git/`). Only use
-`jj` commands; never raw `git` (corrupts the `.jj/` view).
+`jj` commands; never raw `git` — **with one exception**: pushing a
+release tag.
+
+`jj` 0.39 does not know how to push tags to a remote (`jj git push`
+only handles bookmarks; `jj tag set` writes the tag locally but
+doesn't propagate it). The accepted workaround, and what every prior
+release has used, is:
+
+```sh
+jj tag set vX.Y.Z -r main      # local tag (writes to refs/tags via the colocated git)
+git push origin vX.Y.Z         # one-shot tag push, write-only on the remote
+```
+
+`git push origin <tag>` is safe here because it neither touches the
+working copy nor mutates any local ref jj cares about — it just sends
+an existing ref to the remote. This is the *only* raw-git invocation
+permitted in normal workflow. Anything else (commit, rebase, branch,
+checkout, push of commits, …) must go through `jj`.
 
 ## Language
 
