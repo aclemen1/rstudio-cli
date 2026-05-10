@@ -12,8 +12,7 @@ use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
 const SKILL_NAME: &str = "rstudio";
 const VERSION_PLACEHOLDER: &str = "__VERSION__";
-const UPDATE_CMD_PLACEHOLDER: &str = "__UPDATE_COMMAND__";
-const DEFAULT_UPDATE_CMD: &str = "rstudio skill install --force";
+const UPDATE_SECTION_PLACEHOLDER: &str = "__UPDATE_SECTION__";
 
 /// Raw skill template embedded at compile time. Contains `__VERSION__`,
 /// substituted to `VERSION` (= `CARGO_PKG_VERSION`) at install time.
@@ -23,14 +22,49 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "skill",
         name: "show",
-        summary: "Print the embedded rstudio skill (markdown, with version substituted).",
+        summary: "Print the embedded rstudio skill (markdown, with version + install path baked in).",
         description: "The skill is a static markdown file whose frontmatter `version` \
-                      tracks the CLI version (they ship together inside the binary).",
-        params: &[],
-        examples: &[ExampleSpec {
-            cmd: "rstudio skill show",
-            explanation: "Prints the skill content with the real version inlined.",
-        }],
+                      tracks the CLI version (they ship together inside the binary).\n\
+                      \n\
+                      Accepts the same `--for` and `--target` as `install`: the self-update \
+                      section embedded in the output names the exact path the skill is meant \
+                      to live at and the precise `rstudio skill install` invocation needed to \
+                      overwrite it. This means `rstudio skill show [--for X] [--target Y] > \
+                      <path>` produces a file byte-identical to what `install` would have \
+                      written there.",
+        params: &[
+            ParamSpec {
+                name: "--for",
+                kind: ParamKind::Enum,
+                required: false,
+                default: Some("claude-code"),
+                allowed: &["claude-code", "cursor", "cline"],
+                description: "Target agent tool whose path/filename is baked into the \
+                              self-update section.",
+            },
+            ParamSpec {
+                name: "--target",
+                kind: ParamKind::String,
+                required: false,
+                default: None,
+                allowed: &[],
+                description: "Override the auto-resolved directory baked into the self-update \
+                              section. `show` never writes — this only affects content.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio skill show",
+                explanation: "Prints the skill with the default install path baked into its \
+                              self-update section.",
+            },
+            ExampleSpec {
+                cmd: "rstudio skill show --target /opt/skills > /opt/skills/rstudio/SKILL.md",
+                explanation: "Universal fallback for any agent whose convention isn't built \
+                              in: the file written contains the exact reinstall command for \
+                              that location.",
+            },
+        ],
         returns: "string (markdown)",
         errors: &[],
         rstudioapi_fn: None,
@@ -118,8 +152,22 @@ pub const ACTIONS: &[ActionSpec] = &[
 
 #[derive(Subcommand, Debug)]
 pub enum SkillCmd {
-    /// Print the embedded skill (markdown).
-    Show,
+    /// Print the embedded skill (markdown). Accepts the same `--for` and
+    /// `--target` as `install` so that piping the output to a file
+    /// (`rstudio skill show --target X > X/rstudio/SKILL.md`) yields a
+    /// document whose self-update section is baked for that very location
+    /// — identical to what `install` would have written there.
+    Show {
+        /// Target agent tool. Picks the directory and filename whose path
+        /// gets baked into the self-update section.
+        #[arg(long = "for", value_parser = ["claude-code", "cursor", "cline"], default_value = "claude-code")]
+        target_tool: String,
+        /// Override the auto-resolved directory entirely. Same semantics
+        /// as `install --target`. Used purely to compute the path baked
+        /// into the markdown — `show` never writes anything itself.
+        #[arg(long)]
+        target: Option<PathBuf>,
+    },
     /// Install the skill in the current project, for the chosen agent tool.
     Install {
         /// Target agent tool. Picks the right directory and filename.
@@ -136,10 +184,13 @@ pub enum SkillCmd {
 
 pub fn run(cmd: &SkillCmd) -> Result<Reply, CliError> {
     match cmd {
-        SkillCmd::Show => {
+        SkillCmd::Show {
+            target_tool,
+            target,
+        } => {
+            let (_, _, md) = render_for(target_tool, target.as_deref())?;
             // Text mode: raw markdown to stdout (pipeable).
             // JSON mode: envelope wrapping the markdown as a string.
-            let md = rendered_template();
             Ok(Reply::Adaptive {
                 value: json!(md),
                 text: md,
@@ -198,20 +249,59 @@ fn layout_for(tool: &str) -> Result<InstallLayout, CliError> {
     }
 }
 
-/// Returns the skill markdown with all placeholders substituted.
-///
-/// `__VERSION__` becomes the CLI version. `__UPDATE_COMMAND__` becomes the
-/// generic reinstall command — used by `rstudio skill show` and any caller
-/// that doesn't know the eventual install location. `install()` produces a
-/// more specific rendering via [`rendered_template_for_install`].
-pub fn rendered_template() -> String {
-    rendered_template_with_update_cmd(DEFAULT_UPDATE_CMD)
+/// Returns the skill markdown rendered for `(tool, target)`. Both `show`
+/// and `install` go through this so their outputs agree byte-for-byte —
+/// the user can pipe `show` to a file and get exactly what `install` would
+/// have written there. Pure: no filesystem side effects (the path is
+/// resolved by probing ancestors read-only via `find_or_default_dir`).
+fn render_for(
+    tool: &str,
+    target: Option<&Path>,
+) -> Result<(InstallLayout, PathBuf, String), CliError> {
+    let (layout, target_file) = compute_target_file(tool, target)?;
+    let update_cmd = build_update_command(tool, target);
+    let section = build_update_section(&target_file, &update_cmd);
+    let md = SKILL_TEMPLATE_RAW
+        .replace(VERSION_PLACEHOLDER, VERSION)
+        .replace(UPDATE_SECTION_PLACEHOLDER, &section);
+    Ok((layout, target_file, md))
 }
 
-fn rendered_template_with_update_cmd(update_cmd: &str) -> String {
-    SKILL_TEMPLATE_RAW
-        .replace(VERSION_PLACEHOLDER, VERSION)
-        .replace(UPDATE_CMD_PLACEHOLDER, update_cmd)
+/// Resolves the destination file path without touching the filesystem
+/// (no `create_dir_all`). `install` creates dirs separately before writing;
+/// `show` only needs the path to bake into the rendered markdown.
+fn compute_target_file(
+    tool: &str,
+    target: Option<&Path>,
+) -> Result<(InstallLayout, PathBuf), CliError> {
+    let layout = layout_for(tool)?;
+    let base_dir = match target {
+        Some(p) => p.to_path_buf(),
+        None => find_or_default_dir(layout.rel_dir)?,
+    };
+    let target_file = if layout.use_subdir {
+        base_dir.join(SKILL_NAME).join(layout.file_name)
+    } else {
+        base_dir.join(layout.file_name)
+    };
+    Ok((layout, target_file))
+}
+
+/// Builds the update section embedded in the skill. Worded neutrally so
+/// it reads correctly whether the file ended up on disk via `install`
+/// (which wrote it) or via `show > path` (which the user piped). Both
+/// produce the same path resolution and the same baked command.
+fn build_update_section(target_file: &Path, update_cmd: &str) -> String {
+    format!(
+        "This skill is meant to live at:\n\
+         \n    {}\n\
+         \n\
+         To overwrite it with the embedded skill from a newer CLI binary, run the\n\
+         exact command below — it has been baked at render time to point at that\n\
+         very location:\n\
+         \n    {update_cmd}",
+        target_file.display(),
+    )
 }
 
 /// Builds the exact `rstudio skill install` invocation that, when re-run,
@@ -250,28 +340,9 @@ fn shell_quote(s: &str) -> String {
 }
 
 fn install(tool: &str, force: bool, target: Option<&Path>) -> Result<Reply, CliError> {
-    let layout = layout_for(tool)?;
-
-    // Directory resolution:
-    // - --target overrides everything (used as the parent dir, layout's
-    //   subdir/filename still apply within it)
-    // - else: nearest <rel_dir> ancestor of cwd, or cwd/<rel_dir>
-    let base_dir = match target {
-        Some(p) => p.to_path_buf(),
-        None => find_or_default_dir(layout.rel_dir)?,
-    };
-
-    let target_file = if layout.use_subdir {
-        let skill_dir = base_dir.join(SKILL_NAME);
-        fs::create_dir_all(&skill_dir).map_err(|e| {
-            CliError::internal(format!("create skill dir {}: {e}", skill_dir.display()))
-        })?;
-        skill_dir.join(layout.file_name)
-    } else {
-        fs::create_dir_all(&base_dir)
-            .map_err(|e| CliError::internal(format!("create dir {}: {e}", base_dir.display())))?;
-        base_dir.join(layout.file_name)
-    };
+    // Compute path & rendered content first (pure); only touch the
+    // filesystem after we know we're going to write.
+    let (layout, target_file, rendered) = render_for(tool, target)?;
 
     let action = match fs::read_to_string(&target_file) {
         Ok(existing) => {
@@ -295,8 +366,11 @@ fn install(tool: &str, force: bool, target: Option<&Path>) -> Result<Reply, CliE
     };
 
     if action != "unchanged" {
-        let update_cmd = build_update_command(tool, target);
-        let rendered = rendered_template_with_update_cmd(&update_cmd);
+        // Create parent dirs only now (right before write).
+        if let Some(parent) = target_file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| CliError::internal(format!("create dir {}: {e}", parent.display())))?;
+        }
         fs::write(&target_file, rendered)
             .map_err(|e| CliError::internal(format!("write {}: {e}", target_file.display())))?;
     }
@@ -400,30 +474,30 @@ mod tests {
     }
 
     #[test]
-    fn template_substitutes_version() {
-        let rendered = rendered_template();
-        assert!(rendered.contains(&format!("version: {}", VERSION)));
-        assert!(!rendered.contains(VERSION_PLACEHOLDER));
+    fn render_substitutes_version_and_section() {
+        let (_, _, md) = render_for("claude-code", Some(Path::new("/tmp/x"))).unwrap();
+        assert!(md.contains(&format!("version: {}", VERSION)));
+        assert!(!md.contains(VERSION_PLACEHOLDER));
+        assert!(!md.contains(UPDATE_SECTION_PLACEHOLDER));
     }
 
     #[test]
-    fn template_substitutes_update_command() {
-        // Default rendering (used by `skill show`) gets the generic command.
-        let rendered = rendered_template();
-        assert!(!rendered.contains(UPDATE_CMD_PLACEHOLDER));
-        assert!(rendered.contains(DEFAULT_UPDATE_CMD));
+    fn render_bakes_target_path_into_section() {
+        let (_, file, md) = render_for("claude-code", Some(Path::new("/tmp/my skills"))).unwrap();
+        // Path with a space gets single-quoted in the command.
+        assert!(md.contains("--target '/tmp/my skills'"));
+        // The skill's "lives at" block names the actual file we'd write to.
+        assert!(md.contains(&format!("    {}\n", file.display())));
+        assert_eq!(file, Path::new("/tmp/my skills/rstudio/SKILL.md"));
     }
 
     #[test]
-    fn install_rendering_bakes_target_path() {
-        let cmd = build_update_command("claude-code", Some(Path::new("/tmp/my skills")));
-        // Path with a space gets single-quoted.
-        assert_eq!(
-            cmd,
-            "rstudio skill install --force --target '/tmp/my skills'"
-        );
-        let rendered = rendered_template_with_update_cmd(&cmd);
-        assert!(rendered.contains("--target '/tmp/my skills'"));
+    fn show_and_install_render_identically() {
+        // The whole point of giving `show` the same params as `install`:
+        // piping `show` to a file must yield byte-identical content.
+        let (_, _, a) = render_for("cursor", Some(Path::new("/opt/skills"))).unwrap();
+        let (_, _, b) = render_for("cursor", Some(Path::new("/opt/skills"))).unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]

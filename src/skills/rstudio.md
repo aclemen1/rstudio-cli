@@ -29,11 +29,9 @@ Before relying on this skill, verify it's current:
     rstudio version
 
 Compare the JSON's `version` field with the `version` in the frontmatter
-above. If the CLI's value is higher, update **this exact file** by
-running the command below — it has been baked at install time to point
-at the location where this skill was actually placed:
+above. If the CLI's value is higher, update this skill.
 
-    __UPDATE_COMMAND__
+__UPDATE_SECTION__
 
 Then re-read this file. The skill is shipped inside the CLI binary, so
 its version always equals the CLI's `Cargo.toml` version.

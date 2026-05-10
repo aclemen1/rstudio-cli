@@ -4,6 +4,23 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.3] — 2026-05-10
+
+### Changed
+
+- **`rstudio skill show` — accepts `--for` and `--target`, byte-identical
+  output to `install`.** Previously `show` printed the embedded template
+  with a generic update command, while `install` baked the exact path and
+  reinstall command for the destination. Piping `show` to a custom location
+  (`rstudio skill show > /path/to/skill.md`) thus produced a self-update
+  section that lied about being baked. Now both commands share the same
+  pure path-resolution and rendering helpers (`compute_target_file`,
+  `render_for`); `show --for X --target Y` produces exactly what
+  `install --for X --target Y` would write at that location. Update
+  section reformatted with the path and command on their own indented
+  lines for readability. New `__UPDATE_SECTION__` block placeholder
+  replaces the previous single-line `__UPDATE_COMMAND__`.
+
 ## [0.12.2] — 2026-05-10
 
 ### Changed
