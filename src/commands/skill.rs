@@ -12,6 +12,8 @@ use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
 const SKILL_NAME: &str = "rstudio";
 const VERSION_PLACEHOLDER: &str = "__VERSION__";
+const UPDATE_CMD_PLACEHOLDER: &str = "__UPDATE_COMMAND__";
+const DEFAULT_UPDATE_CMD: &str = "rstudio skill install --force";
 
 /// Raw skill template embedded at compile time. Contains `__VERSION__`,
 /// substituted to `VERSION` (= `CARGO_PKG_VERSION`) at install time.
@@ -196,9 +198,55 @@ fn layout_for(tool: &str) -> Result<InstallLayout, CliError> {
     }
 }
 
-/// Returns the skill markdown with `__VERSION__` replaced by the CLI version.
+/// Returns the skill markdown with all placeholders substituted.
+///
+/// `__VERSION__` becomes the CLI version. `__UPDATE_COMMAND__` becomes the
+/// generic reinstall command — used by `rstudio skill show` and any caller
+/// that doesn't know the eventual install location. `install()` produces a
+/// more specific rendering via [`rendered_template_for_install`].
 pub fn rendered_template() -> String {
-    SKILL_TEMPLATE_RAW.replace(VERSION_PLACEHOLDER, VERSION)
+    rendered_template_with_update_cmd(DEFAULT_UPDATE_CMD)
+}
+
+fn rendered_template_with_update_cmd(update_cmd: &str) -> String {
+    SKILL_TEMPLATE_RAW
+        .replace(VERSION_PLACEHOLDER, VERSION)
+        .replace(UPDATE_CMD_PLACEHOLDER, update_cmd)
+}
+
+/// Builds the exact `rstudio skill install` invocation that, when re-run,
+/// will overwrite the skill file at the same location it was just written
+/// to. `--target` is baked in only when the user explicitly passed one
+/// (otherwise the auto-resolved default — nearest ancestor or cwd — would
+/// be brittle to bake as an absolute path). `--for` is included only when
+/// non-default, to keep the line minimal in the common case.
+fn build_update_command(tool: &str, target: Option<&Path>) -> String {
+    let mut cmd = String::from("rstudio skill install --force");
+    if tool != "claude-code" {
+        cmd.push_str(&format!(" --for {tool}"));
+    }
+    if let Some(p) = target {
+        cmd.push_str(&format!(
+            " --target {}",
+            shell_quote(&p.display().to_string())
+        ));
+    }
+    cmd
+}
+
+/// Minimal POSIX single-quote escaping for paths embedded in the skill's
+/// update command. Safe for any path; only adds quotes when needed.
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'/' | b'.' | b'_' | b'-' | b'+' | b'=' | b':' | b',')
+        })
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 fn install(tool: &str, force: bool, target: Option<&Path>) -> Result<Reply, CliError> {
@@ -247,7 +295,9 @@ fn install(tool: &str, force: bool, target: Option<&Path>) -> Result<Reply, CliE
     };
 
     if action != "unchanged" {
-        fs::write(&target_file, rendered_template())
+        let update_cmd = build_update_command(tool, target);
+        let rendered = rendered_template_with_update_cmd(&update_cmd);
+        fs::write(&target_file, rendered)
             .map_err(|e| CliError::internal(format!("write {}: {e}", target_file.display())))?;
     }
 
@@ -354,5 +404,50 @@ mod tests {
         let rendered = rendered_template();
         assert!(rendered.contains(&format!("version: {}", VERSION)));
         assert!(!rendered.contains(VERSION_PLACEHOLDER));
+    }
+
+    #[test]
+    fn template_substitutes_update_command() {
+        // Default rendering (used by `skill show`) gets the generic command.
+        let rendered = rendered_template();
+        assert!(!rendered.contains(UPDATE_CMD_PLACEHOLDER));
+        assert!(rendered.contains(DEFAULT_UPDATE_CMD));
+    }
+
+    #[test]
+    fn install_rendering_bakes_target_path() {
+        let cmd = build_update_command("claude-code", Some(Path::new("/tmp/my skills")));
+        // Path with a space gets single-quoted.
+        assert_eq!(
+            cmd,
+            "rstudio skill install --force --target '/tmp/my skills'"
+        );
+        let rendered = rendered_template_with_update_cmd(&cmd);
+        assert!(rendered.contains("--target '/tmp/my skills'"));
+    }
+
+    #[test]
+    fn install_rendering_omits_target_when_default() {
+        let cmd = build_update_command("claude-code", None);
+        assert_eq!(cmd, "rstudio skill install --force");
+    }
+
+    #[test]
+    fn install_rendering_includes_for_when_non_default() {
+        let cmd = build_update_command("cursor", None);
+        assert_eq!(cmd, "rstudio skill install --force --for cursor");
+        let cmd = build_update_command("cline", Some(Path::new("/opt/skills")));
+        assert_eq!(
+            cmd,
+            "rstudio skill install --force --for cline --target /opt/skills"
+        );
+    }
+
+    #[test]
+    fn shell_quote_safe_chars() {
+        assert_eq!(shell_quote("/usr/local/bin"), "/usr/local/bin");
+        assert_eq!(shell_quote("a.b-c_d+e=f:g,h"), "a.b-c_d+e=f:g,h");
+        assert_eq!(shell_quote("with space"), "'with space'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
     }
 }

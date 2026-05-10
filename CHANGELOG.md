@@ -4,6 +4,21 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] — 2026-05-10
+
+### Changed
+
+- **`rstudio skill install` — bake the exact reinstall command into the
+  installed SKILL.md.** When the user passes `--target <dir>` (or a
+  non-default `--for <tool>`), the skill's self-update section now shows
+  the precise command needed to overwrite *that specific file* — not the
+  generic `rstudio skill install --force`, which would refresh only the
+  default `~/.claude/skills/` copy and leave a custom-located skill stale.
+  Implemented via a new `__UPDATE_COMMAND__` placeholder substituted at
+  install time alongside `__VERSION__`. Paths with shell metacharacters are
+  POSIX single-quoted. `rstudio skill show` keeps the generic command since
+  it has no install context.
+
 ## [0.12.1] — 2026-05-08
 
 ### Fixed
