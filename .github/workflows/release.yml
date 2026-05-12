@@ -29,13 +29,13 @@ jobs:
             os: macos-latest
             archive: tar.gz
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
         with:
           key: ${{ matrix.target }}
 
@@ -58,7 +58,7 @@ jobs:
           mv rstudio-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz $GITHUB_WORKSPACE/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rstudio-cli-${{ matrix.target }}
           path: rstudio-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
@@ -70,10 +70,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
