@@ -4,6 +4,32 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.4] — 2026-05-12
+
+### Fixed
+
+- **`r send` — evaluate in the active RStudio Environment pane scope.**
+  Previously `ℝ()` always called `eval(..., envir = globalenv())`, so code
+  sent to the console was evaluated in the global environment even when the
+  user had selected an attached data frame in the Environment pane. The
+  helper now queries `get_environment_state` before installing `ℝ` and
+  resolves the target environment at runtime: `.GlobalEnv` maps to
+  `globalenv()`; any other name (e.g. after `attach(df)`) is resolved via
+  `as.environment(match(name, search()))` with a `globalenv()` fallback.
+
+### Added
+
+- **23 live smoke tests** (`tests/live.rs`) against a real RStudio session.
+  Covers `r exec` (basic, R error, timeout, async + poll), `r send`
+  (stdout capture, message capture, R error, multiline, `--no-capture`,
+  attached-env evaluation, invisible value, mixed stdout + message),
+  `env` (list, pattern filter, info, contents), `console` (history,
+  context), `editor` (read, list), `term` (list), `project` (current),
+  and schema registry shape. All 23 tests are serialised through a
+  process-wide mutex to avoid Desktop rsession async-handle collisions.
+  Tests that create R variables clean up with `r exec` (synchronous);
+  skip silently when no live session is reachable.
+
 ## [0.12.3] — 2026-05-10
 
 ### Changed

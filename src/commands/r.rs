@@ -277,6 +277,17 @@ fn console_input(rpc: &RpcClient<'_>, code: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+fn current_environment_name(rpc: &RpcClient<'_>) -> String {
+    rpc.rpc("get_environment_state", vec![])
+        .ok()
+        .and_then(|v| {
+            v.get("environment_name")
+                .and_then(|n| n.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| ".GlobalEnv".to_string())
+}
+
 fn send_with_capture(
     rpc: &RpcClient<'_>,
     code: &str,
@@ -305,8 +316,12 @@ fn send_with_capture(
     // Remove any leftover from a previously killed call.
     let _ = std::fs::remove_file(&result_path);
 
-    // Install R() with the result path baked into the function body.
-    r_eval::run_silent(rpc, &build_capture_fn(&result_path_str))?;
+    // Resolve the active environment in the RStudio Environment pane so that
+    // eval() targets the same scope the user is looking at (e.g. after attach).
+    let env_name = current_environment_name(rpc);
+
+    // Install R() with the result path and target environment baked in.
+    r_eval::run_silent(rpc, &build_capture_fn(&result_path_str, &env_name))?;
 
     // Send the wrapper via console_input — visible to the user, no quotes or
     // path argument exposed. Single-line code stays on one line; multi-line
@@ -371,51 +386,59 @@ fn process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-fn build_capture_fn(result_path: &str) -> String {
+fn build_capture_fn(result_path: &str, env_name: &str) -> String {
     let path_r = r_quote(result_path);
+    let env_name_r = r_quote(env_name);
     format!(
-        r#"assign("ℝ", function(f) {{
-  .expr <- f[[2]]
-  .start <- sink.number()
-  .out <- tempfile()
-  .oc <- file(.out, "w+")
-  .msgs <- character()
-  .ok <- TRUE
-  .err <- NULL
-  .interrupted <- TRUE
-  on.exit({{
-    while (sink.number() > .start) sink(NULL)
-    try(close(.oc), silent = TRUE)
-    .stdout <- paste(readLines(.out, warn = FALSE), collapse = "\n")
-    try(unlink(.out), silent = TRUE)
-    .payload <- if (.interrupted) {{
-      '{{"interrupted":true}}'
-    }} else {{
-      jsonlite::toJSON(list(
-        stdout = .stdout,
-        messages = as.list(.msgs),
-        error = if (.ok) NULL else .err
-      ), auto_unbox = TRUE, null = "null")
-    }}
-    try(writeLines(.payload, {path_r}), silent = TRUE)
-    try(suppressWarnings(rm("ℝ", envir = globalenv())), silent = TRUE)
-  }}, add = TRUE)
-  tryCatch({{
-    sink(.oc, split = TRUE)
-    withCallingHandlers({{
-      .v <- withVisible(eval(.expr, envir = globalenv()))
-      if (.v$visible) print(.v$value)
-    }}, message = function(m) {{
-      .msgs <<- c(.msgs, conditionMessage(m))
+        r#"local({{
+  .env_name <- {env_name_r}
+  .eval_env <- if (.env_name == ".GlobalEnv") {{
+    globalenv()
+  }} else {{
+    tryCatch(as.environment(match(.env_name, search())), error = function(e) globalenv())
+  }}
+  assign("ℝ", function(f) {{
+    .expr <- f[[2]]
+    .start <- sink.number()
+    .out <- tempfile()
+    .oc <- file(.out, "w+")
+    .msgs <- character()
+    .ok <- TRUE
+    .err <- NULL
+    .interrupted <- TRUE
+    on.exit({{
+      while (sink.number() > .start) sink(NULL)
+      try(close(.oc), silent = TRUE)
+      .stdout <- paste(readLines(.out, warn = FALSE), collapse = "\n")
+      try(unlink(.out), silent = TRUE)
+      .payload <- if (.interrupted) {{
+        '{{"interrupted":true}}'
+      }} else {{
+        jsonlite::toJSON(list(
+          stdout = .stdout,
+          messages = as.list(.msgs),
+          error = if (.ok) NULL else .err
+        ), auto_unbox = TRUE, null = "null")
+      }}
+      try(writeLines(.payload, {path_r}), silent = TRUE)
+      try(suppressWarnings(rm("ℝ", envir = globalenv())), silent = TRUE)
+    }}, add = TRUE)
+    tryCatch({{
+      sink(.oc, split = TRUE)
+      withCallingHandlers({{
+        .v <- withVisible(eval(.expr, envir = .eval_env))
+        if (.v$visible) print(.v$value)
+      }}, message = function(m) {{
+        .msgs <<- c(.msgs, conditionMessage(m))
+      }})
+    }}, error = function(e) {{
+      .ok <<- FALSE
+      .err <<- conditionMessage(e)
     }})
-  }}, error = function(e) {{
-    .ok <<- FALSE
-    .err <<- conditionMessage(e)
-  }})
-  .interrupted <- FALSE
-  invisible(NULL)
-}}, envir = globalenv())
-"#
+    .interrupted <- FALSE
+    invisible(NULL)
+  }}, envir = globalenv())
+}})"#
     )
 }
 
@@ -493,7 +516,7 @@ mod tests {
     use super::*;
 
     fn cap(path: &str) -> String {
-        build_capture_fn(path)
+        build_capture_fn(path, ".GlobalEnv")
     }
 
     #[test]
@@ -516,6 +539,24 @@ mod tests {
         assert!(
             write_pos < rm_pos,
             "sentinel must be written before ℝ is removed from globalenv"
+        );
+    }
+
+    #[test]
+    fn capture_fn_uses_globalenv_by_default() {
+        let code = cap("/tmp/test.json");
+        assert!(
+            code.contains(r#"".GlobalEnv""#) && code.contains("globalenv()"),
+            "default env_name must resolve to globalenv()"
+        );
+    }
+
+    #[test]
+    fn capture_fn_uses_custom_env_name() {
+        let code = build_capture_fn("/tmp/test.json", "mydf");
+        assert!(
+            code.contains(r#""mydf""#) && code.contains("as.environment(match("),
+            "non-global env_name must use as.environment(match(...))"
         );
     }
 }

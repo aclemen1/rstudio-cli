@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.12.3** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.12.4** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 17 categories and 88 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
@@ -221,7 +221,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.12.3
+rstudio version                 # 0.12.4
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -422,9 +422,11 @@ cargo test --test live -- --ignored       # integration tests against a live ses
 
 The integration tests skip silently (`SKIP: no live RStudio session
 available`) when no `rsession` socket is reachable, so the suite is
-safe to run anywhere. They never mutate the user's UI: read-only
-paths only (`r exec` round-trips, `editor read`, `env list`,
-`term list`, schema registry shape).
+safe to run anywhere. Tests that create R variables clean up after
+themselves with `r exec` (synchronous). The `r send` tests appear
+briefly in the user's console but leave no lasting state. All 23
+live tests are serialised through a process-wide mutex so they never
+contend on the Desktop rsession socket.
 
 ## Concurrency model
 
