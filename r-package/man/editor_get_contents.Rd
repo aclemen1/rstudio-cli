@@ -24,9 +24,3 @@ unsaved buffer).
 Returns the live editor buffer (not the on-disk file) for an open
 Source pane document, along with its metadata.
 }
-\examples{
-\dontrun{
-buf <- editor_get_contents()
-nchar(buf$contents)
-}
-}

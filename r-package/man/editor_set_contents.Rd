@@ -25,9 +25,3 @@ Thin wrapper around \code{\link[rstudioapi:setDocumentContents]{rstudioapi::setD
 a structured list (instead of \code{NULL} invisibly) so callers can verify
 what was written.
 }
-\examples{
-\dontrun{
-editor_set_contents("# new file\n1 + 1\n")
-editor_set_contents("...", id = "D4F4972F")
-}
-}

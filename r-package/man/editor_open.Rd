@@ -4,12 +4,18 @@
 \alias{editor_open}
 \title{Open a file in the Source pane}
 \usage{
-editor_open(path, line = NULL)
+editor_open(path, line = -1L, col = -1L, move_cursor = TRUE)
 }
 \arguments{
 \item{path}{Path to the file to open.}
 
-\item{line}{Optional 1-based line number to navigate to after opening.}
+\item{line}{Optional 1-based line number to navigate to after
+opening. Use \code{-1L} (default) to leave the cursor where it was.}
+
+\item{col}{Optional 1-based column. Use \code{-1L} (default) to leave it.}
+
+\item{move_cursor}{If \code{TRUE} (default), actually move the cursor;
+if \code{FALSE}, the file opens but cursor position is untouched.}
 }
 \value{
 A list with components:
@@ -21,10 +27,5 @@ A list with components:
 \description{
 Non-modal: opens the file as a new document in the Source pane (or
 switches focus to it if already open) and optionally jumps to a
-specific line.
-}
-\examples{
-\dontrun{
-editor_open("~/projects/foo/R/main.R", line = 42)
-}
+specific line/column.
 }

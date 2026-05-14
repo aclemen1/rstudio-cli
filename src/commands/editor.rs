@@ -1075,8 +1075,9 @@ fn open(
     let col_arg = col.map(|c| format!("{c}L")).unwrap_or_else(|| "-1L".into());
     let move_cursor = if no_cursor { "FALSE" } else { "TRUE" };
 
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "cat(rstudioapi::documentOpen({path}, line = {line_arg}, col = {col_arg}, moveCursor = {move_cursor}))",
+        r#"cat(rstudiocli.mcp::editor_open({path}, line = {line_arg}, col = {col_arg}, move_cursor = {move_cursor})$id)"#,
         path = r_quote(&abs_str),
     );
     let id = r_eval::run(rpc, &r_code)?;
@@ -1192,12 +1193,13 @@ fn context(
         ));
     }
 
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let api_call = if include_console {
-        "rstudioapi::getActiveDocumentContext()".to_string()
+        "rstudiocli.mcp::editor_context(console = TRUE)".to_string()
     } else if let Some(id) = id {
-        format!("rstudioapi::getSourceEditorContext(id = {})", r_quote(id))
+        format!("rstudiocli.mcp::editor_context(id = {})", r_quote(id))
     } else {
-        "rstudioapi::getSourceEditorContext()".to_string()
+        "rstudiocli.mcp::editor_context()".to_string()
     };
 
     let contents_field = if include_contents {
@@ -1241,6 +1243,13 @@ fn context(
 }
 
 fn insert(rpc: &RpcClient<'_>, text: &str, at: &str) -> Result<Option<Value>, CliError> {
+    // `at` defines a `location` to pass to insertText. We keep the
+    // call site inline because the location expressions ("end", "start",
+    // "L:C") need R-side evaluation of getSourceEditorContext for the
+    // "end" branch — the rstudiocli.mcp wrapper would lose this
+    // expressiveness. Constructor helpers (`document_position`) stay on
+    // rstudioapi:: since they're tiny zero-side-effect builders, not
+    // endpoints that warrant a re-wrap.
     let location = match at {
         "cursor" => "NULL".to_string(),
         "start" => "rstudioapi::document_position(1L, 1L)".to_string(),
@@ -1282,7 +1291,9 @@ fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<V
         Some(id) => format!(", id = {}", r_quote(id)),
         None => String::new(),
     };
-    let r_code = format!("rstudioapi::setSelectionRanges(list({r_range}){id_arg})");
+    // `document_range` is a constructor; `editor_select_range` is our
+    // wrapper for the actual endpoint (setSelectionRanges).
+    let r_code = format!("rstudiocli.mcp::editor_select_range(list({r_range}){id_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }
@@ -1492,8 +1503,9 @@ fn close(
             )));
         }
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        ".rs.api.documentClose(id = {}, save = {save_arg})",
+        "rstudiocli.mcp::editor_close(id = {}, save = {save_arg})",
         r_quote(&resolved)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1516,8 +1528,9 @@ fn save(
     let resolved = resolve_target_id(rpc, session, id, path)?;
     let id_expr = match resolved {
         Some(s) => r_quote(&s),
-        None => "rstudioapi::documentId(allowConsole = FALSE)".into(),
+        None => "rstudiocli.mcp::editor_active_id(allow_console = FALSE)$id".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"local({{
   .__id <- {id_expr}
@@ -1525,7 +1538,7 @@ fn save(
     cat("null")
     return(invisible())
   }}
-  .rs.api.documentSave(id = .__id)
+  rstudiocli.mcp::editor_save(id = .__id)
   cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
 }})"#
     );
@@ -1539,7 +1552,7 @@ fn save(
 }
 
 fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    r_eval::run_silent(rpc, ".rs.api.documentSaveAll()")?;
+    r_eval::run_silent(rpc, "rstudiocli.mcp::editor_save_all()")?;
     Ok(None)
 }
 
@@ -1555,11 +1568,12 @@ fn new_doc(
         )));
     }
     let exec_arg = if execute { "TRUE" } else { "FALSE" };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__id <- rstudioapi::documentNew(text = {text_q}, type = {type_q}, execute = {exec_arg})
-  cat(jsonlite::toJSON(list(id = .__id, type = {type_q}), auto_unbox = TRUE, null = "null"))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::editor_new(text = {text_q}, type = {type_q}, execute = {exec_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         text_q = r_quote(text),
         type_q = r_quote(doc_type),
     );
@@ -1571,12 +1585,12 @@ fn new_doc(
 
 fn active_id(rpc: &RpcClient<'_>, no_console: bool) -> Result<Option<Value>, CliError> {
     let allow_console = if no_console { "FALSE" } else { "TRUE" };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__id <- rstudioapi::documentId(allowConsole = {allow_console})
-  if (is.null(.__id)) cat("{{\"id\":null}}")
-  else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
-}})"#
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::editor_active_id(allow_console = {allow_console}),
+            auto_unbox = TRUE, null = "null"
+        ))"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
@@ -1590,12 +1604,12 @@ fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliEr
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__p <- rstudioapi::documentPath({id_arg})
-  if (is.null(.__p)) cat("{{\"path\":null}}")
-  else cat(jsonlite::toJSON(list(path = .__p), auto_unbox = TRUE))
-}})"#
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::editor_document_path(id = {id_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw)
@@ -1615,8 +1629,9 @@ fn set_contents(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudioapi::setDocumentContents(text = {}, id = {id_arg})",
+        "rstudiocli.mcp::editor_set_contents(text = {}, id = {id_arg})",
         r_quote(text)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1639,9 +1654,12 @@ fn modify_range(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // `document_range`/`document_position` are zero-side-effect constructors,
+    // not endpoints — left as `rstudioapi::*`.
     let r_code = format!(
-        "rstudioapi::modifyRange(\
-           location = rstudioapi::document_range(\
+        "rstudiocli.mcp::editor_modify_range(\
+           range = rstudioapi::document_range(\
              rstudioapi::document_position({l1}L, {c1}L), \
              rstudioapi::document_position({l2}L, {c2}L)), \
            text = {}, id = {id_arg})",
@@ -1665,8 +1683,9 @@ fn set_cursor(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudioapi::setCursorPosition(\
+        "rstudiocli.mcp::editor_set_cursor(\
            position = rstudioapi::document_position({line}L, {col}L), \
            id = {id_arg})"
     );
@@ -1834,14 +1853,17 @@ fn set_marks(
         None => "NULL".to_string(),
     };
 
+    // Delegated to the rstudiocli.mcp R package's pane_markers wrapper:
+    // see `r-package/R/pane.R`. autoSelect = "first" matches editor
+    // set-marks's "jump to the first hit" semantics.
     let r_code = format!(
         r#"local({{
   markers <- jsonlite::fromJSON({hits_r}, simplifyVector = FALSE)
-  rstudioapi::sourceMarkers(
-    name       = {name_r},
-    markers    = markers,
-    basePath   = {base_path_r},
-    autoSelect = "first"
+  rstudiocli.mcp::pane_markers(
+    name        = {name_r},
+    markers     = markers,
+    base_path   = {base_path_r},
+    auto_select = "first"
   )
   cat(jsonlite::toJSON(list(total = length(markers), name = {name_r}), auto_unbox = TRUE))
 }})"#
