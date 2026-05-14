@@ -7,6 +7,7 @@ pub mod lock;
 pub mod output;
 pub mod policy;
 pub mod r_eval;
+pub mod r_package;
 pub mod rpc;
 pub mod schema;
 pub mod session;

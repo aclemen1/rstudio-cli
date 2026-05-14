@@ -14,6 +14,8 @@ single tool's metadata.
 - `meta_version`, `meta_status` — bridge health and session info.
 - `tools_search` — discover the rest of the catalog on demand.
 - `tx_begin`, `tx_end`, `tx_run` — multi-agent serialisation (see below).
+- `r_script` — run an R script that calls multiple actions in one
+  round-trip (programmatic tool calling — see below).
 
 **Every other tool is still callable via `tools/call`** — they're just
 not listed up front, to keep your context lean. Use `tools_search` to
@@ -120,6 +122,56 @@ wall time ≈ sum of per-call time. Implications:
   separate pty/process, not bound to the R FIFO.
 - Postbacks (`editor_edit`) and `r_send` (visible console input) bypass
   the R queue.
+
+## Programmatic tool calling: `r_script`
+
+For workflows that chain several reads, transformations, and writes,
+prefer **`r_script`** to a chain of `tools/call`s. You send a small R
+program; the server runs it in the active rsession, and only the final
+value comes back. Intermediate data — buffer contents, file
+trees, regex matches — **never traverses your context window**.
+
+```r
+# r_script body example:
+buf <- editor_get_contents()
+lines <- strsplit(buf$contents, "\n", fixed = TRUE)[[1]]
+list(
+  path = buf$path,
+  total_lines = length(lines),
+  too_long = which(nchar(lines) > 80)
+)
+```
+
+The script runs with the `rstudiocli.mcp` R package on the search
+path; its exported functions follow the MCP tool naming (`editor_*`,
+`pane_*`, …). Inspect the surface from inside the script via
+`ls("package:rstudiocli.mcp")`.
+
+Rules:
+
+- The last expression's value is serialised with `jsonlite::toJSON
+  (auto_unbox = TRUE)` and returned in the `result` field.
+- Throw `stop("msg")` to signal a logical error — the server returns
+  `isError: true` with the message.
+- **Forbidden inside `tx_begin`**: an active transaction holds the
+  session lock that `r_script`'s nested CLI calls would also need →
+  deadlock. The server rejects the combination with a clear message.
+  Choose one or the other per call.
+
+When to prefer `r_script` over chained `tools/call`s:
+
+- The intermediate data is large (file contents, env dumps) and the
+  final answer is small (counts, summaries, ids).
+- The orchestration uses control flow (loops, conditions) that
+  `tx_run`'s declarative `operations` array can't express.
+- You want a single round-trip atomic from the agent's perspective.
+
+When to prefer chained `tools/call`s:
+
+- You need to reason between calls (e.g. "did the markers reveal a
+  bug? then open that file"). The LLM has to see the intermediate
+  values.
+- The sequence is short (2-3 calls).
 
 ## Patterns worth knowing
 

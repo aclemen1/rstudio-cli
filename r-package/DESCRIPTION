@@ -1,0 +1,28 @@
+Package: rstudiocli.mcp
+Type: Package
+Title: R-Side Bridge for rstudio-cli
+Version: 0.14.0
+Authors@R: person(
+    given = "Alain",
+    family = "Clement",
+    email = "alain.clement@unil.ch",
+    role = c("aut", "cre"),
+    comment = c(ORCID = "0000-0003-0448-9766"))
+Description: Canonical R-side surface used by the rstudio-cli binary
+    and its MCP server. Wraps the subset of rstudioapi that rstudio-cli
+    needs, with AI-native ergonomics: structured list returns, robust
+    id/path resolution, and uniform error reporting via stop(). Can be
+    used standalone in any R session (RStudio Desktop or Server) to
+    script editor / pane / terminal / project / job / preference
+    actions without going through the CLI.
+License: MIT + file LICENSE
+URL: https://github.com/aclemen1/rstudio-cli
+BugReports: https://github.com/aclemen1/rstudio-cli/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports:
+    rstudioapi (>= 0.15.0)
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

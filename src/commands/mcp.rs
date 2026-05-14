@@ -200,6 +200,11 @@ impl McpServer {
                 "additionalProperties": false
             }),
         });
+        core_tools.push(McpTool {
+            name: "r_script".into(),
+            description: r_script_description(),
+            input_schema: r_script_input_schema(),
+        });
 
         Self {
             overrides,
@@ -326,6 +331,7 @@ impl McpServer {
             "tx_end" => self.tx_end(),
             "tx_run" => self.tx_run(arguments),
             "tools_search" => self.tools_search(arguments),
+            "r_script" => self.r_script(arguments),
             other => self.invoke_action(other, arguments),
         };
 
@@ -400,6 +406,55 @@ impl McpServer {
             self.tx_end().ok();
         }
         Ok(json!({ "results": results }))
+    }
+
+    /// Run user-supplied R code inside the active rsession, with the
+    /// `rstudiocli.mcp` package available. The agent writes a short
+    /// script that orchestrates multiple actions in R, and we return
+    /// only the final value — intermediate buffers (e.g. file contents)
+    /// never traverse the agent's context window. This is the
+    /// "programmatic tool calling" pattern.
+    ///
+    /// Forbidden inside an active `tx_begin`: the script's calls to
+    /// CLI sub-tools would race with the parent lock held by the MCP
+    /// server. We return a clear error rather than risk a deadlock;
+    /// agents that need both must serialise (tx → end → r_script, or
+    /// r_script alone with the script doing its own coordination).
+    fn r_script(&mut self, args: Value) -> Result<Value, CliError> {
+        let code = args
+            .get("code")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CliError::user("r_script: 'code' must be a string"))?;
+        if code.trim().is_empty() {
+            return Err(CliError::user("r_script: 'code' is empty"));
+        }
+        if self.current_tx.is_some() {
+            return Err(CliError::user(
+                "r_script cannot run inside a transaction. Call tx_end first.",
+            ));
+        }
+        let session = self.session_or_detect()?;
+        let rpc = crate::rpc::RpcClient::new(session);
+        // Ensure rstudiocli.mcp is installed at this binary's version,
+        // installing it silently from the embedded tarball if not.
+        crate::r_package::ensure_installed(&rpc)?;
+        // Make the package available to the user's code without forcing
+        // them to write `library(rstudiocli.mcp)` themselves. We
+        // attach() into search() so calls like `editor_set_contents()`
+        // resolve without a `::` prefix; using `::` works too.
+        let wrapped = format!(
+            "local({{\n  \
+                suppressMessages(suppressWarnings(library(rstudiocli.mcp)))\n  \
+                .__rstudio_mcp_result <- {{ {code} }}\n  \
+                jsonlite::toJSON(.__rstudio_mcp_result, auto_unbox = TRUE, null = 'null', force = TRUE)\n\
+             }})"
+        );
+        let raw = crate::r_eval::run(&rpc, &wrapped)?;
+        // execute_r_code wraps with [1] "<json>"; strip and parse.
+        let json_str = unwrap_quoted_r_string(&raw);
+        let parsed: Value =
+            serde_json::from_str(&json_str).unwrap_or_else(|_| Value::String(json_str.clone()));
+        Ok(json!({ "result": parsed }))
     }
 
     /// Progressive-discovery 3-level drill-down across the full tool
@@ -591,6 +646,81 @@ fn tools_search_input_schema() -> Value {
         },
         "additionalProperties": false
     })
+}
+
+fn r_script_description() -> String {
+    "Run an R script inside the active RStudio session, with the \
+     `rstudiocli.mcp` R package on the search path. The agent supplies \
+     a short program that orchestrates multiple actions in R; the \
+     server returns only the final value. Intermediate data (buffer \
+     contents, lists, etc.) never traverses the agent's context window \
+     — that's the whole point of programmatic tool calling vs chained \
+     `tools/call`s.\n\n\
+     Example body:\n\
+       buf <- editor_get_contents()\n\
+       long <- which(nchar(strsplit(buf$contents, '\\n')[[1]]) > 80)\n\
+       length(long)\n\n\
+     Available functions (and growing): `editor_get_contents()`, \
+     `editor_set_contents(text, id)`, `editor_open(path, line)`. The \
+     full surface is discoverable from R via `library(rstudiocli.mcp); \
+     ls('package:rstudiocli.mcp')`.\n\n\
+     The script's last expression is serialised with `jsonlite::toJSON` \
+     and returned in the `result` field. Throw `stop(...)` to signal \
+     a logical error.\n\n\
+     Restrictions: cannot run inside an active `tx_begin` transaction \
+     (would deadlock). Use one or the other, not both."
+        .to_string()
+}
+
+fn r_script_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "R code to run. The last expression's value is returned (as JSON via jsonlite::toJSON, auto_unbox = TRUE)."
+            }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+    })
+}
+
+/// `execute_r_code` returns expression values wrapped as `[1] "<value>"`
+/// when the value is a string. Our `r_script` wraps everything in
+/// `jsonlite::toJSON(..)`, which produces an R character — so the rsession
+/// echo looks like `[1] "{\"foo\":42}"` with embedded escapes. Unwrap.
+fn unwrap_quoted_r_string(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Strip the leading "[1] " index marker if present.
+    let after_index = trimmed.strip_prefix("[1] ").unwrap_or(trimmed);
+    let after_index = after_index.trim();
+    // If it's quoted, unquote and unescape.
+    if let Some(inner) = after_index
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+    {
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('r') => out.push('\r'),
+                    Some('"') => out.push('"'),
+                    Some('\\') => out.push('\\'),
+                    Some(c) => out.push(c),
+                    None => {}
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    } else {
+        after_index.to_string()
+    }
 }
 
 /// Build a JSON Schema for a tool's `inputSchema` field from our
@@ -852,6 +982,7 @@ mod tests {
             "tx_begin",
             "tx_end",
             "tx_run",
+            "r_script",
         ];
         for name in expected {
             assert!(names.contains(&name), "core tool missing: {name}");
@@ -859,8 +990,14 @@ mod tests {
         assert_eq!(names.len(), expected.len(), "tools/list grew beyond core");
 
         // Registry-derived tools must NOT appear in tools/list anymore.
+        // (r_script is the MCP-specific programmatic-calling tool, not a
+        // registry-derived r.* action — those would be r_exec, r_send, etc.)
         assert!(!names.iter().any(|n| n.starts_with("editor_")));
-        assert!(!names.iter().any(|n| n.starts_with("r_") && *n != "tx_run"));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.starts_with("r_") && *n != "tx_run" && *n != "r_script")
+        );
         assert!(!names.iter().any(|n| n.starts_with("observe_")));
     }
 
@@ -986,6 +1123,44 @@ mod tests {
             err.to_string().contains("category"),
             "expected error mentioning category requirement, got: {err}"
         );
+    }
+
+    #[test]
+    fn r_script_appears_in_core_tools() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let names: Vec<&str> = server.core_tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"r_script"),
+            "r_script must be surfaced in tools/list, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn r_script_rejects_empty_code() {
+        let mut server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let err = server.r_script(json!({"code": ""})).unwrap_err();
+        assert!(err.to_string().contains("empty"));
+        let err = server.r_script(json!({"code": "   \n  "})).unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn r_script_rejects_missing_code() {
+        let mut server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let err = server.r_script(json!({})).unwrap_err();
+        assert!(err.to_string().contains("code"));
+    }
+
+    #[test]
+    fn unwrap_quoted_r_string_strips_index_and_quotes() {
+        assert_eq!(unwrap_quoted_r_string("[1] \"hello\""), "hello");
+        assert_eq!(unwrap_quoted_r_string("[1] \"a\\nb\""), "a\nb");
+        assert_eq!(
+            unwrap_quoted_r_string("[1] \"with \\\"q\\\"\""),
+            "with \"q\""
+        );
+        // Bare value (no index, no quotes) passes through.
+        assert_eq!(unwrap_quoted_r_string("42"), "42");
     }
 
     // Fix #3: ParamKind::Json must accept both arrays and objects in the schema.

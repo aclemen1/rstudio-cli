@@ -4,6 +4,37 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-05-14
+
+### Added
+
+- **Embedded R companion package `rstudiocli.mcp`.** A real CRAN-style R
+  package, source tree in `r-package/`, gets packaged into the binary
+  at compile time (`build.rs`) and auto-installed at first use into
+  the user's R library (silent, policy 1). Single source of truth for
+  the R-side surface used by both the CLI and human R users:
+  `library(rstudiocli.mcp); editor_set_contents(...)` works directly
+  from any R session. Initial pilot exports: `editor_get_contents()`,
+  `editor_set_contents()`, `editor_open()`. The remaining ~50
+  endpoints currently constructed inline as `rstudioapi::...` strings
+  will migrate to this namespace incrementally in 0.14.x.
+- **MCP `r_script` tool — programmatic tool calling.** Send an R
+  script that orchestrates multiple actions; only the final value is
+  returned to the agent. Intermediate data (buffer contents, env
+  dumps) never traverses the LLM's context window. Forbidden inside
+  an active `tx_begin` (would deadlock); the server rejects the
+  combination with a clear message.
+- **Compile-time version sync** (`build.rs`): `Cargo.toml::version`
+  and `r-package/DESCRIPTION::Version` must match, or the build fails
+  loudly. Prevents the binary from shipping a tarball labelled with a
+  different version than the binary itself.
+
+### Internal
+
+- New `src/r_package.rs` module: tarball embed + auto-install
+  (memoised per-process via `OnceLock`).
+- `tempfile` moved from dev-dependencies to dependencies.
+
 ## [0.13.0] — 2026-05-14
 
 ### Changed (breaking)
