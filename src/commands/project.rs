@@ -436,8 +436,9 @@ fn detect_rpc(overrides: SessionOverrides) -> Result<Session, CliError> {
 }
 
 fn current(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/project.R`.
     let r_code = r#"local({
-  p <- rstudioapi::getActiveProject()
+  p <- rstudiocli.mcp::project_current()
   if (is.null(p)) cat("{\"path\":null}")
   else cat(jsonlite::toJSON(list(path = p), auto_unbox = TRUE))
 })"#;
@@ -451,7 +452,7 @@ fn current(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
 fn open(rpc: &RpcClient<'_>, path: &str, new_session: bool) -> Result<Option<Value>, CliError> {
     let new_arg = if new_session { "TRUE" } else { "FALSE" };
     let r_code = format!(
-        "rstudioapi::openProject(path = {}, newSession = {new_arg})",
+        "rstudiocli.mcp::project_open(path = {}, new_session = {new_arg})",
         r_quote(path)
     );
     r_eval::run_silent(rpc, &r_code)?;

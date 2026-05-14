@@ -238,15 +238,13 @@ pub enum PrefCmd {
 
 pub fn run(cmd: &PrefCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     match cmd {
-        PrefCmd::Read { name, default_json } => {
-            read_pref(rpc, "readPreference", name, default_json)
-        }
-        PrefCmd::Write { name, value_json } => write_pref(rpc, "writePreference", name, value_json),
+        PrefCmd::Read { name, default_json } => read_pref(rpc, "pref_read", name, default_json),
+        PrefCmd::Write { name, value_json } => write_pref(rpc, "pref_write", name, value_json),
         PrefCmd::ReadRstudio { name, default_json } => {
-            read_pref(rpc, "readRStudioPreference", name, default_json)
+            read_pref(rpc, "pref_read_rstudio", name, default_json)
         }
         PrefCmd::WriteRstudio { name, value_json } => {
-            write_pref(rpc, "writeRStudioPreference", name, value_json)
+            write_pref(rpc, "pref_write_rstudio", name, value_json)
         }
         PrefCmd::GetPersistent { name } => get_persistent(rpc, name),
         PrefCmd::SetPersistent { name, value_json } => set_persistent(rpc, name, value_json),
@@ -255,27 +253,27 @@ pub fn run(cmd: &PrefCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError
 
 fn read_pref(
     rpc: &RpcClient<'_>,
-    api_fn: &str,
+    pkg_fn: &str,
     name: &str,
     default_json: &str,
 ) -> Result<Option<Value>, CliError> {
     // Validate that --default-json is parseable JSON (CLI-side check).
     let _: Value = serde_json::from_str(default_json)
         .map_err(|e| CliError::user(format!("invalid --default-json: {e}")))?;
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
     let r_code = format!(
-        r#"local({{
-  .__d <- jsonlite::fromJSON({default_q}, simplifyVector = FALSE)
-  .__v <- rstudioapi::{api_fn}({name_q}, default = .__d)
-  cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
-}})"#,
-        api_fn = api_fn,
+        r#"cat(jsonlite::toJSON(
+        rstudiocli.mcp::{pkg_fn}({name_q}, default = jsonlite::fromJSON({default_q}, simplifyVector = FALSE)),
+        auto_unbox = TRUE, null = "null"
+    ))"#,
+        pkg_fn = pkg_fn,
         name_q = r_quote(name),
         default_q = r_quote(default_json),
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
         CliError::internal(format!(
-            "pref read ({api_fn}): invalid JSON: {e}; raw: {raw}"
+            "pref read ({pkg_fn}): invalid JSON: {e}; raw: {raw}"
         ))
     })?;
     Ok(Some(parsed))
@@ -283,37 +281,39 @@ fn read_pref(
 
 fn write_pref(
     rpc: &RpcClient<'_>,
-    api_fn: &str,
+    pkg_fn: &str,
     name: &str,
     value_json: &str,
 ) -> Result<Option<Value>, CliError> {
     let _: Value = serde_json::from_str(value_json)
         .map_err(|e| CliError::user(format!("invalid --value-json: {e}")))?;
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"local({{
   .__v <- jsonlite::fromJSON({value_q}, simplifyVector = FALSE)
-  rstudioapi::{api_fn}({name_q}, value = .__v)
+  rstudiocli.mcp::{pkg_fn}({name_q}, value = .__v)
   cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
 }})"#,
-        api_fn = api_fn,
+        pkg_fn = pkg_fn,
         name_q = r_quote(name),
         value_q = r_quote(value_json),
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
         CliError::internal(format!(
-            "pref write ({api_fn}): invalid JSON: {e}; raw: {raw}"
+            "pref write ({pkg_fn}): invalid JSON: {e}; raw: {raw}"
         ))
     })?;
     Ok(Some(parsed))
 }
 
 fn get_persistent(rpc: &RpcClient<'_>, name: &str) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
     let r_code = format!(
-        r#"local({{
-  .__v <- rstudioapi::getPersistentValue({name_q})
-  cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+        rstudiocli.mcp::pref_get_persistent({name_q}),
+        auto_unbox = TRUE, null = "null"
+    ))"#,
         name_q = r_quote(name),
     );
     let raw = r_eval::run(rpc, &r_code)?;
@@ -332,10 +332,11 @@ fn set_persistent(
 ) -> Result<Option<Value>, CliError> {
     let _: Value = serde_json::from_str(value_json)
         .map_err(|e| CliError::user(format!("invalid --value-json: {e}")))?;
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"local({{
   .__v <- jsonlite::fromJSON({value_q}, simplifyVector = FALSE)
-  rstudioapi::setPersistentValue({name_q}, .__v)
+  rstudiocli.mcp::pref_set_persistent({name_q}, .__v)
   cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
 }})"#,
         name_q = r_quote(name),
