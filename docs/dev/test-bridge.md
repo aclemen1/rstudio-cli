@@ -104,22 +104,17 @@ Six switches let the CLI play along with the bridge. All default to
 | `RSTUDIO_CLI_BRIDGE_CAPTURE_DIR` + `_RPATH_DIR` | `r send` capture: same idea, for the tempfile R writes and the CLI polls. |
 | `RSTUDIO_CLI_SKIP_ENSURE_INSTALL` | The bridge pre-installs `rstudiocli.mcp` directly in the container's R lib; skip the CLI's own (which sometimes fails through the bridged HTTP). |
 | `RSTUDIO_CLI_SKIP_PID_CHECK` | `r send` polls `kill(pid, 0)`; with the rsession PID in the container's namespace, the host check always reports "process died". |
+| `RSTUDIO_CLI_PATH_REMAP` | `host:container` prefix pair: rewrites host paths to their in-container counterpart before handing them to R. Used by `editor read` and any future file-path-bearing CLI call. Driven off the shared capture mount. |
 
-## What's left to fix (10 / 23 tests still red)
+## What's left to fix
 
 Pick up in the order roughly cheap → involved:
 
-1. **`editor_read_returns_content`**.
-   `editor read` (the on-disk file reader, not `read-buffer`) does
-   `path.canonicalize()` host-side and then asks R to read that same
-   path. In the bridge the path needs to be relative to the container's
-   filesystem. Two options:
-   - Have the harness mount a known host directory at the same path
-     inside the container (e.g. `/Users/aclemen1/test-files:
-     /Users/aclemen1/test-files`) and have the test write its fixture
-     there. Or:
-   - Add `RSTUDIO_CLI_PATH_REMAP=host:container` so the CLI rewrites
-     paths before sending them to R. Cleaner but invasive.
+1. ~~**`editor_read_returns_content`**.~~ Done in 2026-05-15.
+   Approach: `RSTUDIO_CLI_PATH_REMAP=host:container` env var in the
+   CLI (`commands/editor.rs::to_remote_path`). Test rewritten to drop
+   its fixture under `RSTUDIO_CLI_BRIDGE_CAPTURE_DIR` so the remap
+   prefix matches on both sides of the bridge.
 
 2. **`env_list_pattern_filter`, `env_info_returns_metadata`,
    `env_contents_returns_lines`**.

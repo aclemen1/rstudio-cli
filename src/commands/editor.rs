@@ -1107,10 +1107,11 @@ fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
+    let remote_path = to_remote_path(&abs_str);
     let raw = rpc.rpc(
         "get_file_contents",
         vec![
-            Value::String(abs_str.clone()),
+            Value::String(remote_path),
             Value::String(encoding.to_string()),
         ],
     )?;
@@ -1119,6 +1120,27 @@ fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value
         "path": abs_str,
         "contents": contents,
     })))
+}
+
+/// Rewrite a host-canonicalised path into the path R sees on the other
+/// side of the bridge. Driven by `RSTUDIO_CLI_PATH_REMAP=host:container`
+/// (colon-separated, single pair). Returns the input unchanged when the
+/// env var is unset, malformed, or the prefix does not match — so
+/// Desktop and same-host Server keep behaving exactly as before.
+fn to_remote_path(host_path: &str) -> String {
+    let Ok(remap) = std::env::var("RSTUDIO_CLI_PATH_REMAP") else {
+        return host_path.to_string();
+    };
+    let Some((host_prefix, container_prefix)) = remap.split_once(':') else {
+        return host_path.to_string();
+    };
+    if host_prefix.is_empty() || container_prefix.is_empty() {
+        return host_path.to_string();
+    }
+    match host_path.strip_prefix(host_prefix) {
+        Some(rest) => format!("{container_prefix}{rest}"),
+        None => host_path.to_string(),
+    }
 }
 
 fn read_buffer(

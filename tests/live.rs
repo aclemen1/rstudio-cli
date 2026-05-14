@@ -605,10 +605,21 @@ fn console_context_returns_object() {
 fn editor_read_returns_content() {
     let (session, _guard) = require_live!();
     let rpc = RpcClient::new(&session);
-    let cargo_toml = env::current_dir().expect("cwd").join("Cargo.toml");
+    // Write a fixture into the host-side dir that both sides of the
+    // bridge can reach (defaults to current cwd on Desktop / same-host
+    // Server, where R sees the same filesystem as the CLI). When the
+    // CLI is bridged, the harness exports RSTUDIO_CLI_BRIDGE_CAPTURE_DIR
+    // pointing at a host path that is bind-mounted in the container,
+    // and RSTUDIO_CLI_PATH_REMAP makes the CLI rewrite that host path
+    // into the in-container path before handing it to R.
+    let host_dir = env::var("RSTUDIO_CLI_BRIDGE_CAPTURE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| env::current_dir().expect("cwd"));
+    let fixture = host_dir.join("editor-read-fixture.toml");
+    fs::write(&fixture, "[package]\nname = \"rstudio-cli\"\n").expect("write fixture");
     let result = editor_cmd::run(
         &EditorCmd::Read {
-            path: cargo_toml,
+            path: fixture.clone(),
             encoding: "UTF-8".into(),
         },
         &rpc,
@@ -620,6 +631,7 @@ fn editor_read_returns_content() {
         .get("contents")
         .and_then(|v| v.as_str())
         .expect("contents");
+    let _ = fs::remove_file(&fixture);
     assert!(contents.contains("[package]"));
     assert!(contents.contains("name = \"rstudio-cli\""));
 }

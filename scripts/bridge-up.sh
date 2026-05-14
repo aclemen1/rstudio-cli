@@ -117,6 +117,12 @@ export RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1
 # the PID lives in the container's PID namespace, invisible from macOS,
 # which would false-positive.
 export RSTUDIO_CLI_SKIP_PID_CHECK=1
+# Rewrite host-canonicalised file paths into the path R sees inside the
+# container. Same bind-mount as the capture dir (the only host path the
+# CLI canonicalises that resolves on both sides of the bridge). The host
+# prefix is the *canonicalised* path: on macOS, /tmp is a symlink to
+# /private/tmp, so the CLI's std::fs::canonicalize emits /private/tmp/...
+export RSTUDIO_CLI_PATH_REMAP=$(cd "$SHARED/tmp" && pwd -P):/shared-tmp
 export USER=rstudio
 EOF
   log "creds refreshed: cid=$cid pt=$pt session=$sess"
