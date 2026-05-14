@@ -301,7 +301,25 @@ fn send_with_capture(
         .ok()
         .and_then(|s| s.trim().strip_prefix("[1] ").and_then(|n| n.parse().ok()));
 
-    let result_path = std::env::temp_dir().join(match rsession_pid {
+    // Result file path. Two-axis to support both the normal case
+    // (CLI and rsession on the same filesystem, e.g. Desktop) and the
+    // bridge case (CLI on host, rsession in a container with a bind-mount):
+    //
+    //   `path_for_host`  — where the CLI polls / reads / cleans up.
+    //   `path_for_r`     — what gets baked into the R wrapper so rsession
+    //                      writes to a path it can see.
+    //
+    // Default: they're the same (`std::env::temp_dir()`), which is the
+    // Desktop / Server-on-same-host case.
+    //
+    // Bridge override: `RSTUDIO_CLI_BRIDGE_CAPTURE_DIR` is the host
+    // directory (bind-mounted into the container at
+    // `RSTUDIO_CLI_BRIDGE_CAPTURE_RPATH_DIR`). The CLI reads from the
+    // former, R writes to the latter — same bytes.
+    let bridge_host = std::env::var("RSTUDIO_CLI_BRIDGE_CAPTURE_DIR").ok();
+    let bridge_rpath = std::env::var("RSTUDIO_CLI_BRIDGE_CAPTURE_RPATH_DIR").ok();
+
+    let filename = match rsession_pid {
         Some(pid) => format!("rstudio_cap_{pid}.json"),
         None => format!(
             "rstudio_cap_fallback_{}.json",
@@ -310,8 +328,22 @@ fn send_with_capture(
                 .unwrap_or_default()
                 .subsec_nanos()
         ),
-    });
-    let result_path_str = result_path.to_string_lossy();
+    };
+    let (result_path, result_path_for_r): (std::path::PathBuf, String) =
+        match (&bridge_host, &bridge_rpath) {
+            (Some(host_dir), Some(r_dir)) => {
+                let _ = std::fs::create_dir_all(host_dir);
+                (
+                    std::path::PathBuf::from(host_dir).join(&filename),
+                    format!("{}/{}", r_dir.trim_end_matches('/'), filename),
+                )
+            }
+            _ => {
+                let p = std::env::temp_dir().join(&filename);
+                let s = p.to_string_lossy().into_owned();
+                (p, s)
+            }
+        };
 
     // Remove any leftover from a previously killed call.
     let _ = std::fs::remove_file(&result_path);
@@ -321,7 +353,7 @@ fn send_with_capture(
     let env_name = current_environment_name(rpc);
 
     // Install R() with the result path and target environment baked in.
-    r_eval::run_silent(rpc, &build_capture_fn(&result_path_str, &env_name))?;
+    r_eval::run_silent(rpc, &build_capture_fn(&result_path_for_r, &env_name))?;
 
     // Send the wrapper via console_input — visible to the user, no quotes or
     // path argument exposed. Single-line code stays on one line; multi-line
@@ -337,13 +369,23 @@ fn send_with_capture(
     // Two early-exit signals:
     //   • the result file appears (normal completion or R-side interrupt sentinel)
     //   • rsession process is no longer alive (crash / kill)
+    //
+    // The "process alive" check uses `kill(pid, 0)` against the local OS,
+    // so it's only meaningful when CLI and rsession share a PID namespace
+    // (Desktop, or Server on the same host). In bridge mode the PID lives
+    // in the container — the host can't see it, so we'd false-positive on
+    // a process-died error. The harness sets `RSTUDIO_CLI_SKIP_PID_CHECK`
+    // to disable this branch.
+    let skip_pid_check = std::env::var("RSTUDIO_CLI_SKIP_PID_CHECK")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
     let deadline = timeout.map(|t| Instant::now() + Duration::from_secs_f64(t));
     loop {
         std::thread::sleep(SEND_POLL_INTERVAL);
         if result_path.exists() {
             break;
         }
-        if rsession_pid.is_some_and(|pid| !process_alive(pid)) {
+        if !skip_pid_check && rsession_pid.is_some_and(|pid| !process_alive(pid)) {
             let _ = std::fs::remove_file(&result_path);
             return Err(CliError::r(
                 "rsession process died while waiting for r send result".to_string(),

@@ -97,10 +97,18 @@ export RSTUDIO_CLI_CLIENT_ID=$cid
 export RSTUDIO_CLI_PORT_TOKEN=$pt
 export RSTUDIO_CLI_BRIDGE_TARBALL_DIR=$SHARED/tmp
 export RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR=/shared-tmp
+# r send writes its capture result via R to one filesystem and reads it
+# from the CLI on another. Bridge: same bind-mount as the tarball.
+export RSTUDIO_CLI_BRIDGE_CAPTURE_DIR=$SHARED/tmp
+export RSTUDIO_CLI_BRIDGE_CAPTURE_RPATH_DIR=/shared-tmp
 # Bridge installs rstudiocli.mcp into the container's R library directly
 # (the CLI's auto-install via execute_r_code RPC misbehaves through the
 # container's HTTP proxy). Skip the runtime check.
 export RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1
+# r send polls a `kill(pid, 0)` to detect rsession crashes; in the bridge
+# the PID lives in the container's PID namespace, invisible from macOS,
+# which would false-positive.
+export RSTUDIO_CLI_SKIP_PID_CHECK=1
 export USER=rstudio
 EOF
   log "creds refreshed: cid=$cid pt=$pt session=$sess"
