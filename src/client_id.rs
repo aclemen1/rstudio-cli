@@ -120,6 +120,17 @@ fn project_dir_from_rproj(p: &Path) -> Option<PathBuf> {
 /// Server, we read it from `session-persistent-state` so the CLI shares
 /// identity with the user's open browser tab.
 pub fn resolve_client_id(session: &Session) -> Result<String, CliError> {
+    // Test/integration override: when the CLI runs against a bridged
+    // session (e.g. a Dockerised RStudio Server) it can't share identity
+    // with a real browser tab — the `session-persistent-state` may be
+    // empty or stale because no GWT client owns the session. The harness
+    // performs its own `client_init` and exports the assigned clientId
+    // via this env var so the CLI uses it for subsequent RPCs.
+    if let Ok(id) = env::var("RSTUDIO_CLI_CLIENT_ID")
+        && !id.is_empty()
+    {
+        return Ok(id);
+    }
     match session.mode {
         Mode::Desktop => Ok(DESKTOP_CLIENT_ID.to_string()),
         Mode::Server => {

@@ -37,14 +37,23 @@ impl<'a> RpcClient<'a> {
     }
 
     fn auth_headers(&self, csrf: &str) -> Vec<(String, String)> {
+        // Build the base Cookie header. In bridge mode (Dockerised
+        // integration tests), rsession's `client_init` response sets a
+        // `port-token=<hex>` cookie that subsequent requests must echo
+        // back, otherwise the clientId is rejected. The harness captures
+        // the token from its own `client_init` and exposes it via this
+        // env var.
+        let mut cookie = format!("rs-csrf-token={csrf}; csrf-token={csrf}");
+        if let Ok(port_token) = std::env::var("RSTUDIO_CLI_PORT_TOKEN")
+            && !port_token.is_empty()
+        {
+            cookie.push_str(&format!("; port-token={port_token}"));
+        }
         let mut headers = vec![
             ("X-Session-Postback".into(), "1".into()),
             ("X-RStudioUserIdentity".into(), self.session.user.clone()),
             ("X-RS-CSRF-Token".into(), csrf.into()),
-            (
-                "Cookie".into(),
-                format!("rs-csrf-token={csrf}; csrf-token={csrf}"),
-            ),
+            ("Cookie".into(), cookie),
         ];
         // Desktop authenticates by shared secret instead of SO_PEERCRED. The
         // header is the only thing the listener checks; the Server-style

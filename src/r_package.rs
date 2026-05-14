@@ -15,7 +15,7 @@
 //! pays at most one round-trip with rsession to verify the version,
 //! plus the one-shot install on a clean session.
 
-use std::io::Write;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use crate::error::CliError;
@@ -131,20 +131,55 @@ fn check_installed(rpc: &RpcClient<'_>) -> Result<InstallStatus, CliError> {
 }
 
 fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
-    // Write the embedded tarball to a temp path. We use the rstudio-cli
-    // binary's own tmp; rsession reads from the same filesystem, so the
-    // path is reachable from the R side.
-    let mut tmp = tempfile::Builder::new()
-        .prefix("rstudiocli.mcp-")
-        .suffix(".tar.gz")
-        .tempfile()
-        .map_err(|e| CliError::internal(format!("r_package: tempfile: {e}")))?;
-    tmp.write_all(R_PACKAGE_TARBALL)
+    // Write the embedded tarball to a path the *rsession* process can
+    // read. Two cases:
+    //
+    // 1. Normal: the CLI and rsession share a filesystem (Desktop, or
+    //    Server on the same host). We use tempfile::Builder which lives
+    //    under the user's tempdir and is unique per call.
+    //
+    // 2. Container/bridge: when CLI runs on one host and rsession in a
+    //    container, we need a path that both can resolve to the same
+    //    bytes. The integration test harness exposes the override path
+    //    via `RSTUDIO_CLI_BRIDGE_TARBALL_DIR` (the CLI writes there,
+    //    rsession reads from there via a bind-mount). Path is then
+    //    rewritten via `RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR` so the
+    //    R call sees the container-side path while the writer used
+    //    the host-side path.
+    let bridge_dir = std::env::var("RSTUDIO_CLI_BRIDGE_TARBALL_DIR").ok();
+    let bridge_rpath_dir = std::env::var("RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR").ok();
+
+    let (path_for_writer, path_for_r): (PathBuf, String) = if let Some(dir) = &bridge_dir {
+        let host_dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&host_dir).map_err(|e| {
+            CliError::internal(format!("r_package: mkdir {}: {e}", host_dir.display()))
+        })?;
+        let fname = "rstudiocli.mcp-bridge.tar.gz";
+        let host_path = host_dir.join(fname);
+        let r_path = if let Some(rpd) = &bridge_rpath_dir {
+            format!("{}/{}", rpd.trim_end_matches('/'), fname)
+        } else {
+            host_path.to_string_lossy().into_owned()
+        };
+        (host_path, r_path)
+    } else {
+        let tmp = tempfile::Builder::new()
+            .prefix("rstudiocli.mcp-")
+            .suffix(".tar.gz")
+            .tempfile()
+            .map_err(|e| CliError::internal(format!("r_package: tempfile: {e}")))?;
+        let path = tmp
+            .into_temp_path()
+            .keep()
+            .map_err(|e| CliError::internal(format!("r_package: persist tempfile: {e}")))?;
+        let p = path.to_string_lossy().into_owned();
+        (path, p)
+    };
+
+    // Write the bytes to the host-visible path.
+    std::fs::write(&path_for_writer, R_PACKAGE_TARBALL)
         .map_err(|e| CliError::internal(format!("r_package: write tarball: {e}")))?;
-    tmp.flush()
-        .map_err(|e| CliError::internal(format!("r_package: flush tarball: {e}")))?;
-    let path = tmp.into_temp_path();
-    let path_str = path.to_string_lossy().into_owned();
+    let path_str = path_for_r;
 
     // install.packages with repos = NULL and type = "source" installs
     // from a local tarball. We deliberately let R pick the user library;
@@ -177,8 +212,12 @@ fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
         ))
     })?;
 
-    // path drops here -> tempfile is removed automatically.
-    drop(path);
+    // Cleanup the tarball we wrote. (In bridge mode we keep it: the
+    // host path is named deterministically and reused for any future
+    // process; cleanup is the harness's responsibility.)
+    if bridge_dir.is_none() {
+        let _ = std::fs::remove_file(&path_for_writer);
+    }
     Ok(())
 }
 
