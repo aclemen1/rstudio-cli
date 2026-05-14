@@ -106,6 +106,16 @@ impl<'a> RpcClient<'a> {
     /// browser→rsession state transition that causes transient code-6 rejections).
     /// Remove if the root cause is identified via rsession source inspection.
     pub fn rpc(&self, method: &str, params: Vec<Value>) -> Result<Value, CliError> {
+        // Ensure the `rstudiocli.mcp` companion R package is installed
+        // in the active rsession before any RPC that may execute R
+        // code referencing it. Memoised per-process via `OnceLock` so
+        // the first call within a process pays at most one round-trip
+        // (version check) plus the install if needed, and subsequent
+        // calls are free. Re-entrant: ensure_installed itself calls
+        // RPCs, but it sets the OnceLock before doing so, so nested
+        // calls short-circuit.
+        crate::r_package::ensure_installed(self)?;
+
         let client_id = self.client_id(false)?;
         match self.rpc_with_client_id(method, &params, &client_id) {
             Err(e) if e.code == RPC_INVALID_CLIENT_ID => {

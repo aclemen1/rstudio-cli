@@ -45,17 +45,30 @@ static ENSURED: OnceLock<()> = OnceLock::new();
 ///
 /// Safe to call from the hot path: short-circuits after the first
 /// successful call within a single process.
+///
+/// Recursion safety: this function itself calls `rpc.rpc("execute_r_code", ...)`,
+/// so if callers also hook into the RPC layer (e.g. via a check at
+/// the top of `RpcClient::rpc`), they must ensure those nested calls
+/// see `ENSURED` already set. We set it **before** running the
+/// `execute_r_code` probe so that re-entrancy short-circuits at the
+/// top of this function. The cost: a failed install/check leaves the
+/// process in a "we think it's done" state for the rest of its life —
+/// acceptable, since both check and install raise `CliError` on
+/// failure that the caller propagates.
 pub fn ensure_installed(rpc: &RpcClient<'_>) -> Result<(), CliError> {
     if ENSURED.get().is_some() {
         return Ok(());
     }
+    // Set the marker FIRST so the nested `execute_r_code` inside
+    // check_installed / install_from_embedded short-circuits when they
+    // re-enter the RPC layer (which now also calls ensure_installed).
+    let _ = ENSURED.set(());
+
     let status = check_installed(rpc)?;
     if matches!(status, InstallStatus::CurrentVersion) {
-        let _ = ENSURED.set(());
         return Ok(());
     }
     install_from_embedded(rpc)?;
-    let _ = ENSURED.set(());
     Ok(())
 }
 

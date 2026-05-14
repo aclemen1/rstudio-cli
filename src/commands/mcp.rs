@@ -435,9 +435,9 @@ impl McpServer {
         }
         let session = self.session_or_detect()?;
         let rpc = crate::rpc::RpcClient::new(session);
-        // Ensure rstudiocli.mcp is installed at this binary's version,
-        // installing it silently from the embedded tarball if not.
-        crate::r_package::ensure_installed(&rpc)?;
+        // RpcClient::rpc() now calls ensure_installed() itself (memoised),
+        // so the first `r_eval::run` below covers our needs without a
+        // separate bootstrap call here.
         // Make the package available to the user's code without forcing
         // them to write `library(rstudiocli.mcp)` themselves. We
         // attach() into search() so calls like `editor_set_contents()`
