@@ -3,9 +3,23 @@
 # rstudio CLI can drive it as if it were a Desktop session. Used by the live
 # integration tests in `tests/live.rs`.
 #
-# Requires: docker (with OrbStack on macOS for socket forwarding), `socat`,
-# `curl`, Google Chrome (for IDE event loop), Python with the `websockets`
-# package (via `uv`).
+# Requires:
+#   - A Docker runtime that supports bidirectional bind-mounts from the
+#     macOS host. Tested working:
+#       - OrbStack: works out of the box (virtiofs by default, no setup).
+#       - colima:   start with `--mount-type virtiofs --vm-type vz` and
+#                   explicitly add a writable mount that contains the
+#                   bridge cache directory (we use `$HOME/.cache/...`
+#                   because colima refuses to mount system paths like
+#                   `/tmp`):
+#                       colima start --mount-type virtiofs --vm-type vz \\
+#                                    --mount $HOME/.cache/rstudio-bridge:w
+#     Known not to work with default config:
+#       - colima with default sshfs mount (one-way only: container
+#         writes do not propagate to the host).
+#       - Docker Desktop on older versions (gRPC-FUSE may bottleneck).
+#   - `socat`, `curl`, Google Chrome.app (for IDE event loop), Python with
+#     the `websockets` package (auto-installed via `uv`).
 #
 # Writes bridge state to /tmp/rstudio-bridge-state.env, sourced by the test
 # harness:
@@ -21,11 +35,12 @@
 # Usage:
 #   scripts/bridge-up.sh        # spawn fresh
 #   scripts/bridge-up.sh refresh # re-sync client_id/port-token with current Chrome state
+#   scripts/bridge-up.sh down   # tear down everything
 
 set -euo pipefail
 
 ACTION="${1:-up}"
-SHARED=/tmp/rstudio-orbstack-shared
+SHARED="$HOME/.cache/rstudio-bridge/shared"
 BRIDGE_SOCK=/tmp/rstudio-bridge.sock
 BRIDGE_ENV=/tmp/rstudio-bridge-state.env
 CHROME_DEBUG_PORT=9222
@@ -82,6 +97,10 @@ export RSTUDIO_CLI_CLIENT_ID=$cid
 export RSTUDIO_CLI_PORT_TOKEN=$pt
 export RSTUDIO_CLI_BRIDGE_TARBALL_DIR=$SHARED/tmp
 export RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR=/shared-tmp
+# Bridge installs rstudiocli.mcp into the container's R library directly
+# (the CLI's auto-install via execute_r_code RPC misbehaves through the
+# container's HTTP proxy). Skip the runtime check.
+export RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1
 export USER=rstudio
 EOF
   log "creds refreshed: cid=$cid pt=$pt session=$sess"
@@ -91,7 +110,7 @@ cmd_up() {
   log "starting bridge"
 
   # Cleanup any previous state
-  docker stop rs-orb 2>/dev/null || true
+  docker stop rstudio-bridge 2>/dev/null || true
   pkill -f "$BRIDGE_SOCK" 2>/dev/null || true
   pkill -f "remote-debugging-port=$CHROME_DEBUG_PORT" 2>/dev/null || true
   sleep 1
@@ -104,7 +123,7 @@ cmd_up() {
     >/dev/null
 
   log "spawning $IMAGE"
-  docker run -d --rm --name rs-orb \
+  docker run -d --rm --name rstudio-bridge \
     -e DISABLE_AUTH=true \
     -p "127.0.0.1:$RSTUDIO_HTTP_PORT:8787" \
     -p "127.0.0.1:$RSTUDIO_TCP_PORT:$RSTUDIO_TCP_PORT" \
@@ -114,13 +133,13 @@ cmd_up() {
   sleep 5
 
   log "installing socat + R packages in container"
-  docker exec rs-orb bash -c 'apt-get update -qq && apt-get install -y -qq socat curl' >/dev/null 2>&1
-  docker exec rs-orb R -e 'install.packages(c("rstudioapi","jsonlite"), repos="https://cloud.r-project.org", quiet=TRUE)' >/dev/null 2>&1
+  docker exec rstudio-bridge bash -c 'apt-get update -qq && apt-get install -y -qq socat curl' >/dev/null 2>&1
+  docker exec rstudio-bridge R -e 'install.packages(c("rstudioapi","jsonlite"), repos="https://cloud.r-project.org", quiet=TRUE)' >/dev/null 2>&1
 
   log "building + installing rstudiocli.mcp"
   R CMD build r-package >/dev/null 2>&1
   mv rstudiocli.mcp_*.tar.gz "$SHARED/tmp/pkg.tar.gz"
-  docker exec rs-orb R -e 'install.packages("/shared-tmp/pkg.tar.gz", repos=NULL, type="source", quiet=TRUE)' >/dev/null 2>&1
+  docker exec rstudio-bridge R -e 'install.packages("/shared-tmp/pkg.tar.gz", repos=NULL, type="source", quiet=TRUE)' >/dev/null 2>&1
 
   log "launching headless Chrome to spawn rsession"
   local prof
@@ -133,7 +152,7 @@ cmd_up() {
   log "waiting for rsession socket"
   local i
   for i in $(seq 1 30); do
-    if docker exec rs-orb test -S /var/run/rstudio-server/rstudio-rsession/rstudio-d 2>/dev/null; then
+    if docker exec rstudio-bridge test -S /var/run/rstudio-server/rstudio-rsession/rstudio-d 2>/dev/null; then
       log "rsession ready after ${i}s"
       break
     fi
@@ -142,7 +161,7 @@ cmd_up() {
   sleep 5  # let GWT finish init
 
   log "starting socat (container side)"
-  docker exec -d rs-orb sh -c \
+  docker exec -d rstudio-bridge sh -c \
     "sudo -u rstudio socat TCP-LISTEN:$RSTUDIO_TCP_PORT,bind=0.0.0.0,reuseaddr,fork UNIX-CONNECT:/var/run/rstudio-server/rstudio-rsession/rstudio-d"
   sleep 2
 
@@ -170,7 +189,7 @@ cmd_refresh() {
 
 cmd_down() {
   log "tearing down bridge"
-  docker stop rs-orb 2>/dev/null || true
+  docker stop rstudio-bridge 2>/dev/null || true
   pkill -f "$BRIDGE_SOCK" 2>/dev/null || true
   pkill -f "remote-debugging-port=$CHROME_DEBUG_PORT" 2>/dev/null || true
   rm -f "$BRIDGE_SOCK" "$BRIDGE_ENV"

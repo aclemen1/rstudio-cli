@@ -72,6 +72,19 @@ pub fn ensure_installed(rpc: &RpcClient<'_>) -> Result<(), CliError> {
     // re-enter the RPC layer (which now also calls ensure_installed).
     let _ = ENSURED.set(());
 
+    // Test/integration override: when running against a Dockerised
+    // session via `scripts/bridge-up.sh`, the harness pre-installs
+    // `rstudiocli.mcp` directly into the container's R library (where
+    // the `install.packages` flow inside rsession's `execute_r_code`
+    // RPC currently misbehaves — to be investigated). The harness sets
+    // this var so the CLI trusts the install and skips its own attempt.
+    if std::env::var("RSTUDIO_CLI_SKIP_ENSURE_INSTALL")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
     let status = check_installed(rpc)?;
     if matches!(status, InstallStatus::CurrentVersion) {
         return Ok(());
