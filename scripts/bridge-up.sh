@@ -1,129 +1,188 @@
 #!/usr/bin/env bash
-# Spawn a Dockerised RStudio Server, bridge it to a local Unix socket so the
-# rstudio CLI can drive it as if it were a Desktop session. Used by the live
-# integration tests in `tests/live.rs`.
+# Spawn a Dockerised, self-contained RStudio Server for integration testing.
+# Everything runs inside the container: rserver, rsession, Chrome (headless),
+# the CLI test binary. No host↔container tunnel, no host browser, no
+# bind-mounts of the source tree.
+#
+# Why in-container: rsession's `accept()` loop on its Unix listening socket
+# is serialised against its post-REPL event drain. From the host, when two
+# CLI invocations cross that window (e.g. two consecutive `r send`), the
+# second connection waits ~1 s in the kernel backlog. From inside the
+# container the listener is reached without that hop and the bug disappears.
+#
+# Why Chrome inside too: the host browser required a host Chrome install
+# (chrome.app on macOS, fragile in CI) and Python+uv for the DevTools
+# protocol dance. Chromium in the container is self-contained; the container
+# is the unit of reproducibility.
 #
 # Requires:
-#   - A Docker runtime that supports bidirectional bind-mounts from the
-#     macOS host. Tested working:
-#       - OrbStack: works out of the box (virtiofs by default, no setup).
-#       - colima:   start with `--mount-type virtiofs --vm-type vz` and
-#                   an explicit `--mount /tmp/rstudio-bridge:w` so the
-#                   host-side shared dir (kept under `/tmp` to avoid
-#                   polluting `$HOME`) is reachable from inside the VM:
-#                       colima start --mount-type virtiofs --vm-type vz \\
-#                                    --mount /tmp/rstudio-bridge:w
-#                   (colima only mounts the paths you ask for; `/tmp`
-#                   is *not* mounted by default. Also: colima/lima
-#                   reserve the *guest* `/tmp`, which is why the
-#                   in-container mount point is `/shared-tmp`.)
-#     Known not to work with default config:
-#       - colima with default sshfs mount (one-way only: container
-#         writes do not propagate to the host).
-#       - Docker Desktop on older versions (gRPC-FUSE may bottleneck).
-#   - `socat`, `curl`, Google Chrome.app (for IDE event loop), Python with
-#     the `websockets` package (auto-installed via `uv`).
+#   - Any Docker runtime. No bind-mount semantics involved.
 #
-# Writes bridge state to /tmp/rstudio-bridge-state.env, sourced by the test
-# harness:
+# Writes bridge state to /tmp/rstudio-bridge-state.env:
 #
-#   export RSTUDIO_SESSION_STREAM=/tmp/rstudio-bridge.sock
-#   export RSTUDIO_SESSION_ID=<container-side session id>
 #   export RSTUDIO_CLI_CLIENT_ID=<chrome's clientId>
 #   export RSTUDIO_CLI_PORT_TOKEN=<chrome's port-token cookie>
-#   export RSTUDIO_CLI_BRIDGE_TARBALL_DIR=<host shared dir>
-#   export RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR=<container path>
-#   export USER=rstudio
 #
 # Usage:
-#   scripts/bridge-up.sh        # spawn fresh
-#   scripts/bridge-up.sh refresh # re-sync client_id/port-token with current Chrome state
-#   scripts/bridge-up.sh down   # tear down everything
+#   scripts/bridge-up.sh up         # spawn container, install toolchain
+#   scripts/bridge-up.sh test       # sync sources + build + run all live tests
+#   scripts/bridge-up.sh test r_send_captures_stdout  # filter
+#   scripts/bridge-up.sh sync       # re-copy sources after local edits
+#   scripts/bridge-up.sh refresh    # re-read clientId/port-token if Chrome reloaded
+#   scripts/bridge-up.sh down       # stop container (cargo cache preserved)
 
 set -euo pipefail
 
 ACTION="${1:-up}"
-# Host-side shared dir for the bridge. Lives under /tmp on purpose:
-# avoids polluting $HOME, and host /tmp is mounted rw by both OrbStack
-# (everything by default) and colima (with --mount-type virtiofs --vm-type vz).
-# The *container-side* mount point is /shared-tmp because colima/lima
-# reserve the guest /tmp.
-SHARED=/tmp/rstudio-bridge/shared
-BRIDGE_SOCK=/tmp/rstudio-bridge.sock
+shift || true
+
+CONTAINER=rstudio-bridge
 BRIDGE_ENV=/tmp/rstudio-bridge-state.env
 CHROME_DEBUG_PORT=9222
 RSTUDIO_HTTP_PORT=18787
-RSTUDIO_TCP_PORT=19999
 IMAGE=rocker/rstudio:4.5.2
-CHROME_APP='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+# Named volume for cargo's registry/cache so consecutive `test` runs are fast.
+CARGO_CACHE_VOL=rstudio-bridge-cargo
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 log() { echo "[bridge] $*" >&2; }
 
+# Copy the repo sources into the container. Skips target/ and other
+# build artefacts so the cargo cache in the named volume is the source
+# of truth for compiled state. Uses `docker cp` for runtime independence
+# (no reliance on colima/orbstack/Docker Desktop bind-mount semantics).
+sync_sources() {
+  log "syncing sources into container"
+  docker exec "$CONTAINER" bash -c \
+    'rm -rf /home/rstudio/rstudio-cli && mkdir -p /home/rstudio/rstudio-cli && chown rstudio:rstudio /home/rstudio/rstudio-cli'
+  # Pipe a tar archive of the sources into a tar-extract running inside the
+  # container. This sidesteps `docker cp`'s xattr propagation: macOS bsdtar
+  # bakes xattrs (com.apple.provenance, etc.) into the archive even with
+  # COPYFILE_DISABLE / --no-mac-metadata, and Linux refuses them on
+  # lsetxattr. GNU tar inside the container ignores unknown xattrs gracefully.
+  COPYFILE_DISABLE=1 tar --no-mac-metadata \
+    --exclude='./target' --exclude='./.git' \
+    --exclude='./.jj' --exclude='./node_modules' \
+    -cf - -C "$REPO_ROOT" . \
+    | docker exec -i "$CONTAINER" tar -xf - -C /home/rstudio/rstudio-cli 2>&1 \
+    | grep -v 'LIBARCHIVE.xattr' || true
+  docker exec "$CONTAINER" chown -R rstudio:rstudio /home/rstudio/rstudio-cli
+}
+
+# Run a command inside the container as the `rstudio` user with the
+# cargo/rustup PATH pre-baked. CARGO_TARGET_DIR points outside the
+# source tree so incremental builds land in the cache volume.
+in_container() {
+  docker exec \
+    -u rstudio \
+    -e USER=rstudio \
+    -e HOME=/home/rstudio \
+    -e CARGO_HOME=/home/rstudio/.cargo \
+    -e RUSTUP_HOME=/home/rstudio/.cargo/rustup \
+    -e CARGO_TARGET_DIR=/home/rstudio/.cargo/target \
+    -e PATH=/home/rstudio/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    "$@"
+}
+
+# Read Chrome's clientId from the session-persistent-state file (written
+# by rsession when it accepts the client_init RPC) and the port-token
+# cookie via Chromium's DevTools Protocol over the in-container debug port.
+# Both queries happen entirely inside the container, no host Python.
 refresh_creds() {
-  # Read Chrome's current client_id (via /session-persistent-state file)
-  # and port-token cookie (via Chrome DevTools Protocol).
   local sess
-  sess=$(ls "$SHARED/home/.local/share/rstudio/sessions/active/" 2>/dev/null | head -1 | sed 's/^session-//')
+  sess=$(docker exec "$CONTAINER" bash -c \
+    'ls /home/rstudio/.local/share/rstudio/sessions/active/ 2>/dev/null | head -1' \
+    | sed 's/^session-//')
   [[ -z "$sess" ]] && { log "no session found"; return 1; }
 
   local cid
-  cid=$(awk -F'"' '/active-client-id/ {print $2}' \
-    "$SHARED/home/.local/share/rstudio/sessions/active/session-$sess/session-persistent-state" 2>/dev/null)
+  cid=$(docker exec "$CONTAINER" bash -c \
+    "awk -F'\"' '/active-client-id/ {print \$2}' /home/rstudio/.local/share/rstudio/sessions/active/session-$sess/session-persistent-state 2>/dev/null")
 
+  # Use Python from inside the container (rocker/rstudio:4.5.2 ships
+  # python3 by default). We talk to Chromium's DevTools Protocol on the
+  # in-container debug port: list pages, pick the rstudio one (matched on
+  # the in-container rserver port 8787, not the host-side mapped port),
+  # open its webSocketDebuggerUrl, ask Network.getAllCookies, extract
+  # port-token.
   local pt
-  pt=$(curl -s "http://127.0.0.1:$CHROME_DEBUG_PORT/json" \
-    | python3 -c "
-import json, sys
-pages = json.load(sys.stdin)
-for p in pages:
-    if p['type'] == 'page' and '$RSTUDIO_HTTP_PORT' in p.get('url', ''):
-        print(p['webSocketDebuggerUrl']); break
-" \
-    | { read -r ws_url; cd /tmp && uv run --quiet --with websockets python -c "
-import json, asyncio, sys, websockets
+  pt=$(docker exec -i "$CONTAINER" python3 - "$CHROME_DEBUG_PORT" <<'PY'
+import json, sys, urllib.request, socket
 
-async def get_port_token(url):
-    async with websockets.connect(url, max_size=None) as ws:
-        await ws.send(json.dumps({'id': 1, 'method': 'Network.getAllCookies'}))
-        r = json.loads(await ws.recv())
-        for c in r.get('result', {}).get('cookies', []):
-            if c['name'] == 'port-token':
-                return c['value']
-        return ''
+debug_port = sys.argv[1]
+pages = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json").read())
+ws_url = next(
+    (p["webSocketDebuggerUrl"] for p in pages
+     if p["type"] == "page" and ":8787" in p.get("url", "")),
+    None,
+)
+if not ws_url:
+    print("", end=""); sys.exit(0)
 
-print(asyncio.run(get_port_token('$ws_url'))) " 2>/dev/null
-    }
-  )
+# Minimal websocket client: opening handshake + one text frame request,
+# parse one text frame response. Avoids a `websockets` dependency.
+from urllib.parse import urlparse
+import base64, hashlib, os, struct
+
+u = urlparse(ws_url)
+sock = socket.create_connection((u.hostname, u.port))
+key = base64.b64encode(os.urandom(16)).decode()
+req = (
+    f"GET {u.path} HTTP/1.1\r\n"
+    f"Host: {u.hostname}:{u.port}\r\n"
+    f"Upgrade: websocket\r\n"
+    f"Connection: Upgrade\r\n"
+    f"Sec-WebSocket-Key: {key}\r\n"
+    f"Sec-WebSocket-Version: 13\r\n\r\n"
+).encode()
+sock.sendall(req)
+# Drain headers
+buf = b""
+while b"\r\n\r\n" not in buf:
+    buf += sock.recv(4096)
+
+def send_text(s, payload):
+    data = payload.encode()
+    mask = os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+    header = bytes([0x81])
+    n = len(data)
+    if n < 126:
+        header += bytes([0x80 | n])
+    elif n < 65536:
+        header += bytes([0x80 | 126]) + struct.pack(">H", n)
+    else:
+        header += bytes([0x80 | 127]) + struct.pack(">Q", n)
+    s.sendall(header + mask + masked)
+
+def recv_text(s):
+    h = s.recv(2)
+    n = h[1] & 0x7F
+    if n == 126:
+        n = struct.unpack(">H", s.recv(2))[0]
+    elif n == 127:
+        n = struct.unpack(">Q", s.recv(8))[0]
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        if not chunk: break
+        data += chunk
+    return data.decode()
+
+send_text(sock, json.dumps({"id": 1, "method": "Network.getAllCookies"}))
+resp = json.loads(recv_text(sock))
+for c in resp.get("result", {}).get("cookies", []):
+    if c["name"] == "port-token":
+        print(c["value"], end=""); break
+sock.close()
+PY
+)
 
   cat > "$BRIDGE_ENV" <<EOF
-export RSTUDIO_SESSION_STREAM=$BRIDGE_SOCK
-export RSTUDIO_SESSION_ID=$sess
 export RSTUDIO_CLI_CLIENT_ID=$cid
 export RSTUDIO_CLI_PORT_TOKEN=$pt
-export RSTUDIO_CLI_BRIDGE_TARBALL_DIR=$SHARED/tmp
-export RSTUDIO_CLI_BRIDGE_TARBALL_RPATH_DIR=/shared-tmp
-# r send writes its capture result via R to one filesystem and reads it
-# from the CLI on another. Bridge: same bind-mount as the tarball.
-export RSTUDIO_CLI_BRIDGE_CAPTURE_DIR=$SHARED/tmp
-export RSTUDIO_CLI_BRIDGE_CAPTURE_RPATH_DIR=/shared-tmp
-# Bridge installs rstudiocli.mcp into the container's R library directly
-# (the CLI's auto-install via execute_r_code RPC misbehaves through the
-# container's HTTP proxy). Skip the runtime check.
-export RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1
-# r send polls kill(pid, 0) to detect rsession crashes; in the bridge
-# the PID lives in the container's PID namespace, invisible from macOS,
-# which would false-positive.
-export RSTUDIO_CLI_SKIP_PID_CHECK=1
-# Rewrite host-canonicalised file paths into the path R sees inside the
-# container. Same bind-mount as the capture dir (the only host path the
-# CLI canonicalises that resolves on both sides of the bridge). The host
-# prefix is the *canonicalised* path: on macOS, /tmp is a symlink to
-# /private/tmp, so the CLI's std::fs::canonicalize emits /private/tmp/...
-export RSTUDIO_CLI_PATH_REMAP=$(cd "$SHARED/tmp" && pwd -P):/shared-tmp
-export USER=rstudio
 EOF
   log "creds refreshed: cid=$cid pt=$pt session=$sess"
 }
@@ -132,49 +191,79 @@ cmd_up() {
   log "starting bridge"
 
   # Cleanup any previous state
-  docker stop rstudio-bridge 2>/dev/null || true
-  pkill -f "$BRIDGE_SOCK" 2>/dev/null || true
-  pkill -f "remote-debugging-port=$CHROME_DEBUG_PORT" 2>/dev/null || true
+  docker stop "$CONTAINER" 2>/dev/null || true
   sleep 1
-  rm -rf "$SHARED"
-  mkdir -p "$SHARED/home" "$SHARED/tmp"
-
-  # Pre-create home with rstudio UID so rserver can write
-  docker run --rm -v "$SHARED/home:/home/rstudio" alpine \
-    sh -c "mkdir -p /home/rstudio/.local/share/rstudio/sources /home/rstudio/.local/share/rstudio/sessions/active && chown -R 1000:1000 /home/rstudio" \
-    >/dev/null
 
   log "spawning $IMAGE"
-  docker run -d --rm --name rstudio-bridge \
+  docker run -d --rm --name "$CONTAINER" \
     -e DISABLE_AUTH=true \
     -p "127.0.0.1:$RSTUDIO_HTTP_PORT:8787" \
-    -p "127.0.0.1:$RSTUDIO_TCP_PORT:$RSTUDIO_TCP_PORT" \
-    -v "$SHARED/home:/home/rstudio" \
-    -v "$SHARED/tmp:/shared-tmp" \
+    -v "$CARGO_CACHE_VOL:/home/rstudio/.cargo" \
     "$IMAGE" >/dev/null
   sleep 5
 
-  log "installing socat + R packages in container"
-  docker exec rstudio-bridge bash -c 'apt-get update -qq && apt-get install -y -qq socat curl' >/dev/null 2>&1
-  docker exec rstudio-bridge R -e 'install.packages(c("rstudioapi","jsonlite","callr"), repos="https://cloud.r-project.org", quiet=TRUE)' >/dev/null 2>&1
+  log "installing build deps + Chromium + R packages in container"
+  # build-essential / pkg-config / libssl-dev for cargo.
+  # Chromium for the in-container headless GWT client.
+  # Ubuntu's chromium package is a snap wrapper that doesn't work in Docker;
+  # pull the Debian-bookworm chromium .deb instead — it's a real binary.
+  # `--allow-unauthenticated` is safe here because we trust the docker-cached
+  # base image and the package is only used for headless test traffic.
+  # python3 ships in the base image; we use it for the DevTools dance.
+  docker exec "$CONTAINER" bash -c '
+    apt-get update -qq
+    apt-get install -y -qq curl build-essential pkg-config libssl-dev
+    echo "deb [trusted=yes] http://deb.debian.org/debian bookworm main" \
+      > /etc/apt/sources.list.d/debian-bookworm.list
+    apt-get update -qq -o Acquire::AllowInsecureRepositories=true 2>&1 \
+      | grep -v "^W:" || true
+    apt-get install -y -qq --allow-unauthenticated chromium 2>&1 \
+      | grep -v "policy-rc.d\|invoke-rc.d\|polkitd\|Processing triggers" || true
+  ' >/dev/null
+  # Pre-install rstudiocli dependencies (rstudioapi, jsonlite, callr) so
+  # the CLI's auto-install of rstudiocli itself can succeed without
+  # needing network from rsession. rstudiocli itself is auto-installed
+  # by the CLI on first RPC (no pre-install here — that lets us catch any
+  # auto-install regressions in CI).
+  docker exec "$CONTAINER" R -e \
+    'install.packages(c("rstudioapi","jsonlite","callr"), repos="https://cloud.r-project.org", quiet=TRUE)' \
+    >/dev/null 2>&1
+  # Make the cache volume writable by the rstudio user (named volumes are
+  # owned by root by default).
+  docker exec "$CONTAINER" chown -R rstudio:rstudio /home/rstudio/.cargo
 
-  log "building + installing rstudiocli.mcp"
-  R CMD build r-package >/dev/null 2>&1
-  mv rstudiocli.mcp_*.tar.gz "$SHARED/tmp/pkg.tar.gz"
-  docker exec rstudio-bridge R -e 'install.packages("/shared-tmp/pkg.tar.gz", repos=NULL, type="source", quiet=TRUE)' >/dev/null 2>&1
+  log "installing Rust toolchain (cached in $CARGO_CACHE_VOL volume)"
+  docker exec \
+    -u rstudio \
+    -e HOME=/home/rstudio \
+    -e CARGO_HOME=/home/rstudio/.cargo \
+    -e RUSTUP_HOME=/home/rstudio/.cargo/rustup \
+    "$CONTAINER" bash -c '
+      set -e
+      if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path >/dev/null
+      fi
+    '
 
-  log "launching headless Chrome to spawn rsession"
-  local prof
-  prof=$(mktemp -d /tmp/chrome-rs-XXXX)
-  "$CHROME_APP" --headless=new --disable-gpu --no-sandbox \
-    --user-data-dir="$prof" \
-    --remote-debugging-port="$CHROME_DEBUG_PORT" \
-    "http://127.0.0.1:$RSTUDIO_HTTP_PORT/" >/tmp/chrome.log 2>&1 &
+  log "launching headless Chromium in container (debug port $CHROME_DEBUG_PORT)"
+  # --no-sandbox: container has no user namespace setup
+  # --headless=new: modern headless mode (Chrome 109+)
+  # --user-data-dir under /tmp so it does not persist across container restarts
+  # We background the process; its lifetime is tied to the container's.
+  docker exec -u rstudio -d "$CONTAINER" bash -c "
+    rm -rf /tmp/chrome-rs && mkdir -p /tmp/chrome-rs
+    /usr/bin/chromium --headless=new --disable-gpu --no-sandbox \\
+             --user-data-dir=/tmp/chrome-rs \\
+             --remote-debugging-port=$CHROME_DEBUG_PORT \\
+             --remote-debugging-address=127.0.0.1 \\
+             http://127.0.0.1:8787/ >/tmp/chrome.log 2>&1
+  "
 
   log "waiting for rsession socket"
   local i
   for i in $(seq 1 30); do
-    if docker exec rstudio-bridge test -S /var/run/rstudio-server/rstudio-rsession/rstudio-d 2>/dev/null; then
+    if docker exec "$CONTAINER" test -S /var/run/rstudio-server/rstudio-rsession/rstudio-d 2>/dev/null; then
       log "rsession ready after ${i}s"
       break
     fi
@@ -182,57 +271,50 @@ cmd_up() {
   done
   sleep 5  # let GWT finish init
 
-  log "starting socat (container side)"
-  docker exec -d rstudio-bridge sh -c \
-    "sudo -u rstudio socat TCP-LISTEN:$RSTUDIO_TCP_PORT,bind=0.0.0.0,reuseaddr,fork UNIX-CONNECT:/var/run/rstudio-server/rstudio-rsession/rstudio-d"
-  sleep 2
-
-  log "starting socat (host side)"
-  rm -f "$BRIDGE_SOCK"
-  socat "UNIX-LISTEN:$BRIDGE_SOCK,fork,reuseaddr,unlink-early" \
-    "TCP:127.0.0.1:$RSTUDIO_TCP_PORT" >/tmp/host-socat.log 2>&1 &
-  sleep 2
-
-  # Symlink container's session state into the host's ~/.local/share/rstudio
-  # so the CLI's state/sources lookups find the live container paths.
-  local sess
-  sess=$(ls "$SHARED/home/.local/share/rstudio/sessions/active/" | head -1 | sed 's/^session-//')
-  mkdir -p ~/.local/share/rstudio/sessions/active ~/.local/share/rstudio/sources
-  rm -rf "$HOME/.local/share/rstudio/sessions/active/session-$sess" 2>/dev/null
-  ln -sfn "$SHARED/home/.local/share/rstudio/sessions/active/session-$sess" \
-    "$HOME/.local/share/rstudio/sessions/active/session-$sess"
-  # `editor list` and friends scan the per-session sources dir
-  # to enumerate open documents.
-  if [ -d "$SHARED/home/.local/share/rstudio/sources/session-$sess" ]; then
-    rm -rf "$HOME/.local/share/rstudio/sources/session-$sess" 2>/dev/null
-    ln -sfn "$SHARED/home/.local/share/rstudio/sources/session-$sess" \
-      "$HOME/.local/share/rstudio/sources/session-$sess"
-  fi
-
   refresh_creds
-  log "bridge up; source $BRIDGE_ENV to use it"
+  log "bridge up; run scripts/bridge-up.sh test"
 }
 
 cmd_refresh() {
   refresh_creds
 }
 
+cmd_sync() {
+  sync_sources
+}
+
+cmd_test() {
+  local filter="${1:-}"
+  # shellcheck disable=SC1090
+  source "$BRIDGE_ENV"
+
+  sync_sources
+
+  log "building tests in container"
+  in_container "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && cargo test --test live --no-run 2>&1' \
+    | tail -3
+
+  log "running live tests${filter:+ (filter: $filter)}"
+  in_container \
+    -e RSTUDIO_CLI_CLIENT_ID="$RSTUDIO_CLI_CLIENT_ID" \
+    -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
+    "$CONTAINER" bash -c \
+    "cd /home/rstudio/rstudio-cli && cargo test --test live $filter -- --ignored --test-threads=1"
+}
+
 cmd_down() {
   log "tearing down bridge"
-  docker stop rstudio-bridge 2>/dev/null || true
-  pkill -f "$BRIDGE_SOCK" 2>/dev/null || true
-  pkill -f "remote-debugging-port=$CHROME_DEBUG_PORT" 2>/dev/null || true
-  rm -f "$BRIDGE_SOCK" "$BRIDGE_ENV"
-  # Wipe contents only — never the mount point itself. virtiofs in colima
-  # caches the inode of /tmp/rstudio-bridge, and rm-then-recreate makes
-  # the guest see an empty directory even when the host has populated it.
-  rm -rf "$SHARED"
-  log "down"
+  docker stop "$CONTAINER" 2>/dev/null || true
+  rm -f "$BRIDGE_ENV"
+  log "down (cargo cache volume $CARGO_CACHE_VOL preserved; rm with: docker volume rm $CARGO_CACHE_VOL)"
 }
 
 case "$ACTION" in
   up) cmd_up ;;
   refresh) cmd_refresh ;;
+  sync) cmd_sync ;;
+  test) cmd_test "$@" ;;
   down) cmd_down ;;
-  *) echo "usage: $0 [up|refresh|down]" >&2; exit 1 ;;
+  *) echo "usage: $0 [up|refresh|sync|test [filter]|down]" >&2; exit 1 ;;
 esac

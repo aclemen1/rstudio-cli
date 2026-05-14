@@ -1075,9 +1075,9 @@ fn open(
     let col_arg = col.map(|c| format!("{c}L")).unwrap_or_else(|| "-1L".into());
     let move_cursor = if no_cursor { "FALSE" } else { "TRUE" };
 
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"cat(rstudiocli.mcp::editor_open({path}, line = {line_arg}, col = {col_arg}, move_cursor = {move_cursor})$id)"#,
+        r#"cat(rstudiocli::editor_open({path}, line = {line_arg}, col = {col_arg}, move_cursor = {move_cursor})$id)"#,
         path = r_quote(&abs_str),
     );
     let id = r_eval::run(rpc, &r_code)?;
@@ -1107,11 +1107,10 @@ fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
-    let remote_path = to_remote_path(&abs_str);
     let raw = rpc.rpc(
         "get_file_contents",
         vec![
-            Value::String(remote_path),
+            Value::String(abs_str.clone()),
             Value::String(encoding.to_string()),
         ],
     )?;
@@ -1120,27 +1119,6 @@ fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value
         "path": abs_str,
         "contents": contents,
     })))
-}
-
-/// Rewrite a host-canonicalised path into the path R sees on the other
-/// side of the bridge. Driven by `RSTUDIO_CLI_PATH_REMAP=host:container`
-/// (colon-separated, single pair). Returns the input unchanged when the
-/// env var is unset, malformed, or the prefix does not match — so
-/// Desktop and same-host Server keep behaving exactly as before.
-fn to_remote_path(host_path: &str) -> String {
-    let Ok(remap) = std::env::var("RSTUDIO_CLI_PATH_REMAP") else {
-        return host_path.to_string();
-    };
-    let Some((host_prefix, container_prefix)) = remap.split_once(':') else {
-        return host_path.to_string();
-    };
-    if host_prefix.is_empty() || container_prefix.is_empty() {
-        return host_path.to_string();
-    }
-    match host_path.strip_prefix(host_prefix) {
-        Some(rest) => format!("{container_prefix}{rest}"),
-        None => host_path.to_string(),
-    }
 }
 
 fn read_buffer(
@@ -1215,13 +1193,13 @@ fn context(
         ));
     }
 
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let api_call = if include_console {
-        "rstudiocli.mcp::editor_context(console = TRUE)".to_string()
+        "rstudiocli::editor_context(console = TRUE)".to_string()
     } else if let Some(id) = id {
-        format!("rstudiocli.mcp::editor_context(id = {})", r_quote(id))
+        format!("rstudiocli::editor_context(id = {})", r_quote(id))
     } else {
-        "rstudiocli.mcp::editor_context()".to_string()
+        "rstudiocli::editor_context()".to_string()
     };
 
     let contents_field = if include_contents {
@@ -1268,7 +1246,7 @@ fn insert(rpc: &RpcClient<'_>, text: &str, at: &str) -> Result<Option<Value>, Cl
     // `at` defines a `location` to pass to insertText. We keep the
     // call site inline because the location expressions ("end", "start",
     // "L:C") need R-side evaluation of getSourceEditorContext for the
-    // "end" branch — the rstudiocli.mcp wrapper would lose this
+    // "end" branch — the rstudiocli wrapper would lose this
     // expressiveness. Constructor helpers (`document_position`) stay on
     // rstudioapi:: since they're tiny zero-side-effect builders, not
     // endpoints that warrant a re-wrap.
@@ -1315,7 +1293,7 @@ fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<V
     };
     // `document_range` is a constructor; `editor_select_range` is our
     // wrapper for the actual endpoint (setSelectionRanges).
-    let r_code = format!("rstudiocli.mcp::editor_select_range(list({r_range}){id_arg})");
+    let r_code = format!("rstudiocli::editor_select_range(list({r_range}){id_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }
@@ -1525,9 +1503,9 @@ fn close(
             )));
         }
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudiocli.mcp::editor_close(id = {}, save = {save_arg})",
+        "rstudiocli::editor_close(id = {}, save = {save_arg})",
         r_quote(&resolved)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1550,9 +1528,9 @@ fn save(
     let resolved = resolve_target_id(rpc, session, id, path)?;
     let id_expr = match resolved {
         Some(s) => r_quote(&s),
-        None => "rstudiocli.mcp::editor_active_id(allow_console = FALSE)$id".into(),
+        None => "rstudiocli::editor_active_id(allow_console = FALSE)$id".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"local({{
   .__id <- {id_expr}
@@ -1560,7 +1538,7 @@ fn save(
     cat("null")
     return(invisible())
   }}
-  rstudiocli.mcp::editor_save(id = .__id)
+  rstudiocli::editor_save(id = .__id)
   cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
 }})"#
     );
@@ -1574,7 +1552,7 @@ fn save(
 }
 
 fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    r_eval::run_silent(rpc, "rstudiocli.mcp::editor_save_all()")?;
+    r_eval::run_silent(rpc, "rstudiocli::editor_save_all()")?;
     Ok(None)
 }
 
@@ -1590,10 +1568,10 @@ fn new_doc(
         )));
     }
     let exec_arg = if execute { "TRUE" } else { "FALSE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::editor_new(text = {text_q}, type = {type_q}, execute = {exec_arg}),
+            rstudiocli::editor_new(text = {text_q}, type = {type_q}, execute = {exec_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         text_q = r_quote(text),
@@ -1607,10 +1585,10 @@ fn new_doc(
 
 fn active_id(rpc: &RpcClient<'_>, no_console: bool) -> Result<Option<Value>, CliError> {
     let allow_console = if no_console { "FALSE" } else { "TRUE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::editor_active_id(allow_console = {allow_console}),
+            rstudiocli::editor_active_id(allow_console = {allow_console}),
             auto_unbox = TRUE, null = "null"
         ))"#
     );
@@ -1626,10 +1604,10 @@ fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliEr
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::editor_document_path(id = {id_arg}),
+            rstudiocli::editor_document_path(id = {id_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#
     );
@@ -1651,9 +1629,9 @@ fn set_contents(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudiocli.mcp::editor_set_contents(text = {}, id = {id_arg})",
+        "rstudiocli::editor_set_contents(text = {}, id = {id_arg})",
         r_quote(text)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1676,11 +1654,11 @@ fn modify_range(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     // `document_range`/`document_position` are zero-side-effect constructors,
     // not endpoints — left as `rstudioapi::*`.
     let r_code = format!(
-        "rstudiocli.mcp::editor_modify_range(\
+        "rstudiocli::editor_modify_range(\
            range = rstudioapi::document_range(\
              rstudioapi::document_position({l1}L, {c1}L), \
              rstudioapi::document_position({l2}L, {c2}L)), \
@@ -1705,9 +1683,9 @@ fn set_cursor(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/editor.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudiocli.mcp::editor_set_cursor(\
+        "rstudiocli::editor_set_cursor(\
            position = rstudioapi::document_position({line}L, {col}L), \
            id = {id_arg})"
     );
@@ -1875,13 +1853,13 @@ fn set_marks(
         None => "NULL".to_string(),
     };
 
-    // Delegated to the rstudiocli.mcp R package's pane_markers wrapper:
+    // Delegated to the rstudiocli R package's pane_markers wrapper:
     // see `r-package/R/pane.R`. autoSelect = "first" matches editor
     // set-marks's "jump to the first hit" semantics.
     let r_code = format!(
         r#"local({{
   markers <- jsonlite::fromJSON({hits_r}, simplifyVector = FALSE)
-  rstudiocli.mcp::pane_markers(
+  rstudiocli::pane_markers(
     name        = {name_r},
     markers     = markers,
     base_path   = {base_path_r},

@@ -131,9 +131,9 @@ pub fn list_sessions() -> Result<Option<Value>, CliError> {
 }
 
 fn info(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/session.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/session.R`.
     let r_code = r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::session_info(),
+        rstudiocli::session_info(),
         auto_unbox = TRUE, na = "null", null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r_code)?;
@@ -154,7 +154,7 @@ fn restart(
         ));
     }
     let cmd_arg = command.map(r_quote).unwrap_or_else(|| "\"\"".into());
-    let r_code = format!("rstudiocli.mcp::session_restart(command = {cmd_arg})");
+    let r_code = format!("rstudiocli::session_restart(command = {cmd_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }

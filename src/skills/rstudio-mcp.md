@@ -142,10 +142,10 @@ list(
 )
 ```
 
-The script runs with the `rstudiocli.mcp` R package on the search
+The script runs with the `rstudiocli` R package on the search
 path; its exported functions follow the MCP tool naming (`editor_*`,
 `pane_*`, …). Inspect the surface from inside the script via
-`ls("package:rstudiocli.mcp")`.
+`ls("package:rstudiocli")`.
 
 Rules:
 

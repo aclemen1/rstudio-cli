@@ -409,7 +409,7 @@ impl McpServer {
     }
 
     /// Run user-supplied R code inside the active rsession, with the
-    /// `rstudiocli.mcp` package available. The agent writes a short
+    /// `rstudiocli` package available. The agent writes a short
     /// script that orchestrates multiple actions in R, and we return
     /// only the final value — intermediate buffers (e.g. file contents)
     /// never traverse the agent's context window. This is the
@@ -439,12 +439,12 @@ impl McpServer {
         // so the first `r_eval::run` below covers our needs without a
         // separate bootstrap call here.
         // Make the package available to the user's code without forcing
-        // them to write `library(rstudiocli.mcp)` themselves. We
+        // them to write `library(rstudiocli)` themselves. We
         // attach() into search() so calls like `editor_set_contents()`
         // resolve without a `::` prefix; using `::` works too.
         let wrapped = format!(
             "local({{\n  \
-                suppressMessages(suppressWarnings(library(rstudiocli.mcp)))\n  \
+                suppressMessages(suppressWarnings(library(rstudiocli)))\n  \
                 .__rstudio_mcp_result <- {{ {code} }}\n  \
                 jsonlite::toJSON(.__rstudio_mcp_result, auto_unbox = TRUE, null = 'null', force = TRUE)\n\
              }})"
@@ -650,7 +650,7 @@ fn tools_search_input_schema() -> Value {
 
 fn r_script_description() -> String {
     "Run an R script inside the active RStudio session, with the \
-     `rstudiocli.mcp` R package on the search path. The agent supplies \
+     `rstudiocli` R package on the search path. The agent supplies \
      a short program that orchestrates multiple actions in R; the \
      server returns only the final value. Intermediate data (buffer \
      contents, lists, etc.) never traverses the agent's context window \
@@ -662,8 +662,8 @@ fn r_script_description() -> String {
        length(long)\n\n\
      Available functions (and growing): `editor_get_contents()`, \
      `editor_set_contents(text, id)`, `editor_open(path, line)`. The \
-     full surface is discoverable from R via `library(rstudiocli.mcp); \
-     ls('package:rstudiocli.mcp')`.\n\n\
+     full surface is discoverable from R via `library(rstudiocli); \
+     ls('package:rstudiocli')`.\n\n\
      The script's last expression is serialised with `jsonlite::toJSON` \
      and returned in the `result` field. Throw `stop(...)` to signal \
      a logical error.\n\n\

@@ -1,4 +1,4 @@
 library(testthat)
-library(rstudiocli.mcp)
+library(rstudiocli)
 
-test_check("rstudiocli.mcp")
+test_check("rstudiocli")

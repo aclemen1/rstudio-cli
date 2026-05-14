@@ -260,10 +260,10 @@ fn read_pref(
     // Validate that --default-json is parseable JSON (CLI-side check).
     let _: Value = serde_json::from_str(default_json)
         .map_err(|e| CliError::user(format!("invalid --default-json: {e}")))?;
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::{pkg_fn}({name_q}, default = jsonlite::fromJSON({default_q}, simplifyVector = FALSE)),
+        rstudiocli::{pkg_fn}({name_q}, default = jsonlite::fromJSON({default_q}, simplifyVector = FALSE)),
         auto_unbox = TRUE, null = "null"
     ))"#,
         pkg_fn = pkg_fn,
@@ -287,11 +287,11 @@ fn write_pref(
 ) -> Result<Option<Value>, CliError> {
     let _: Value = serde_json::from_str(value_json)
         .map_err(|e| CliError::user(format!("invalid --value-json: {e}")))?;
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"local({{
   .__v <- jsonlite::fromJSON({value_q}, simplifyVector = FALSE)
-  rstudiocli.mcp::{pkg_fn}({name_q}, value = .__v)
+  rstudiocli::{pkg_fn}({name_q}, value = .__v)
   cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
 }})"#,
         pkg_fn = pkg_fn,
@@ -308,10 +308,10 @@ fn write_pref(
 }
 
 fn get_persistent(rpc: &RpcClient<'_>, name: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::pref_get_persistent({name_q}),
+        rstudiocli::pref_get_persistent({name_q}),
         auto_unbox = TRUE, null = "null"
     ))"#,
         name_q = r_quote(name),
@@ -332,11 +332,11 @@ fn set_persistent(
 ) -> Result<Option<Value>, CliError> {
     let _: Value = serde_json::from_str(value_json)
         .map_err(|e| CliError::user(format!("invalid --value-json: {e}")))?;
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/pref.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/pref.R`.
     let r_code = format!(
         r#"local({{
   .__v <- jsonlite::fromJSON({value_q}, simplifyVector = FALSE)
-  rstudiocli.mcp::pref_set_persistent({name_q}, .__v)
+  rstudiocli::pref_set_persistent({name_q}, .__v)
   cat(jsonlite::toJSON(list(name = {name_q}, value = .__v), auto_unbox = TRUE, null = "null"))
 }})"#,
         name_q = r_quote(name),

@@ -1,4 +1,4 @@
-//! Build-time orchestration for the embedded `rstudiocli.mcp` R package.
+//! Build-time orchestration for the embedded `rstudiocli` R package.
 //!
 //! Two jobs:
 //!
@@ -47,7 +47,7 @@ fn main() {
     let build_id = compute_build_id(&r_pkg_dir);
 
     // Stage a copy of the R package with an auto-generated R/zzz.R that
-    // exposes the build-id to runtime checks via `.rstudio_mcp_build_id()`.
+    // exposes the build-id to runtime checks via `.rstudiocli_build_id()`.
     let staged = out_dir.join("r-package-with-buildid");
     let _ = fs::remove_dir_all(&staged);
     copy_dir_recursive(&r_pkg_dir, &staged).expect("stage r-package");
@@ -58,7 +58,7 @@ fn main() {
              # Build-id derived from a hash of the r-package/ source tree.\n\
              # The CLI uses this to detect mid-version changes and force a\n\
              # reinstall when the embedded package differs from the loaded one.\n\
-             .rstudio_mcp_build_id <- function() {build_id_q}\n",
+             .rstudiocli_build_id <- function() {build_id_q}\n",
             build_id_q = r_string_lit(&build_id),
         ),
     )
@@ -173,8 +173,8 @@ fn run_r_cmd_build(r_pkg_dir: &Path, out_dir: &Path, target: &Path, version: &st
     if !ok {
         return false;
     }
-    // R CMD build creates rstudiocli.mcp_<version>.tar.gz in CWD.
-    let produced = out_dir.join(format!("rstudiocli.mcp_{version}.tar.gz"));
+    // R CMD build creates rstudiocli_<version>.tar.gz in CWD.
+    let produced = out_dir.join(format!("rstudiocli_{version}.tar.gz"));
     if !produced.exists() {
         return false;
     }
@@ -184,18 +184,18 @@ fn run_r_cmd_build(r_pkg_dir: &Path, out_dir: &Path, target: &Path, version: &st
 }
 
 /// Plain-tar fallback when R isn't available on the build host. Builds
-/// `rstudiocli.mcp/...` rooted at the package name, which is what
+/// `rstudiocli/...` rooted at the package name, which is what
 /// `install.packages(..., type = "source")` expects from a tarball.
 fn fallback_tar_build(r_pkg_dir: &Path, target: &Path) {
     let parent = r_pkg_dir
         .parent()
         .expect("r-package must have a parent directory");
-    // Stage the package under its canonical name ("rstudiocli.mcp"), not
+    // Stage the package under its canonical name ("rstudiocli"), not
     // "r-package", so tar entries are prefixed correctly.
     let stage = parent.join("target").join("r-package-stage");
     let _ = fs::remove_dir_all(&stage);
     fs::create_dir_all(&stage).expect("create stage dir");
-    let staged_pkg = stage.join("rstudiocli.mcp");
+    let staged_pkg = stage.join("rstudiocli");
     copy_dir_recursive(r_pkg_dir, &staged_pkg).expect("stage r-package");
 
     let status = Command::new("tar")
@@ -203,7 +203,7 @@ fn fallback_tar_build(r_pkg_dir: &Path, target: &Path) {
         .arg(target)
         .arg("-C")
         .arg(&stage)
-        .arg("rstudiocli.mcp")
+        .arg("rstudiocli")
         .status()
         .expect("invoke tar");
     assert!(status.success(), "tar fallback failed");

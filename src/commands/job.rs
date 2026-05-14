@@ -455,9 +455,9 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
 }
 
 fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = r#"cat(jsonlite::toJSON(
-        list(jobs = rstudiocli.mcp::job_list()),
+        list(jobs = rstudiocli::job_list()),
         auto_unbox = TRUE, null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r)?;
@@ -475,10 +475,10 @@ fn add(
     auto_remove: bool,
     show: bool,
 ) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            list(id = rstudiocli.mcp::job_add(
+            list(id = rstudiocli::job_add(
                 name = {name_q},
                 status = {status_q},
                 progress_units = {progress_units}L,
@@ -501,8 +501,8 @@ fn add(
 }
 
 fn silent_id(rpc: &RpcClient<'_>, pkg_fn: &str, id: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
-    let r = format!("rstudiocli.mcp::{pkg_fn}(job = {})", r_quote(id));
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
+    let r = format!("rstudiocli::{pkg_fn}(job = {})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
@@ -513,9 +513,9 @@ fn silent_id_int(
     id: &str,
     units: u32,
 ) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudiocli.mcp::{pkg_fn}(job = {}, units = {units}L)",
+        "rstudiocli::{pkg_fn}(job = {}, units = {units}L)",
         r_quote(id)
     );
     r_eval::run_silent(rpc, &r)?;
@@ -528,9 +528,9 @@ fn set_state(rpc: &RpcClient<'_>, id: &str, state: &str) -> Result<Option<Value>
             "invalid state '{state}'. Expected: idle, running, succeeded, cancelled, failed."
         )));
     }
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudiocli.mcp::job_set_state(job = {}, state = {})",
+        "rstudiocli::job_set_state(job = {}, state = {})",
         r_quote(id),
         r_quote(state)
     );
@@ -539,9 +539,9 @@ fn set_state(rpc: &RpcClient<'_>, id: &str, state: &str) -> Result<Option<Value>
 }
 
 fn set_status(rpc: &RpcClient<'_>, id: &str, status: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudiocli.mcp::job_set_status(job = {}, status = {})",
+        "rstudiocli::job_set_status(job = {}, status = {})",
         r_quote(id),
         r_quote(status)
     );
@@ -556,9 +556,9 @@ fn add_output(
     error: bool,
 ) -> Result<Option<Value>, CliError> {
     let err_arg = if error { "TRUE" } else { "FALSE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudiocli.mcp::job_add_output(job = {}, output = {}, error = {err_arg})",
+        "rstudiocli::job_add_output(job = {}, output = {}, error = {err_arg})",
         r_quote(id),
         r_quote(output)
     );
@@ -586,10 +586,10 @@ fn run_script(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            list(id = rstudiocli.mcp::job_run_script(
+            list(id = rstudiocli::job_run_script(
                 path = {path_q},
                 name = {name_arg},
                 working_dir = {wd_arg},
@@ -610,8 +610,8 @@ fn run_script(
 }
 
 fn is_active(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/job.R`.
-    let r = "cat(jsonlite::toJSON(rstudiocli.mcp::job_is_active(), auto_unbox = TRUE))";
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
+    let r = "cat(jsonlite::toJSON(rstudiocli::job_is_active(), auto_unbox = TRUE))";
     let raw = r_eval::run(rpc, r)?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("job is-active: invalid JSON: {e}; raw: {raw}")))?;

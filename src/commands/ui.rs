@@ -451,9 +451,9 @@ fn dialog(
     message: &str,
     url: &str,
 ) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
-        "rstudiocli.mcp::ui_dialog(title = {}, message = {}, url = {})",
+        "rstudiocli::ui_dialog(title = {}, message = {}, url = {})",
         r_quote(title),
         r_quote(message),
         r_quote(url)
@@ -477,8 +477,8 @@ fn update_dialog(rpc: &RpcClient<'_>, fields_json: &str) -> Result<Option<Value>
             json = r_quote(&v_str),
         ));
     }
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
-    let r = format!("rstudiocli.mcp::ui_dialog_update({})", args.join(", "));
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
+    let r = format!("rstudiocli::ui_dialog_update({})", args.join(", "));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
@@ -493,10 +493,10 @@ fn prompt(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_prompt(title = {title_q}, message = {message_q}, default = {default_arg}),
+            rstudiocli::ui_prompt(title = {title_q}, message = {message_q}, default = {default_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         title_q = r_quote(title),
@@ -517,10 +517,10 @@ fn question(
 ) -> Result<Option<Value>, CliError> {
     let ok_arg = ok.map(r_quote).unwrap_or_else(|| "\"OK\"".into());
     let cancel_arg = cancel.map(r_quote).unwrap_or_else(|| "\"Cancel\"".into());
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_question(title = {title_q}, message = {message_q}, ok = {ok_arg}, cancel = {cancel_arg}),
+            rstudiocli::ui_question(title = {title_q}, message = {message_q}, ok = {ok_arg}, cancel = {cancel_arg}),
             auto_unbox = TRUE
         ))"#,
         title_q = r_quote(title),
@@ -545,10 +545,10 @@ fn select_file(
         None => "NULL".into(),
     };
     let existing_arg = if new_file { "FALSE" } else { "TRUE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_select_file(caption = {caption_q}, label = {label_q}, path = {path_arg}, filter = {filter_q}, existing = {existing_arg}),
+            rstudiocli::ui_select_file(caption = {caption_q}, label = {label_q}, path = {path_arg}, filter = {filter_q}, existing = {existing_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         caption_q = r_quote(caption),
@@ -572,10 +572,10 @@ fn select_dir(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_select_dir(caption = {caption_q}, label = {label_q}, path = {path_arg}),
+            rstudiocli::ui_select_dir(caption = {caption_q}, label = {label_q}, path = {path_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         caption_q = r_quote(caption),
@@ -588,10 +588,10 @@ fn select_dir(
 }
 
 fn ask_password(rpc: &RpcClient<'_>, prompt: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_ask_password(prompt = {prompt_q}),
+            rstudiocli::ui_ask_password(prompt = {prompt_q}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         prompt_q = r_quote(prompt),
@@ -617,10 +617,10 @@ fn ask_secret(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::ui_ask_secret(name = {name_q}, message = {message_arg}, title = {title_arg}),
+            rstudiocli::ui_ask_secret(name = {name_q}, message = {message_arg}, title = {title_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         name_q = r_quote(name),

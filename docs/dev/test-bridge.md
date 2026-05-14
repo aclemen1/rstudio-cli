@@ -1,186 +1,115 @@
-# Resuming the test-coverage work
+# Test bridge — Dockerised RStudio Server for live integration tests
 
-State as of 2026-05-15 (mid-session pause). 14 commits sit on local
-`main` past `main@origin` (`cb7a666`); none pushed.
-
-## What's done
-
-The 0.14.0 work splits into two sprints:
-
-**Sprint 1 — package refonte (commits `luzlrwzy` … `tytrytkn`).**
-Progressive discovery in the MCP server, `rstudiocli.mcp` R package
-embedded in the binary, programmatic tool calling via `r_script`,
-auto-install on first RPC, then a 6-lot migration of every
-runtime `format!("rstudioapi::...")` call site to
-`rstudiocli.mcp::*`. See `CHANGELOG.md` `[0.14.0]` for the
-user-facing summary.
-
-**Sprint 2 — Docker test bridge (commits `prmoxylq` … `stkovnmv`).**
-Infrastructure to drive a containerised RStudio Server from the CLI
-as if it were a local Desktop session, so live tests can run on a
-clean throwaway instance.
+The `tests/live.rs` suite exercises the CLI against a real rsession.
+Locally that can be a Desktop session you have open; on a clean machine
+or in CI, `scripts/bridge-up.sh` brings up a containerised RStudio
+Server, registers a real GWT client via headless Chrome, and runs the
+test binary **inside the container** against rsession's Unix socket.
 
 ```
-       (CLI on macOS host)
-         │
-         ▼
-  /tmp/rstudio-bridge.sock  ← socat UNIX-LISTEN
-         │
-         ▼ TCP localhost:19999
-         │
-  ┌──────┴──────────────────────┐
-  │  Docker container           │
-  │   ├─ rserver                │
-  │   ├─ rsession ← socat       │
-  │   │    UNIX-CONNECT to      │
-  │   │    /var/run/.../d       │
-  │   └─ Chrome (headless,      │
-  │       on host) opens        │
-  │       :18787 to register    │
-  │       a real GWT client     │
-  └─────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────┐
+  │  Docker container (rocker/rstudio:4.5.2)                │
+  │                                                         │
+  │   rserver  ──────────────  Chrome (headless, on host)   │
+  │     │       :18787          opens :18787, supplies the  │
+  │     ▼                       clientId + port-token       │
+  │   rsession (Unix socket: /var/run/.../rstudio-d)        │
+  │     ▲                                                   │
+  │     │  direct AF_UNIX connect — no socat, no tunnel     │
+  │     │                                                   │
+  │   cargo test --test live (binary compiled in container) │
+  └─────────────────────────────────────────────────────────┘
 ```
 
-Why all the moving parts:
-- Headless Chrome is required because rsession refuses to honour
-  `rstudioapi::documentId / getSourceEditorContext / ...` without a
-  live GWT client polling its event channel. With Chrome attached,
-  these calls work; without it they crash the HTTP response mid-stream.
-- The double-`socat` bridge avoids the macOS↔Linux Unix-socket-mount
-  limitation: rsession's socket stays inside the container, the host
-  side gets a fresh Unix socket the CLI can `connect()` to.
-- The CLI needs Chrome's actual `clientId` + `port-token` cookie to
-  authenticate as a recognised client — without them every RPC after
-  `client_init` returns `Invalid client id` or `Client unauthorized`.
+## Why in-container, not a host↔container tunnel
 
-Working: **13 / 23** existing live tests pass through the bridge on a
-fresh container.
+The previous design tunneled the CLI on the host through
+`socat UNIX-LISTEN → TCP → socat UNIX-CONNECT` into the container.
+That tripped a deterministic 1-on-1-off bug: every second `r send`
+silently dropped. Root cause: rsession's `accept()` loop on its Unix
+listening socket is serialised against its post-REPL event drain. When
+two CLI invocations cross that ~1 s window (typical for consecutive
+`r send` calls), the second `connect()` waits in the kernel backlog and
+the request times out.
 
-## How to spin up the bridge
+From inside the container the listener is reached without that hop and
+the bug disappears completely — 23/23 tests pass without any bridge-
+specific code paths in the CLI.
+
+## Usage
 
 ```sh
-# colima with virtiofs (works) — recommended (open source)
-# Colima mounts only paths you explicitly declare; /tmp is NOT mounted
-# by default. Add --mount /tmp/rstudio-bridge:w so the bridge's host-side
-# shared dir (kept under /tmp to avoid polluting $HOME) is reachable
-# from inside the VM.
-colima start --mount-type virtiofs --vm-type vz \
-             --mount /tmp/rstudio-bridge:w
-
-# or OrbStack: just start the app, no flags needed (mounts $HOME and /tmp
-# automatically).
+scripts/bridge-up.sh up        # spawn container, install toolchain + R deps,
+                               # launch headless Chrome, mint clientId/token
+scripts/bridge-up.sh test      # sync sources, build, run all live tests
+scripts/bridge-up.sh test r_send_captures_stdout   # filter to one test
+scripts/bridge-up.sh sync      # re-copy sources after a local edit
+scripts/bridge-up.sh refresh   # re-read clientId/port-token if Chrome reloaded
+scripts/bridge-up.sh down      # stop container + Chrome (cargo cache preserved)
 ```
 
-The host-side shared dir lives under `/tmp/rstudio-bridge/` (not
-`$HOME/.cache/...` — keeps the home clean). Inside the container it's
-bind-mounted to `/shared-tmp` because colima/lima reserve the guest
-`/tmp`.
+State (clientId, port-token) is written to `/tmp/rstudio-bridge-state.env`
+and consumed by `cmd_test`. Two env vars only — no `*_BRIDGE_*`,
+`*_SKIP_*`, `*_PATH_REMAP` overrides anymore:
 
-Then:
+```
+RSTUDIO_CLI_CLIENT_ID    Chrome's clientId (mandatory: rsession rejects
+                         unknown clientIds with rpc code 4)
+RSTUDIO_CLI_PORT_TOKEN   port-token cookie minted by rsession on first
+                         /client_init; without it every clientId is
+                         "unauthorized"
+```
+
+## How the pieces fit
+
+- **`docker run rocker/rstudio:4.5.2`** — Ubuntu-based image with R 4.5,
+  RStudio Server, and the rserver/rsession pair pre-configured. We mount
+  a single named volume `rstudio-bridge-cargo` at `/home/rstudio/.cargo`
+  so the Rust toolchain and the compiled `target/` survive container
+  restarts.
+- **Headless Chrome on the host** (not in the container — it would need
+  X or wayland). It hits `localhost:18787`, registers a GWT client with
+  rsession, gets a clientId and a `port-token` cookie. Without Chrome,
+  any RPC that reads from the active-client event stream
+  (`getSourceEditorContext`, `documentId`, etc.) crashes the HTTP
+  response mid-stream — rsession assumes a browser is polling and
+  panics when it isn't.
+- **`docker cp` based source sync.** `cmd_sync` pipes a tar of the
+  working tree into the container, excluding `target/`, `.git`, `.jj`,
+  `node_modules`. Runs in ~1 s for this repo. Doesn't require any
+  bind-mount support from the underlying Docker runtime, so the same
+  script works on Docker Desktop, OrbStack, colima, and any cloud
+  Docker host.
+- **Rust toolchain in the container.** Installed once on first `up`,
+  then cached in the named volume. Incremental rebuilds typically
+  finish in <10 s.
+- **Test execution.** `cargo test --test live -- --ignored` from inside
+  the container, with `USER=rstudio` and the captured clientId/token
+  exported into the environment.
+
+## Known runtime requirements
+
+- Any Docker runtime works — OrbStack, colima (any mount-type),
+  Docker Desktop. No `--mount` flag, no bind-mounts.
+- macOS host needs `bsdtar` (default), `curl`, Google Chrome.app,
+  and Python (for the websockets-based Chrome DevTools snippet).
+  `uv` auto-installs the `websockets` package on demand.
+- Container needs internet access during first `up` (rustup, apt,
+  CRAN packages). Subsequent `up`s reuse the cargo volume cache.
+
+## Cleanup
 
 ```sh
-scripts/bridge-up.sh up        # spawn container, install pkg, etc.
-source /tmp/rstudio-bridge-state.env
-cargo test --test live -- --ignored --test-threads=1
-
-scripts/bridge-up.sh refresh   # if Chrome did a Page.reload, re-sync creds
-scripts/bridge-up.sh down      # tear it all down
+scripts/bridge-up.sh down              # stop container + Chrome
+docker volume rm rstudio-bridge-cargo  # nuke the cargo cache (forces a
+                                       # full toolchain reinstall + rebuild
+                                       # next time)
 ```
 
-The script writes its state to `/tmp/rstudio-bridge-state.env`. The
-test harness in `tests/live.rs` honours these env vars without
-modification (the CLI does — see the override env vars below).
+## Adding tests
 
-### Bridge-only env vars on the CLI side
-
-Six switches let the CLI play along with the bridge. All default to
-"behave normally" so Desktop and Server-on-same-host are unaffected.
-
-| Var | Purpose |
-|---|---|
-| `RSTUDIO_CLI_CLIENT_ID` | Override the clientId the CLI reads from `session-persistent-state`. Bridge sets it to Chrome's actual clientId. |
-| `RSTUDIO_CLI_PORT_TOKEN` | Cookie value rsession requires to recognise the clientId. Captured from Chrome via CDP. |
-| `RSTUDIO_CLI_BRIDGE_TARBALL_DIR` + `_RPATH_DIR` | `r_package` install: host write path + container read path of the same bind-mount. |
-| `RSTUDIO_CLI_BRIDGE_CAPTURE_DIR` + `_RPATH_DIR` | `r send` capture: same idea, for the tempfile R writes and the CLI polls. |
-| `RSTUDIO_CLI_SKIP_ENSURE_INSTALL` | The bridge pre-installs `rstudiocli.mcp` directly in the container's R lib; skip the CLI's own (which sometimes fails through the bridged HTTP). |
-| `RSTUDIO_CLI_SKIP_PID_CHECK` | `r send` polls `kill(pid, 0)`; with the rsession PID in the container's namespace, the host check always reports "process died". |
-| `RSTUDIO_CLI_PATH_REMAP` | `host:container` prefix pair: rewrites host paths to their in-container counterpart before handing them to R. Used by `editor read` and any future file-path-bearing CLI call. Driven off the shared capture mount. |
-
-## What's left to fix
-
-Pick up in the order roughly cheap → involved:
-
-1. ~~**`editor_read_returns_content`**.~~ Done in 2026-05-15.
-   Approach: `RSTUDIO_CLI_PATH_REMAP=host:container` env var in the
-   CLI (`commands/editor.rs::to_remote_path`). Test rewritten to drop
-   its fixture under `RSTUDIO_CLI_BRIDGE_CAPTURE_DIR` so the remap
-   prefix matches on both sides of the bridge.
-
-2. **`env_list_pattern_filter`, `env_info_returns_metadata`,
-   `env_contents_returns_lines`**.
-   Cascade of point 5: setup uses `r send` to create a fixture
-   variable, the 2nd-onward `r send` in the test run silently drops.
-   Fix point 5 first; these should follow.
-
-3. ~~**`r_exec_async_and_poll`**.~~ Done in 2026-05-15.
-   `callr` added to the bridge's pre-install list in
-   `scripts/bridge-up.sh`.
-
-4. **`r_exec_timeout_surfaces_as_timeout`**.
-   Specifically wants `Sys.sleep(3)` with a 1 s timeout to come back
-   as `Timeout`. With bridge overhead this might race differently.
-   Maybe bump the test's timeout, or its assertion tolerance.
-
-5. **`r_send_*` cascade failure (every 2nd call is silently dropped)**.
-   Investigated 2026-05-15. Findings:
-   - Pattern is *strict 1-on-1-off*: call N succeeds, call N+1 timeouts
-     (R never runs the code, capture file never appears), call N+2
-     succeeds. Independent of the R code (`sqrt(144)` triggers it),
-     independent of Chrome (still happens with Chrome killed),
-     independent of `message()` (was the doc's first guess, not the
-     cause).
-   - All RPCs around the failing call return 200 OK with normal bodies
-     (`console_input` returns `{"result":null}`). rsession *accepts*
-     the call and silently drops it.
-   - Pure-time workaround: sleeping ~1000 ms between two consecutive
-     `r send` (anywhere — inside the CLI before `console_input` or
-     between CLI invocations from the shell) reliably unblocks call
-     N+1. 700 ms is not enough; 1000 ms is.
-   - Inserting an `execute_r_code` call between the two `r send` does
-     *not* help. Manually draining `/events/get_events` does *not*
-     help. So it's not Chrome's long-poll cycle and not events queue
-     pressure.
-   - Strong hypothesis: rsession's `console_input` handler ignores
-     input that arrives while it's still finishing the previous
-     console turn (writing the prompt, settling the event channel).
-     The ~1 s delay matches some internal cooldown. Needs source
-     inspection of `SessionConsoleInput.cpp` upstream.
-   - Knock-on effect: the `env_list_pattern_filter`,
-     `env_info_returns_metadata`, `env_contents_returns_lines` and
-     `r_exec_timeout_surfaces_as_timeout` failures listed elsewhere in
-     this doc are mostly *cascades* of this bug — their setup uses
-     `r send`, which times out on the 2nd-onward call. Fix this and
-     they should mostly pass too.
-
-   Not a "raise poll interval" issue — that hypothesis from the
-   original handoff note is wrong. The polling loop never gets to see
-   the result because R never writes one. Avoid that line of inquiry.
-
-6. **Auto-install of `rstudiocli.mcp` through the bridge.**
-   Currently the harness pre-installs the package and the CLI is
-   told to skip its own install via `RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1`.
-   The reason: when `r_package::install_from_embedded` runs via the
-   bridge, the resulting `execute_r_code` response is malformed (HTTP
-   missing headers terminator). Same shape as the `documentId` crash
-   we hit before Chrome was attached, but the package install isn't
-   client-dependent — so something else is going on. Investigate by
-   capturing the raw HTTP bytes coming back from the bridge during
-   the install call.
-
-## New tests to write once the above is sorted
-
-The migrated R wrappers (lots 1–6) aren't covered by any live test.
-~30 new ones to add. By category:
+The migrated R wrappers (lots 1–6 of the 0.14.0 work) aren't covered by
+any live test yet. ~30 new ones to add, by category:
 
 | Category | Suggested tests |
 |---|---|
@@ -192,38 +121,13 @@ The migrated R wrappers (lots 1–6) aren't covered by any live test.
 | term | full lifecycle: `create → send → buffer → kill`, then `term_running`, `term_busy`, `term_exit_code`, `term_visible` |
 | job | `job_add_lifecycle` (add, set_progress, set_state, remove), `job_is_active_false` |
 | ui | skip in live (modal); cover by R unit tests with `local_mocked_bindings` instead |
-| editor | once `editor_read` is fixed: `open → set_contents → read_buffer → close` cycle, plus `modify_range`, `set_cursor`, `set_marks` |
+| editor | `open → set_contents → read_buffer → close` cycle, plus `modify_range`, `set_cursor`, `set_marks` |
 | r | `r_script` programmatic-calling: simple value, `stop()` propagation, tx-guard rejection, large intermediate-data scenario |
 
 The `ui_*` family stays out of live tests on purpose (modal,
 interactive). For those, a separate R-unit-test sprint with
 `testthat::local_mocked_bindings(.package = "rstudioapi", ...)` should
-mock the underlying `rstudioapi::showDialog/showPrompt/...` and assert
-that the wrappers forward the right arguments. Sketch is in
+mock the underlying `rstudioapi::showDialog / showPrompt / ...` and
+assert that the wrappers forward the right arguments. Sketch is in
 `r-package/tests/testthat/test-editor.R` (the existing input-validation
 tests) — extend with the mocked-behaviour pattern.
-
-## Cleanup commands when you come back
-
-```sh
-# Tear down everything from a previous session
-scripts/bridge-up.sh down
-colima stop                  # if using colima
-rm -rf /tmp/rstudio-bridge   # nuke the shared volume (down already does this)
-docker context use orbstack  # or your preferred default
-```
-
-## Known-good runtime combos
-
-Tested working:
-- macOS 25 (Tahoe) + OrbStack 1.7.5 + Docker 27.3.1
-- macOS 25 + colima 0.x with `--mount-type virtiofs --vm-type vz`
-
-Tested NOT working:
-- colima with default `sshfs` mount: container writes never propagate
-  to host. Easy fix — see flags above.
-- Bind-mount of `/run/rstudio-server/rstudio-rsession` into the host
-  (any runtime): the socket file appears but kernel-level connections
-  don't pass through. That's why we use the double-`socat` bridge
-  instead of mounting the socket directly. Don't bother retrying this
-  path.

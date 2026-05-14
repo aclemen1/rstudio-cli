@@ -1,4 +1,4 @@
-Package: rstudiocli.mcp
+Package: rstudiocli
 Type: Package
 Title: R-Side Bridge for rstudio-cli
 Version: 0.14.0
@@ -21,7 +21,9 @@ BugReports: https://github.com/aclemen1/rstudio-cli/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Imports:
-    rstudioapi (>= 0.15.0)
+    rstudioapi (>= 0.15.0),
+    callr,
+    jsonlite
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

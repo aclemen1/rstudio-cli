@@ -498,9 +498,9 @@ pub fn run(cmd: &TermCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError
 }
 
 fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::term_list(),
+        rstudiocli::term_list(),
         auto_unbox = TRUE, null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r)?;
@@ -511,10 +511,10 @@ fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
 }
 
 fn context(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::term_context({id_q}),
+            rstudiocli::term_context({id_q}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         id_q = r_quote(id)
@@ -541,12 +541,12 @@ fn buffer(
         Some(n) => format!("buf <- tail(buf, {n}); "),
         None => String::new(),
     };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     // We post-process here (tail) because the CLI's --limit knob is
     // about the transport size, not the R semantics.
     let r = format!(
         r#"local({{
-  buf <- rstudiocli.mcp::term_buffer({id_q}, strip_ansi = {strip})
+  buf <- rstudiocli::term_buffer({id_q}, strip_ansi = {strip})
   {n_clause}cat(jsonlite::toJSON(buf, auto_unbox = FALSE))
 }})"#,
         id_q = r_quote(id),
@@ -567,51 +567,43 @@ fn create(
     let caption_arg = name.map(r_quote).unwrap_or_else(|| "NULL".into());
     let shell_arg = shell_type.map(r_quote).unwrap_or_else(|| "NULL".into());
     let show_r = if show { "TRUE" } else { "FALSE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = format!(
-        r#"cat(rstudiocli.mcp::term_create(caption = {caption_arg}, shell_type = {shell_arg}, show = {show_r}))"#
+        r#"cat(rstudiocli::term_create(caption = {caption_arg}, shell_type = {shell_arg}, show = {show_r}))"#
     );
     let id = r_eval::run(rpc, &r)?;
     Ok(Some(json!({ "id": id.trim() })))
 }
 
 fn send(rpc: &RpcClient<'_>, id: &str, text: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
-    let r = format!(
-        "rstudiocli.mcp::term_send({}, {})",
-        r_quote(id),
-        r_quote(text)
-    );
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
+    let r = format!("rstudiocli::term_send({}, {})", r_quote(id), r_quote(text));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
 
 fn exec(rpc: &RpcClient<'_>, id: &str, text: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     // The newline-append behaviour is in the R wrapper (`term_exec`).
-    let r = format!(
-        "rstudiocli.mcp::term_exec({}, {})",
-        r_quote(id),
-        r_quote(text)
-    );
+    let r = format!("rstudiocli::term_exec({}, {})", r_quote(id), r_quote(text));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
 
 fn kill(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
-    let r = format!("rstudiocli.mcp::term_kill({})", r_quote(id));
+    let r = format!("rstudiocli::term_kill({})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
 
 fn clear(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
-    let r = format!("rstudiocli.mcp::term_clear({})", r_quote(id));
+    let r = format!("rstudiocli::term_clear({})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
 
 fn activate(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
-    let r = format!("rstudiocli.mcp::term_activate({})", r_quote(id));
+    let r = format!("rstudiocli::term_activate({})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
@@ -622,10 +614,10 @@ fn term_bool(
     id: &str,
     field: &str,
 ) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     // The wrapper already returns `list(<field> = <bool>)`.
     let r = format!(
-        "cat(jsonlite::toJSON(rstudiocli.mcp::{pkg_fn}({id_q}), auto_unbox = TRUE))",
+        "cat(jsonlite::toJSON(rstudiocli::{pkg_fn}({id_q}), auto_unbox = TRUE))",
         id_q = r_quote(id)
     );
     let raw = r_eval::run(rpc, &r)?;
@@ -635,10 +627,10 @@ fn term_bool(
 }
 
 fn exit_code(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli.mcp::term_exit_code({id_q}),
+            rstudiocli::term_exit_code({id_q}),
             auto_unbox = TRUE, null = "null"
         ))"#,
         id_q = r_quote(id)
@@ -651,9 +643,9 @@ fn exit_code(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
 }
 
 fn visible(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::term_visible(),
+        rstudiocli::term_visible(),
         auto_unbox = TRUE, null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r)?;
@@ -688,10 +680,10 @@ fn term_run(
         format!("c({})", pieces.join(", "))
     };
     let show_arg = if show { "TRUE" } else { "FALSE" };
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/term.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/term.R`.
     let r = format!(
         r#"cat(jsonlite::toJSON(
-            list(id = rstudiocli.mcp::term_run(
+            list(id = rstudiocli::term_run(
                 command = {command_q},
                 working_dir = {wd_arg},
                 env = {env_arg},

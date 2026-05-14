@@ -115,7 +115,7 @@ impl<'a> RpcClient<'a> {
     /// browser→rsession state transition that causes transient code-6 rejections).
     /// Remove if the root cause is identified via rsession source inspection.
     pub fn rpc(&self, method: &str, params: Vec<Value>) -> Result<Value, CliError> {
-        // Ensure the `rstudiocli.mcp` companion R package is installed
+        // Ensure the `rstudiocli` companion R package is installed
         // in the active rsession before any RPC that may execute R
         // code referencing it. Memoised per-process via `OnceLock` so
         // the first call within a process pays at most one round-trip

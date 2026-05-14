@@ -151,9 +151,9 @@ fn format_as_text(v: &Value) -> String {
 
 /// Single R round-trip that collects everything we need from the rsession.
 fn collect_r_info(rpc: &RpcClient<'_>) -> Result<serde_json::Map<String, Value>, CliError> {
-    // Delegated to the rstudiocli.mcp R package: see `r-package/R/status.R`.
+    // Delegated to the rstudiocli R package: see `r-package/R/status.R`.
     let r_code = r#"cat(jsonlite::toJSON(
-        rstudiocli.mcp::status_snapshot(),
+        rstudiocli::status_snapshot(),
         auto_unbox = TRUE, null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r_code)?;
