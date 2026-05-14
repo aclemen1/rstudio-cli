@@ -156,7 +156,7 @@ cmd_up() {
 
   log "installing socat + R packages in container"
   docker exec rstudio-bridge bash -c 'apt-get update -qq && apt-get install -y -qq socat curl' >/dev/null 2>&1
-  docker exec rstudio-bridge R -e 'install.packages(c("rstudioapi","jsonlite"), repos="https://cloud.r-project.org", quiet=TRUE)' >/dev/null 2>&1
+  docker exec rstudio-bridge R -e 'install.packages(c("rstudioapi","jsonlite","callr"), repos="https://cloud.r-project.org", quiet=TRUE)' >/dev/null 2>&1
 
   log "building + installing rstudiocli.mcp"
   R CMD build r-package >/dev/null 2>&1

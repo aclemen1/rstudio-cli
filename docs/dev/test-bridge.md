@@ -118,28 +118,53 @@ Pick up in the order roughly cheap → involved:
 
 2. **`env_list_pattern_filter`, `env_info_returns_metadata`,
    `env_contents_returns_lines`**.
-   Need to inspect what these call exactly. The simple `env_list_returns_array`
-   passes, so it's probably a specific filter/projection edge case.
+   Cascade of point 5: setup uses `r send` to create a fixture
+   variable, the 2nd-onward `r send` in the test run silently drops.
+   Fix point 5 first; these should follow.
 
-3. **`r_exec_async_and_poll`**.
-   Async/poll uses `callr` which the rocker image doesn't ship by
-   default. Easy: have the bridge pre-install `callr` in the container.
+3. ~~**`r_exec_async_and_poll`**.~~ Done in 2026-05-15.
+   `callr` added to the bridge's pre-install list in
+   `scripts/bridge-up.sh`.
 
 4. **`r_exec_timeout_surfaces_as_timeout`**.
    Specifically wants `Sys.sleep(3)` with a 1 s timeout to come back
    as `Timeout`. With bridge overhead this might race differently.
    Maybe bump the test's timeout, or its assertion tolerance.
 
-5. **The remaining `r_send_*` failures**
-   (`captures_message`, `in_attached_env`, `mixed_stdout_and_message`,
-   `surfaces_r_error_as_cli_error`).
-   The "captures stdout" variant works, so the wiring is fine — these
-   four hit timeouts on patterns that should be quick. Probably the
-   bridge poll interval (50 ms) is too aggressive given the extra
-   socat hop latency, or the `current_environment_name` call
-   occasionally lags. Try raising `SEND_POLL_INTERVAL` to 200 ms in
-   bridge mode (gate via the existing skip-pid env var or add a new
-   one), or instrument the polling loop to log which branch wins.
+5. **`r_send_*` cascade failure (every 2nd call is silently dropped)**.
+   Investigated 2026-05-15. Findings:
+   - Pattern is *strict 1-on-1-off*: call N succeeds, call N+1 timeouts
+     (R never runs the code, capture file never appears), call N+2
+     succeeds. Independent of the R code (`sqrt(144)` triggers it),
+     independent of Chrome (still happens with Chrome killed),
+     independent of `message()` (was the doc's first guess, not the
+     cause).
+   - All RPCs around the failing call return 200 OK with normal bodies
+     (`console_input` returns `{"result":null}`). rsession *accepts*
+     the call and silently drops it.
+   - Pure-time workaround: sleeping ~1000 ms between two consecutive
+     `r send` (anywhere — inside the CLI before `console_input` or
+     between CLI invocations from the shell) reliably unblocks call
+     N+1. 700 ms is not enough; 1000 ms is.
+   - Inserting an `execute_r_code` call between the two `r send` does
+     *not* help. Manually draining `/events/get_events` does *not*
+     help. So it's not Chrome's long-poll cycle and not events queue
+     pressure.
+   - Strong hypothesis: rsession's `console_input` handler ignores
+     input that arrives while it's still finishing the previous
+     console turn (writing the prompt, settling the event channel).
+     The ~1 s delay matches some internal cooldown. Needs source
+     inspection of `SessionConsoleInput.cpp` upstream.
+   - Knock-on effect: the `env_list_pattern_filter`,
+     `env_info_returns_metadata`, `env_contents_returns_lines` and
+     `r_exec_timeout_surfaces_as_timeout` failures listed elsewhere in
+     this doc are mostly *cascades* of this bug — their setup uses
+     `r send`, which times out on the 2nd-onward call. Fix this and
+     they should mostly pass too.
+
+   Not a "raise poll interval" issue — that hypothesis from the
+   original handoff note is wrong. The polling loop never gets to see
+   the result because R never writes one. Avoid that line of inquiry.
 
 6. **Auto-install of `rstudiocli.mcp` through the bridge.**
    Currently the harness pre-installs the package and the CLI is
