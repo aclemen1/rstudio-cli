@@ -60,11 +60,21 @@ fresh container.
 
 ```sh
 # colima with virtiofs (works) — recommended (open source)
+# Colima mounts only paths you explicitly declare; /tmp is NOT mounted
+# by default. Add --mount /tmp/rstudio-bridge:w so the bridge's host-side
+# shared dir (kept under /tmp to avoid polluting $HOME) is reachable
+# from inside the VM.
 colima start --mount-type virtiofs --vm-type vz \
-             --mount "$HOME/.cache/rstudio-bridge:w"
+             --mount /tmp/rstudio-bridge:w
 
-# or OrbStack: just start the app, no flags needed
+# or OrbStack: just start the app, no flags needed (mounts $HOME and /tmp
+# automatically).
 ```
+
+The host-side shared dir lives under `/tmp/rstudio-bridge/` (not
+`$HOME/.cache/...` — keeps the home clean). Inside the container it's
+bind-mounted to `/shared-tmp` because colima/lima reserve the guest
+`/tmp`.
 
 Then:
 
@@ -179,7 +189,7 @@ tests) — extend with the mocked-behaviour pattern.
 # Tear down everything from a previous session
 scripts/bridge-up.sh down
 colima stop                  # if using colima
-rm -rf ~/.cache/rstudio-bridge  # nuke the shared volume
+rm -rf /tmp/rstudio-bridge   # nuke the shared volume (down already does this)
 docker context use orbstack  # or your preferred default
 ```
 

@@ -8,12 +8,15 @@
 #     macOS host. Tested working:
 #       - OrbStack: works out of the box (virtiofs by default, no setup).
 #       - colima:   start with `--mount-type virtiofs --vm-type vz` and
-#                   explicitly add a writable mount that contains the
-#                   bridge cache directory (we use `$HOME/.cache/...`
-#                   because colima refuses to mount system paths like
-#                   `/tmp`):
+#                   an explicit `--mount /tmp/rstudio-bridge:w` so the
+#                   host-side shared dir (kept under `/tmp` to avoid
+#                   polluting `$HOME`) is reachable from inside the VM:
 #                       colima start --mount-type virtiofs --vm-type vz \\
-#                                    --mount $HOME/.cache/rstudio-bridge:w
+#                                    --mount /tmp/rstudio-bridge:w
+#                   (colima only mounts the paths you ask for; `/tmp`
+#                   is *not* mounted by default. Also: colima/lima
+#                   reserve the *guest* `/tmp`, which is why the
+#                   in-container mount point is `/shared-tmp`.)
 #     Known not to work with default config:
 #       - colima with default sshfs mount (one-way only: container
 #         writes do not propagate to the host).
@@ -40,7 +43,12 @@
 set -euo pipefail
 
 ACTION="${1:-up}"
-SHARED="$HOME/.cache/rstudio-bridge/shared"
+# Host-side shared dir for the bridge. Lives under /tmp on purpose:
+# avoids polluting $HOME, and host /tmp is mounted rw by both OrbStack
+# (everything by default) and colima (with --mount-type virtiofs --vm-type vz).
+# The *container-side* mount point is /shared-tmp because colima/lima
+# reserve the guest /tmp.
+SHARED=/tmp/rstudio-bridge/shared
 BRIDGE_SOCK=/tmp/rstudio-bridge.sock
 BRIDGE_ENV=/tmp/rstudio-bridge-state.env
 CHROME_DEBUG_PORT=9222
@@ -105,7 +113,7 @@ export RSTUDIO_CLI_BRIDGE_CAPTURE_RPATH_DIR=/shared-tmp
 # (the CLI's auto-install via execute_r_code RPC misbehaves through the
 # container's HTTP proxy). Skip the runtime check.
 export RSTUDIO_CLI_SKIP_ENSURE_INSTALL=1
-# r send polls a `kill(pid, 0)` to detect rsession crashes; in the bridge
+# r send polls kill(pid, 0) to detect rsession crashes; in the bridge
 # the PID lives in the container's PID namespace, invisible from macOS,
 # which would false-positive.
 export RSTUDIO_CLI_SKIP_PID_CHECK=1
@@ -209,6 +217,9 @@ cmd_down() {
   pkill -f "$BRIDGE_SOCK" 2>/dev/null || true
   pkill -f "remote-debugging-port=$CHROME_DEBUG_PORT" 2>/dev/null || true
   rm -f "$BRIDGE_SOCK" "$BRIDGE_ENV"
+  # Wipe contents only — never the mount point itself. virtiofs in colima
+  # caches the inode of /tmp/rstudio-bridge, and rm-then-recreate makes
+  # the guest see an empty directory even when the host has populated it.
   rm -rf "$SHARED"
   log "down"
 }
