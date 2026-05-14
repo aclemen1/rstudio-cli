@@ -180,12 +180,20 @@ cmd_up() {
   sleep 2
 
   # Symlink container's session state into the host's ~/.local/share/rstudio
+  # so the CLI's state/sources lookups find the live container paths.
   local sess
   sess=$(ls "$SHARED/home/.local/share/rstudio/sessions/active/" | head -1 | sed 's/^session-//')
-  mkdir -p ~/.local/share/rstudio/sessions/active
+  mkdir -p ~/.local/share/rstudio/sessions/active ~/.local/share/rstudio/sources
   rm -rf "$HOME/.local/share/rstudio/sessions/active/session-$sess" 2>/dev/null
   ln -sfn "$SHARED/home/.local/share/rstudio/sessions/active/session-$sess" \
     "$HOME/.local/share/rstudio/sessions/active/session-$sess"
+  # `editor list` and friends scan the per-session sources dir
+  # to enumerate open documents.
+  if [ -d "$SHARED/home/.local/share/rstudio/sources/session-$sess" ]; then
+    rm -rf "$HOME/.local/share/rstudio/sources/session-$sess" 2>/dev/null
+    ln -sfn "$SHARED/home/.local/share/rstudio/sources/session-$sess" \
+      "$HOME/.local/share/rstudio/sources/session-$sess"
+  fi
 
   refresh_creds
   log "bridge up; source $BRIDGE_ENV to use it"
