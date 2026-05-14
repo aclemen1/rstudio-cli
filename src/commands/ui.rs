@@ -451,8 +451,9 @@ fn dialog(
     message: &str,
     url: &str,
 ) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        "rstudioapi::showDialog(title = {}, message = {}, url = {})",
+        "rstudiocli.mcp::ui_dialog(title = {}, message = {}, url = {})",
         r_quote(title),
         r_quote(message),
         r_quote(url)
@@ -476,7 +477,8 @@ fn update_dialog(rpc: &RpcClient<'_>, fields_json: &str) -> Result<Option<Value>
             json = r_quote(&v_str),
         ));
     }
-    let r = format!("rstudioapi::updateDialog({})", args.join(", "));
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
+    let r = format!("rstudiocli.mcp::ui_dialog_update({})", args.join(", "));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
@@ -491,12 +493,12 @@ fn prompt(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__v <- rstudioapi::showPrompt(title = {title_q}, message = {message_q}, default = {default_arg})
-  if (is.null(.__v)) cat("{{\"value\":null}}")
-  else cat(jsonlite::toJSON(list(value = .__v), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_prompt(title = {title_q}, message = {message_q}, default = {default_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         title_q = r_quote(title),
         message_q = r_quote(message),
     );
@@ -513,19 +515,14 @@ fn question(
     ok: Option<&str>,
     cancel: Option<&str>,
 ) -> Result<Option<Value>, CliError> {
-    let ok_arg = match ok {
-        Some(s) => r_quote(s),
-        None => "NULL".into(),
-    };
-    let cancel_arg = match cancel {
-        Some(s) => r_quote(s),
-        None => "NULL".into(),
-    };
+    let ok_arg = ok.map(r_quote).unwrap_or_else(|| "\"OK\"".into());
+    let cancel_arg = cancel.map(r_quote).unwrap_or_else(|| "\"Cancel\"".into());
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__a <- rstudioapi::showQuestion(title = {title_q}, message = {message_q}, ok = {ok_arg}, cancel = {cancel_arg})
-  cat(jsonlite::toJSON(list(answer = .__a), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_question(title = {title_q}, message = {message_q}, ok = {ok_arg}, cancel = {cancel_arg}),
+            auto_unbox = TRUE
+        ))"#,
         title_q = r_quote(title),
         message_q = r_quote(message),
     );
@@ -545,15 +542,15 @@ fn select_file(
 ) -> Result<Option<Value>, CliError> {
     let path_arg = match path {
         Some(s) => r_quote(s),
-        None => "rstudioapi::getActiveProject()".into(),
+        None => "NULL".into(),
     };
     let existing_arg = if new_file { "FALSE" } else { "TRUE" };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__p <- rstudioapi::selectFile(caption = {caption_q}, label = {label_q}, path = {path_arg}, filter = {filter_q}, existing = {existing_arg})
-  if (is.null(.__p)) cat("{{\"path\":null}}")
-  else cat(jsonlite::toJSON(list(path = .__p), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_select_file(caption = {caption_q}, label = {label_q}, path = {path_arg}, filter = {filter_q}, existing = {existing_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         caption_q = r_quote(caption),
         label_q = r_quote(label),
         filter_q = r_quote(filter),
@@ -573,14 +570,14 @@ fn select_dir(
 ) -> Result<Option<Value>, CliError> {
     let path_arg = match path {
         Some(s) => r_quote(s),
-        None => "rstudioapi::getActiveProject()".into(),
+        None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__p <- rstudioapi::selectDirectory(caption = {caption_q}, label = {label_q}, path = {path_arg})
-  if (is.null(.__p)) cat("{{\"path\":null}}")
-  else cat(jsonlite::toJSON(list(path = .__p), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_select_dir(caption = {caption_q}, label = {label_q}, path = {path_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         caption_q = r_quote(caption),
         label_q = r_quote(label),
     );
@@ -591,12 +588,12 @@ fn select_dir(
 }
 
 fn ask_password(rpc: &RpcClient<'_>, prompt: &str) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__v <- rstudioapi::askForPassword(prompt = {prompt_q})
-  if (is.null(.__v)) cat("{{\"value\":null}}")
-  else cat(jsonlite::toJSON(list(value = .__v), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_ask_password(prompt = {prompt_q}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         prompt_q = r_quote(prompt),
     );
     let raw = r_eval::run(rpc, &r)?;
@@ -614,18 +611,18 @@ fn ask_secret(
 ) -> Result<Option<Value>, CliError> {
     let message_arg = match message {
         Some(s) => r_quote(s),
-        None => format!("paste({}, ':', sep = '')", r_quote(name)),
+        None => "NULL".into(),
     };
     let title_arg = match title {
         Some(s) => r_quote(s),
-        None => format!("paste({}, 'Secret')", r_quote(name)),
+        None => "NULL".into(),
     };
+    // Delegated to the rstudiocli.mcp R package: see `r-package/R/ui.R`.
     let r = format!(
-        r#"local({{
-  .__v <- rstudioapi::askForSecret(name = {name_q}, message = {message_arg}, title = {title_arg})
-  if (is.null(.__v)) cat("{{\"value\":null}}")
-  else cat(jsonlite::toJSON(list(value = .__v), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli.mcp::ui_ask_secret(name = {name_q}, message = {message_arg}, title = {title_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         name_q = r_quote(name),
     );
     let raw = r_eval::run(rpc, &r)?;
