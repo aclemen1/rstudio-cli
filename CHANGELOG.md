@@ -14,26 +14,42 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the user's R library (silent, policy 1). Single source of truth for
   the R-side surface used by both the CLI and human R users:
   `library(rstudiocli.mcp); editor_set_contents(...)` works directly
-  from any R session. Initial pilot exports: `editor_get_contents()`,
-  `editor_set_contents()`, `editor_open()`. The remaining ~50
-  endpoints currently constructed inline as `rstudioapi::...` strings
-  will migrate to this namespace incrementally in 0.14.x.
+  from any R session. The package now wraps ~50 endpoints across all
+  categories (editor, term, pane, job, ui, session, pref, project,
+  console, status). Roxygen-documented, testthat-tested, R CMD check
+  clean.
 - **MCP `r_script` tool — programmatic tool calling.** Send an R
   script that orchestrates multiple actions; only the final value is
   returned to the agent. Intermediate data (buffer contents, env
   dumps) never traverses the LLM's context window. Forbidden inside
   an active `tx_begin` (would deadlock); the server rejects the
   combination with a clear message.
-- **Compile-time version sync** (`build.rs`): `Cargo.toml::version`
-  and `r-package/DESCRIPTION::Version` must match, or the build fails
-  loudly. Prevents the binary from shipping a tarball labelled with a
-  different version than the binary itself.
+- **Compile-time version sync + build-id** (`build.rs`):
+  `Cargo.toml::version` must match `r-package/DESCRIPTION::Version`
+  (mismatch fails the build). A content-hash of the package source
+  tree is baked in as a build-id and exposed via
+  `rstudiocli.mcp:::.rstudio_mcp_build_id()` — the runtime install
+  check compares this hash so any change to the R package (even
+  within the same Cargo version) triggers a reinstall. Stale
+  loaded namespaces are `unloadNamespace()`-ed after install so
+  newly-shipped exports take effect immediately.
 
 ### Internal
 
 - New `src/r_package.rs` module: tarball embed + auto-install
-  (memoised per-process via `OnceLock`).
+  (memoised per-process via `OnceLock`, recursion-safe re-entry
+  through the RPC layer).
+- `RpcClient::rpc()` now calls `r_package::ensure_installed()` once
+  per process before any RPC — guarantees that any code path that
+  reaches rsession finds the companion package available.
 - `tempfile` moved from dev-dependencies to dependencies.
+- The legacy `format!("rstudioapi::...")` call sites in
+  `src/commands/*.rs` (95+ of them) have all migrated to
+  `format!("rstudiocli.mcp::...")`, with the exception of two
+  intentionally-kept sites (`editor insert` end-of-document
+  resolution and `console context` selection projection) plus the
+  `document_position` / `document_range` constructors that aren't
+  endpoints.
 
 ## [0.13.0] — 2026-05-14
 
