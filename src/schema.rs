@@ -7,6 +7,7 @@
 //! filters / projects it at three levels (catalog, category, action).
 
 use serde::Serialize;
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,4 +182,168 @@ pub fn find(category: &str, name: &str) -> Option<&'static ActionSpec> {
     registry()
         .into_iter()
         .find(|a| a.category == category && a.name == name)
+}
+
+/// Outcome of a `browse` call. The caller knows from the args which
+/// variant to expect, but we tag explicitly so a generic JSON serialiser
+/// can include the level (useful for agent output and tests).
+#[derive(Debug)]
+pub enum BrowseResult {
+    /// Level 0 with no search: just the categories (with action counts).
+    Catalog(Value),
+    /// Level 0 with a search regex: matching actions across all categories.
+    Search(Value),
+    /// Level 1: one category's actions (summary-level).
+    Category(Value),
+    /// Level 2: full ActionSpec for one action.
+    Action(&'static ActionSpec, Value),
+}
+
+impl BrowseResult {
+    pub fn into_value(self) -> Value {
+        match self {
+            Self::Catalog(v) | Self::Search(v) | Self::Category(v) | Self::Action(_, v) => v,
+        }
+    }
+}
+
+/// Shared drill-down used by both the CLI (`rstudio schema`) and the MCP
+/// server (`tools_search`). Single source of truth for surface discovery.
+///
+/// Three levels driven by the args:
+///
+/// - `(None, None, None)` → catalog: just the categories (name, description,
+///   action_count). Lean by design — agents call into level 1 after picking
+///   a category, instead of paying ~2.5k tokens for the full action list.
+/// - `(None, None, Some(re))` → search: every action whose `category`, `name`,
+///   or `summary` matches the regex, returned as `{category, name, summary}`.
+/// - `(Some(cat), None, _)` → category drilldown: actions in `cat` with
+///   `{name, summary, param_count, examples_count}`.
+/// - `(Some(cat), Some(act), _)` → full ActionSpec for the action.
+///
+/// `matcher` is the search predicate — accepts a regex-like closure so the
+/// caller chooses its regex engine without dragging the dependency into
+/// `schema.rs`. Pass `None` for no filter.
+pub fn browse(
+    category_filter: Option<&str>,
+    action_filter: Option<&str>,
+    matcher: Option<&dyn Fn(&str) -> bool>,
+) -> Result<BrowseResult, BrowseError> {
+    match (category_filter, action_filter) {
+        (None, None) => {
+            if let Some(m) = matcher {
+                let entries: Vec<Value> = registry()
+                    .into_iter()
+                    .filter(|a| m(a.category) || m(a.name) || m(a.summary))
+                    .map(|a| {
+                        json!({
+                            "category": a.category,
+                            "name": a.name,
+                            "summary": a.summary,
+                        })
+                    })
+                    .collect();
+                Ok(BrowseResult::Search(json!({ "actions": entries })))
+            } else {
+                use std::collections::HashMap;
+                let mut counts: HashMap<&str, usize> = HashMap::new();
+                for a in registry() {
+                    *counts.entry(a.category).or_insert(0) += 1;
+                }
+                let cats: Vec<Value> = CATEGORIES
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "name": c.name,
+                            "description": c.description,
+                            "action_count": counts.get(c.name).copied().unwrap_or(0),
+                        })
+                    })
+                    .collect();
+                Ok(BrowseResult::Catalog(json!({ "categories": cats })))
+            }
+        }
+        (Some(cat), None) => {
+            let actions = actions_in(cat);
+            if actions.is_empty() && category(cat).is_none() {
+                return Err(BrowseError::UnknownCategory(cat.to_string()));
+            }
+            let summarised: Vec<Value> = actions
+                .iter()
+                .map(|a| {
+                    json!({
+                        "name": a.name,
+                        "summary": a.summary,
+                        "param_count": a.params.len(),
+                        "examples_count": a.examples.len(),
+                    })
+                })
+                .collect();
+            Ok(BrowseResult::Category(json!({
+                "category": cat,
+                "description": category(cat).map(|c| c.description),
+                "actions": summarised,
+            })))
+        }
+        (Some(cat), Some(act)) => {
+            let action = find(cat, act)
+                .ok_or_else(|| BrowseError::UnknownAction(cat.to_string(), act.to_string()))?;
+            Ok(BrowseResult::Action(action, serialize_action(action)))
+        }
+        (None, Some(_)) => Err(BrowseError::ActionWithoutCategory),
+    }
+}
+
+#[derive(Debug)]
+pub enum BrowseError {
+    UnknownCategory(String),
+    UnknownAction(String, String),
+    ActionWithoutCategory,
+}
+
+impl std::fmt::Display for BrowseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownCategory(c) => write!(
+                f,
+                "unknown category '{c}'. Run `rstudio schema` to list categories."
+            ),
+            Self::UnknownAction(c, a) => write!(
+                f,
+                "unknown action '{c} {a}'. Run `rstudio schema {c}` to list actions."
+            ),
+            Self::ActionWithoutCategory => {
+                write!(f, "action filter requires a category filter")
+            }
+        }
+    }
+}
+
+fn serialize_action(a: &ActionSpec) -> Value {
+    #[derive(Serialize)]
+    struct Out<'a> {
+        category: &'a str,
+        name: &'a str,
+        summary: &'a str,
+        description: &'a str,
+        params: &'a [ParamSpec],
+        examples: &'a [ExampleSpec],
+        returns: &'a str,
+        errors: &'a [ErrorSpec],
+        rstudioapi_fn: Option<&'a str>,
+        rpc_method: Option<&'a str>,
+    }
+    serde_json::to_value(Out {
+        category: a.category,
+        name: a.name,
+        summary: a.summary,
+        description: a.description,
+        params: a.params,
+        examples: a.examples,
+        returns: a.returns,
+        errors: a.errors,
+        rstudioapi_fn: a.rstudioapi_fn,
+        rpc_method: a.rpc_method,
+    })
+    .unwrap()
 }

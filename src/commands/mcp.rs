@@ -6,7 +6,15 @@
 //!
 //! Architecture:
 //!
-//! - `tools/list` is auto-derived from `crate::schema::registry()`.
+//! - `tools/list` returns a small **core set** only: `meta_version`,
+//!   `meta_status`, `tools_search`, and the three `tx_*` controls. The
+//!   full action registry (~90 tools) is reachable via `tools/call`
+//!   regardless of whether they appear in the list — `tools_search`
+//!   reveals additional tools (with full `inputSchema`) on demand. This
+//!   is the "progressive discovery" pattern: keep the agent's initial
+//!   context lean, let it fan out only into the surface it needs.
+//!
+//! - The full set is auto-derived from `crate::schema::registry()`.
 //!   Each `ActionSpec` becomes one MCP tool, name = `{category}_{action}`
 //!   with hyphens replaced by underscores. The MCP `inputSchema` is
 //!   built from the `ParamSpec` array.
@@ -84,7 +92,12 @@ struct McpServer {
     /// kernel close on the underlying File descriptor — no manual
     /// release path needed.
     current_tx: Option<SessionLock>,
-    tools: Vec<McpTool>,
+    /// The core set surfaced in `tools/list` — the progressive-discovery
+    /// entrypoint. Other tools are reachable via `tools/call` directly
+    /// (and discoverable through `tools_search`).
+    core_tools: Vec<McpTool>,
+    /// Lookup table for `tools/call` dispatch: maps every MCP tool name
+    /// in the registry-derived surface to its underlying ActionSpec.
     actions_by_mcp_name: HashMap<String, &'static ActionSpec>,
 }
 
@@ -96,29 +109,52 @@ struct McpTool {
 
 impl McpServer {
     fn new(overrides: SessionOverrides, lock_timeout: Duration) -> Self {
-        let actions = registry();
-        let mut tools = Vec::with_capacity(actions.len() + 3);
+        // Build the registry-derived dispatch table. These actions are NOT
+        // surfaced in tools/list — they're discovered via `tools_search`
+        // (which delegates to `schema::browse` for DRY consistency with
+        // the `rstudio schema` CLI command) and invoked directly via
+        // tools/call. The table here exists solely to map MCP tool names
+        // back to their ActionSpec when a call comes in.
         let mut actions_by_mcp_name = HashMap::new();
-
-        for action in actions {
+        for action in registry() {
             // meta_tx is documentation for the CLI's `rstudio tx --` —
             // not invokable via MCP. The MCP-native equivalent is the
             // tx_begin / tx_end / tx_run trio added below.
             if action.category == "meta" && action.name == "tx" {
                 continue;
             }
-            let name = mcp_name(action.category, action.name);
-            tools.push(McpTool {
-                name: name.clone(),
-                description: format!("{}\n\n{}", action.summary, action.description),
-                input_schema: build_input_schema(action.params),
-            });
-            actions_by_mcp_name.insert(name, action);
+            actions_by_mcp_name.insert(mcp_name(action.category, action.name), action);
         }
 
-        // Transactional control tools. Not in the schema registry —
-        // they're MCP-specific bridges to `lock.rs`.
-        tools.push(McpTool {
+        // The progressive-discovery core surfaced via tools/list. Two
+        // registry-derived bootstrap tools (meta_version, meta_status)
+        // plus the MCP-specific glue (tools_search, tx_*).
+        //
+        // Convention: meta_status and meta_version are baked into the
+        // core so an agent can confirm bridge health and version without
+        // a discovery round-trip. Everything else is "behind" tools_search.
+        let mut core_tools = Vec::new();
+
+        // meta_version + meta_status: pull their schemas from the registry
+        // so descriptions stay DRY with `rstudio schema meta <action>`.
+        for name in ["version", "status"] {
+            if let Some(action) = crate::schema::find("meta", name) {
+                let tool_name = mcp_name(action.category, action.name);
+                core_tools.push(McpTool {
+                    name: tool_name,
+                    description: format!("{}\n\n{}", action.summary, action.description),
+                    input_schema: build_input_schema(action.params),
+                });
+            }
+        }
+
+        // MCP-specific glue tools.
+        core_tools.push(McpTool {
+            name: "tools_search".into(),
+            description: tools_search_description(),
+            input_schema: tools_search_input_schema(),
+        });
+        core_tools.push(McpTool {
             name: "tx_begin".into(),
             description: "Begin a transaction: acquire the per-session writer lock so subsequent \
                  write tool-calls run atomically with respect to other agents (other MCP \
@@ -127,14 +163,14 @@ impl McpServer {
                 .into(),
             input_schema: empty_schema(),
         });
-        tools.push(McpTool {
+        core_tools.push(McpTool {
             name: "tx_end".into(),
             description: "End the current transaction: release the per-session writer lock. \
                  No-op when no tx is active."
                 .into(),
             input_schema: empty_schema(),
         });
-        tools.push(McpTool {
+        core_tools.push(McpTool {
             name: "tx_run".into(),
             description:
                 "Execute multiple tool-calls under a single transaction. Equivalent to \
@@ -142,7 +178,8 @@ impl McpServer {
                  an array of per-operation results. Use this when you can pre-compute the \
                  entire sequence (e.g. read X, set X transformed). For sequences that \
                  depend on intermediate values you've reasoned about, call `tx_begin` / \
-                 individual tools / `tx_end` directly.".into(),
+                 individual tools / `tx_end` directly."
+                    .into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -169,7 +206,7 @@ impl McpServer {
             session: None,
             lock_timeout,
             current_tx: None,
-            tools,
+            core_tools,
             actions_by_mcp_name,
         }
     }
@@ -272,17 +309,7 @@ impl McpServer {
     }
 
     fn handle_tools_list(&self) -> Value {
-        let tools: Vec<Value> = self
-            .tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "inputSchema": t.input_schema,
-                })
-            })
-            .collect();
+        let tools: Vec<Value> = self.core_tools.iter().map(tool_to_json).collect();
         json!({ "tools": tools })
     }
 
@@ -298,6 +325,7 @@ impl McpServer {
             "tx_begin" => self.tx_begin(),
             "tx_end" => self.tx_end(),
             "tx_run" => self.tx_run(arguments),
+            "tools_search" => self.tools_search(arguments),
             other => self.invoke_action(other, arguments),
         };
 
@@ -374,6 +402,74 @@ impl McpServer {
         Ok(json!({ "results": results }))
     }
 
+    /// Progressive-discovery 3-level drill-down across the full tool
+    /// catalog. Delegates to `schema::browse` so this stays DRY with
+    /// `rstudio schema` — the same logic powers the CLI subcommand and
+    /// this MCP tool.
+    ///
+    /// Arguments mirror `rstudio schema`:
+    ///
+    /// - no args                       → level 0: categories only (cheapest)
+    /// - `{search: "regex"}`           → level 0 filtered: matching actions
+    ///   across all categories
+    /// - `{category: "editor"}`        → level 1: actions in that category
+    /// - `{category, action}`          → level 2: full ActionSpec for one
+    ///   action, augmented with the MCP `inputSchema`.
+    ///
+    /// At level 2 the response also includes `mcp_tool_name` (the underscored
+    /// form the agent must use in `tools/call`) so the agent doesn't have to
+    /// translate `category` + `action` itself.
+    fn tools_search(&self, args: Value) -> Result<Value, CliError> {
+        let search = args
+            .get("search")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let category = args
+            .get("category")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let regex = match search.as_deref() {
+            Some(pat) => Some(
+                regex_lite::Regex::new(pat)
+                    .map_err(|e| CliError::user(format!("invalid 'search' regex: {e}")))?,
+            ),
+            None => None,
+        };
+        let matcher = regex.as_ref().map(|r| {
+            let r = r.clone();
+            move |s: &str| r.is_match(s)
+        });
+        let matcher_ref: Option<&dyn Fn(&str) -> bool> =
+            matcher.as_ref().map(|m| m as &dyn Fn(&str) -> bool);
+
+        let result = crate::schema::browse(category.as_deref(), action.as_deref(), matcher_ref)
+            .map_err(|e| CliError::user(e.to_string()))?;
+
+        // For level 2, augment the schema-side ActionSpec with the MCP
+        // `inputSchema` and the underscored tool name. This is the bridge
+        // between the CLI vocabulary (category/action) and the MCP one
+        // (flat `<category>_<action>` tool names).
+        let value = match result {
+            crate::schema::BrowseResult::Action(spec, mut json_value) => {
+                if let Some(obj) = json_value.as_object_mut() {
+                    obj.insert(
+                        "mcp_tool_name".into(),
+                        json!(mcp_name(spec.category, spec.name)),
+                    );
+                    obj.insert("input_schema".into(), build_input_schema(spec.params));
+                }
+                json_value
+            }
+            other => other.into_value(),
+        };
+        Ok(value)
+    }
+
     /// Spawn `rstudio <category> <action> [args]` as a subprocess and
     /// forward its JSON envelope output. The subprocess inherits
     /// `RSTUDIO_TX_HELD=1` when we're in tx — this is the same
@@ -445,6 +541,56 @@ fn mcp_name(category: &str, action: &str) -> String {
 
 fn empty_schema() -> Value {
     json!({"type": "object", "properties": {}, "additionalProperties": false})
+}
+
+fn tool_to_json(t: &McpTool) -> Value {
+    json!({
+        "name": t.name,
+        "description": t.description,
+        "inputSchema": t.input_schema,
+    })
+}
+
+fn tools_search_description() -> String {
+    "Discover the ~90 RStudio tools beyond the core `tools/list`. \
+     3-level drill-down, DRY with the `rstudio schema` CLI command:\n\n\
+     - No args → catalog: list of categories with `action_count`. Cheap \
+     overview (~450 tokens). Pick a category, then call again with \
+     `category=...`.\n\
+     - `{category: \"editor\"}` → level 1: actions in that category as \
+     `[{name, summary, param_count}]`.\n\
+     - `{category, action}` → level 2: full ActionSpec (params, examples, \
+     errors, return type) plus the MCP `input_schema` and `mcp_tool_name` \
+     ready for `tools/call`.\n\
+     - `{search: \"regex\"}` (level 0 only) → matching actions across all \
+     categories. Regex applies to category|name|summary.\n\n\
+     Categories: editor, r, console, term, env, pane, skill, project, \
+     session, pref, job, ui, observe, policy, meta.\n\n\
+     Tip: if you already know a tool's name from naming convention \
+     (`<category>_<action>`, e.g. `editor_read_buffer`), call it directly \
+     via `tools/call` — no need to search first."
+        .to_string()
+}
+
+fn tools_search_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "description": "Drill into one category (level 1). Required for level 2."
+            },
+            "action": {
+                "type": "string",
+                "description": "Drill into one action of `category` (level 2). Returns the full ActionSpec + MCP input_schema."
+            },
+            "search": {
+                "type": "string",
+                "description": "Regex applied to category|name|summary. Level 0 only — combine with `category` for that, or use level 1 directly."
+            }
+        },
+        "additionalProperties": false
+    })
 }
 
 /// Build a JSON Schema for a tool's `inputSchema` field from our
@@ -692,19 +838,154 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_includes_registry_and_tx_tools() {
+    fn tools_list_returns_only_core_set() {
         let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
         let tools = server.handle_tools_list();
         let arr = tools["tools"].as_array().unwrap();
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        // tx tools always present
-        assert!(names.contains(&"tx_begin"));
-        assert!(names.contains(&"tx_end"));
-        assert!(names.contains(&"tx_run"));
-        // a sample of registry-derived tools
-        assert!(names.iter().any(|n| n.starts_with("editor_")));
-        assert!(names.iter().any(|n| n.starts_with("r_")));
-        assert!(names.iter().any(|n| n.starts_with("observe_")));
+
+        // The progressive-discovery core: small, fixed, predictable.
+        let expected = [
+            "meta_version",
+            "meta_status",
+            "tools_search",
+            "tx_begin",
+            "tx_end",
+            "tx_run",
+        ];
+        for name in expected {
+            assert!(names.contains(&name), "core tool missing: {name}");
+        }
+        assert_eq!(names.len(), expected.len(), "tools/list grew beyond core");
+
+        // Registry-derived tools must NOT appear in tools/list anymore.
+        assert!(!names.iter().any(|n| n.starts_with("editor_")));
+        assert!(!names.iter().any(|n| n.starts_with("r_") && *n != "tx_run"));
+        assert!(!names.iter().any(|n| n.starts_with("observe_")));
+    }
+
+    #[test]
+    fn dispatch_table_covers_registry() {
+        // Every action in the registry (minus meta.tx) must be invocable
+        // via tools/call, even though most aren't surfaced in tools/list.
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        assert!(
+            server
+                .actions_by_mcp_name
+                .contains_key("editor_read_buffer")
+        );
+        assert!(server.actions_by_mcp_name.contains_key("r_exec"));
+        assert!(server.actions_by_mcp_name.contains_key("observe_events"));
+        // meta_tx is documentation-only — not a callable MCP tool.
+        assert!(!server.actions_by_mcp_name.contains_key("meta_tx"));
+    }
+
+    #[test]
+    fn tools_search_level0_returns_categories_only() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let r = server.tools_search(json!({})).unwrap();
+        let cats = r["categories"]
+            .as_array()
+            .expect("level 0 must list categories");
+        assert!(!cats.is_empty());
+        // No action-level info leaks into level 0 (that's the whole point).
+        assert!(
+            r.get("actions").is_none(),
+            "level 0 must not include actions array"
+        );
+        // Each category carries name, description, action_count.
+        let editor = cats
+            .iter()
+            .find(|c| c["name"] == "editor")
+            .expect("'editor' category missing");
+        assert!(editor["description"].is_string());
+        let count = editor["action_count"]
+            .as_u64()
+            .expect("action_count missing");
+        assert!(count > 0, "editor should have at least one action");
+    }
+
+    #[test]
+    fn tools_search_level1_lists_category_actions() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let r = server.tools_search(json!({"category": "editor"})).unwrap();
+        assert_eq!(r["category"], "editor");
+        let actions = r["actions"].as_array().expect("level 1 must list actions");
+        assert!(!actions.is_empty());
+        // Level 1 carries name + summary + counts (not the full ActionSpec).
+        let first = &actions[0];
+        assert!(first["name"].is_string());
+        assert!(first["summary"].is_string());
+        assert!(first["param_count"].is_number());
+        // No leak of level-2 detail.
+        assert!(first.get("description").is_none());
+        assert!(first.get("examples").is_none());
+    }
+
+    #[test]
+    fn tools_search_level1_unknown_category_errors() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let err = server
+            .tools_search(json!({"category": "nope-no-such"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown category"));
+    }
+
+    #[test]
+    fn tools_search_level2_returns_full_actionspec_with_mcp_schema() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let r = server
+            .tools_search(json!({"category": "editor", "action": "read-buffer"}))
+            .unwrap();
+        // ActionSpec fields are present.
+        assert_eq!(r["category"], "editor");
+        assert_eq!(r["name"], "read-buffer");
+        assert!(r["params"].is_array());
+        assert!(r["examples"].is_array());
+        assert!(r["returns"].is_string());
+        // MCP-side augmentation: the agent gets the underscored tool name
+        // and the JSON-Schema-shaped input_schema, ready for tools/call.
+        assert_eq!(r["mcp_tool_name"], "editor_read_buffer");
+        assert!(r["input_schema"].is_object());
+        assert_eq!(r["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn tools_search_search_regex_matches_across_categories() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let r = server.tools_search(json!({"search": "buffer"})).unwrap();
+        // search at level 0: returns matching actions as flat list, no categories.
+        let actions = r["actions"].as_array().expect("search must return actions");
+        assert!(
+            !actions.is_empty(),
+            "expected at least one buffer-related action"
+        );
+        // Each entry is the level-0 shape (category, name, summary).
+        let first = &actions[0];
+        assert!(first["category"].is_string());
+        assert!(first["name"].is_string());
+        assert!(first["summary"].is_string());
+    }
+
+    #[test]
+    fn tools_search_invalid_regex_returns_user_error() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let err = server
+            .tools_search(json!({"search": "[unclosed"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid 'search' regex"));
+    }
+
+    #[test]
+    fn tools_search_action_without_category_errors() {
+        let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
+        let err = server
+            .tools_search(json!({"action": "read-buffer"}))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("category"),
+            "expected error mentioning category requirement, got: {err}"
+        );
     }
 
     // Fix #3: ParamKind::Json must accept both arrays and objects in the schema.

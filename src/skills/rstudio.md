@@ -54,9 +54,14 @@ user is working in.
 
 Always start with the catalog and drill down only where you need detail:
 
-    rstudio schema                # level 0: every action with category + summary
-    rstudio schema <category>     # level 1: actions in that category
-    rstudio schema <cat> <action> # level 2: full ActionSpec (params, examples, errors, returns)
+    rstudio schema                  # level 0: the 15 categories + action_count
+    rstudio schema <category>       # level 1: actions in that category (name + summary)
+    rstudio schema <cat> <action>   # level 2: full ActionSpec (params, examples, errors, returns)
+    rstudio schema --search <regex> # search: matching actions across all categories
+
+Level 0 returns just the categories — pick one, then drill in. To get
+the full flat catalog of every action (the old level-0 output), use
+`rstudio schema --search '.*'`.
 
 Each level-2 entry tells you exactly: parameter names and types, defaults,
 allowed values for enums, runnable examples, the JSON return shape, and

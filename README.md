@@ -40,8 +40,8 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.12.4** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 17 categories and 88 actions. Multi-agent safety via per-session
+**v0.13.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 15 categories and 97 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
 with embedded MCP-flavored agent guidance via `initialize.instructions`.
@@ -221,7 +221,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.12.4
+rstudio version                 # 0.13.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

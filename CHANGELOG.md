@@ -4,6 +4,42 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-05-14
+
+### Changed (breaking)
+
+- **`rstudio schema` (level 0) now returns only the 15 categories** with
+  their description and an `action_count`, instead of the full flat list
+  of every action with category + summary. Pick a category and call
+  `rstudio schema <cat>` for the actions, or use the new shortcut
+  `rstudio schema --search '.*'` to recover the legacy flat output.
+  Levels 1 and 2 are unchanged. Motivation: align with the MCP server's
+  new progressive-discovery surface and reduce default discovery cost
+  for agents.
+
+### Added
+
+- **MCP server: progressive discovery via `tools_search`.** `tools/list`
+  now returns only a small core set (`meta_version`, `meta_status`,
+  `tools_search`, `tx_begin`, `tx_end`, `tx_run`) instead of all ~90
+  registry-derived tools. Other tools remain callable via `tools/call`
+  and discoverable through the new `tools_search` tool, which mirrors
+  the 3-level drill-down of `rstudio schema`:
+  - `tools_search({})` — list of categories with `action_count`.
+  - `tools_search({category: "editor"})` — actions in that category.
+  - `tools_search({category, action})` — full ActionSpec, augmented with
+    the MCP `input_schema` and `mcp_tool_name` ready for `tools/call`.
+  - `tools_search({search: "<regex>"})` — matching actions across all
+    categories (regex on category|name|summary).
+  Net effect: the fixed per-turn cost of `tools/list` drops from ~2 300
+  to ~1 000 tokens (-57%) for every connected agent.
+- **`schema::browse()`** shared helper used by both `rstudio schema`
+  (CLI) and `tools_search` (MCP) so the two surfaces stay in lockstep.
+- **`scripts/bench_discovery.py`** — tokenizer-based bench
+  (cl100k_base / tiktoken) that measures the cost of each drill-down
+  level vs. the pre-progressive baseline. Run with
+  `uv run --with tiktoken scripts/bench_discovery.py`.
+
 ## [0.12.4] — 2026-05-12
 
 ### Fixed
