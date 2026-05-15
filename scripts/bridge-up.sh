@@ -289,10 +289,46 @@ cmd_up() {
     fi
     sleep 1
   done
-  sleep 5  # let GWT finish init
+  # Give Chromium time to perform the initial /client_init handshake and
+  # for rsession to settle. A short fixed wait here; cmd_test_* below does
+  # a follow-up active probe (which can only run after the binary is
+  # built) for the rare case the runner is exceptionally slow.
+  sleep 5
 
   refresh_creds
   log "bridge up; run scripts/bridge-up.sh test"
+}
+
+# Active rsession warmup: pings rsession via the just-built CLI binary
+# until it answers cleanly (no asyncHandle). The first few pings after
+# `up` typically return asyncHandle because rsession is still processing
+# Chromium's /client_init handshake; once it settles, every subsequent
+# RPC succeeds.
+#
+# The probe needs the CLI binary at target/debug/rstudio. If it's not
+# there yet, we build it explicitly so the probe has something to talk
+# with (cargo test --no-run only builds test binaries, not the main bin).
+warmup_rsession() {
+  in_container "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && \
+     [ -x /home/rstudio/.cargo/target/debug/rstudio ] || cargo build 2>&1 | tail -3' \
+    >/dev/null 2>&1 || true
+
+  log "warming up rsession (active probe)"
+  local i
+  for i in $(seq 1 30); do
+    if in_container \
+         -e RSTUDIO_CLI_CLIENT_ID="$RSTUDIO_CLI_CLIENT_ID" \
+         -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
+         "$CONTAINER" bash -c \
+         'cd /home/rstudio/rstudio-cli && /home/rstudio/.cargo/target/debug/rstudio r exec "Sys.getpid()" 2>&1 | grep -q "\"ok\":true"' \
+         >/dev/null 2>&1; then
+      log "rsession warm after ${i}s"
+      return 0
+    fi
+    sleep 1
+  done
+  log "warning: rsession did not warm up in 30 s; tests may flake"
 }
 
 cmd_refresh() {
@@ -314,6 +350,10 @@ cmd_test_live() {
   in_container "$CONTAINER" bash -c \
     'cd /home/rstudio/rstudio-cli && cargo test --test live --no-run 2>&1' \
     | tail -3
+
+  # The CLI binary is also built by --no-run as a dev-dep of the live
+  # test binary, so we can use it for the active warmup probe now.
+  warmup_rsession
 
   log "running live tests${filter:+ (filter: $filter)}"
   in_container \
@@ -350,6 +390,10 @@ cmd_test_all() {
   in_container "$CONTAINER" bash -c \
     'cd /home/rstudio/rstudio-cli && cargo test --lib --tests 2>&1' \
     | grep -E "^test result:|^     Running"
+
+  # The CLI binary is now built (as a dev-dep of the test binaries),
+  # so the active probe can run.
+  warmup_rsession
 
   log "cargo test --test live -- --ignored"
   in_container \

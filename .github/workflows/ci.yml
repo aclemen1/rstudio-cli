@@ -72,13 +72,12 @@ jobs:
       - name: scripts/bridge-up.sh up
         run: scripts/bridge-up.sh up
 
-      # Full gauntlet inside the container: fmt + clippy + every test
-      # binary (unit + locking + mcp + replay + live --ignored).
-      # Redundant with the host-side `fmt` / `clippy` / `test` jobs above
-      # for the non-live bits — but cheap to keep and gives us one
-      # signal-of-truth for "everything green against the Linux target".
-      - name: scripts/bridge-up.sh test-all
-        run: scripts/bridge-up.sh test-all
+      # Live integration tests only — fmt / clippy / unit / non-live
+      # integration are covered by the host-side jobs above. Running them
+      # here too would just slow the job down without adding signal (the
+      # container ships the same Linux/glibc as the runner).
+      - name: scripts/bridge-up.sh test-live
+        run: scripts/bridge-up.sh test-live
 
       # Surface useful artefacts when the live job fails: rsession logs,
       # Chromium logs, and the per-test stdout from the failing run.
