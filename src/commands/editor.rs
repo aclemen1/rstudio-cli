@@ -1146,33 +1146,34 @@ fn read_buffer(
         }
     };
 
-    let raw = match rpc.rpc(
-        "get_source_document",
-        vec![Value::String(resolved_id.clone())],
-    ) {
-        Ok(v) => v,
-        Err(e) if rpc_error_is_unknown_doc(&e) => {
-            return Err(CliError::user(format!(
-                "no open document with id {resolved_id} \
-                 (run `editor list` to see open docs)"
-            )));
+    // Use the rstudiocli::editor_get_contents wrapper rather than the raw
+    // get_source_document RPC. The wrapper goes through
+    // rstudioapi::getSourceEditorContext, which sees the live buffer
+    // immediately after a setDocumentContents / modifyRange. The raw RPC,
+    // by contrast, can return the pre-modification state for ~1 s
+    // (observed in the Docker bridge against rocker/rstudio:4.5.2).
+    let r_code = format!(
+        "cat(jsonlite::toJSON(rstudiocli::editor_get_contents({}), auto_unbox = TRUE))",
+        r_quote(&resolved_id),
+    );
+    let raw = match r_eval::run(rpc, &r_code) {
+        Ok(s) => s,
+        Err(e) => {
+            // editor_get_contents stops with a recognisable message when
+            // the id is unknown. Surface it as a user error.
+            if e.message.contains("no open document with id") {
+                return Err(CliError::user(format!(
+                    "no open document with id {resolved_id} \
+                     (run `editor list` to see open docs)"
+                )));
+            }
+            return Err(e);
         }
-        Err(e) => return Err(e),
     };
-    let map = match raw {
-        Value::Object(m) => m,
-        _ => {
-            return Err(CliError::internal(format!(
-                "get_source_document returned unexpected shape for id {resolved_id}"
-            )));
-        }
-    };
-    Ok(Some(json!({
-        "id": resolved_id,
-        "path": map.get("path").and_then(|v| v.as_str()).unwrap_or(""),
-        "contents": map.get("contents").and_then(|v| v.as_str()).unwrap_or(""),
-        "dirty": map.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false),
-    })))
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("editor read-buffer: invalid JSON: {e}; raw: {raw}"))
+    })?;
+    Ok(Some(parsed))
 }
 
 /// Implementation of `editor context [--id] [--include-console] [--include-contents]`.

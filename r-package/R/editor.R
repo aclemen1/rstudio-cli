@@ -28,6 +28,7 @@ editor_set_contents <- function(text, id = NULL) {
     )
   }
   rstudioapi::setDocumentContents(text = text, id = resolved_id)
+  .throttle()
   list(
     id = resolved_id,
     bytes_written = nchar(text, type = "bytes")
@@ -95,6 +96,7 @@ editor_open <- function(path, line = -1L, col = -1L, move_cursor = TRUE) {
     col = as.integer(col),
     moveCursor = isTRUE(move_cursor)
   )
+  .throttle()
   list(path = abs_path, id = doc_id)
 }
 
@@ -112,6 +114,7 @@ editor_open <- function(path, line = -1L, col = -1L, move_cursor = TRUE) {
 #' @export
 editor_close <- function(id = NULL, save = "ask") {
   .rs.api.documentClose(id = id, save = save)
+  .throttle()
   invisible(NULL)
 }
 
@@ -126,6 +129,7 @@ editor_close <- function(id = NULL, save = "ask") {
 #' @export
 editor_save <- function(id = NULL) {
   .rs.api.documentSave(id = id)
+  .throttle()
   invisible(NULL)
 }
 
@@ -137,6 +141,7 @@ editor_save <- function(id = NULL) {
 #' @export
 editor_save_all <- function() {
   .rs.api.documentSaveAll()
+  .throttle()
   invisible(NULL)
 }
 
@@ -153,6 +158,7 @@ editor_save_all <- function() {
 #' @export
 editor_new <- function(text = "", type = "r", execute = FALSE) {
   id <- rstudioapi::documentNew(text = text, type = type, execute = execute)
+  .throttle()
   list(id = id, type = type)
 }
 
@@ -173,6 +179,7 @@ editor_insert <- function(text, id = NULL) {
   } else {
     rstudioapi::insertText(text = text, id = id)
   }
+  .throttle()
   invisible(NULL)
 }
 
@@ -195,6 +202,7 @@ editor_modify_range <- function(range, text, id = NULL) {
   } else {
     rstudioapi::modifyRange(location = range, text = text, id = id)
   }
+  .throttle()
   invisible(NULL)
 }
 
@@ -219,6 +227,7 @@ editor_set_cursor <- function(position, id = NULL) {
   } else {
     rstudioapi::setCursorPosition(position = position, id = id)
   }
+  .throttle()
   invisible(NULL)
 }
 
@@ -237,6 +246,7 @@ editor_select_range <- function(ranges, id = NULL) {
   } else {
     rstudioapi::setSelectionRanges(ranges = ranges, id = id)
   }
+  .throttle()
   invisible(NULL)
 }
 

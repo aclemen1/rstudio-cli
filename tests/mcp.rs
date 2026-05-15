@@ -149,16 +149,23 @@ fn tools_list_contains_tx_and_registry_actions() {
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
 
+    // The MCP server uses a "progressive discovery" surface: tools/list
+    // exposes only a minimal core (meta_*, tools_search, tx_*, r_script).
+    // Registry-derived actions (editor_*, env_*, pane_*, term_*, ...) are
+    // discovered via tools_search and invoked via tools/call but do NOT
+    // appear in tools/list to keep the prompt context small.
     // Tx control tools
     assert!(names.contains(&"tx_begin".to_string()));
     assert!(names.contains(&"tx_end".to_string()));
     assert!(names.contains(&"tx_run".to_string()));
-    // Sample of registry-derived
-    assert!(names.iter().any(|n| n.starts_with("editor_")));
-    assert!(names.iter().any(|n| n.starts_with("r_")));
-    assert!(names.iter().any(|n| n.starts_with("observe_")));
-    // meta_status mapped (meta_tx skipped)
+    // Core registry-derived
+    assert!(names.contains(&"meta_version".to_string()));
     assert!(names.contains(&"meta_status".to_string()));
+    assert!(names.contains(&"r_script".to_string()));
+    // tools_search itself
+    assert!(names.contains(&"tools_search".to_string()));
+    // meta_tx must NOT appear (it documents the CLI's `rstudio tx --`,
+    // whose MCP equivalent is the tx_begin/tx_end/tx_run trio above).
     assert!(!names.contains(&"meta_tx".to_string()));
     c.shutdown();
 }

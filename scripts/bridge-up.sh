@@ -24,12 +24,15 @@
 #   export RSTUDIO_CLI_PORT_TOKEN=<chrome's port-token cookie>
 #
 # Usage:
-#   scripts/bridge-up.sh up         # spawn container, install toolchain
-#   scripts/bridge-up.sh test       # sync sources + build + run all live tests
-#   scripts/bridge-up.sh test r_send_captures_stdout  # filter
-#   scripts/bridge-up.sh sync       # re-copy sources after local edits
-#   scripts/bridge-up.sh refresh    # re-read clientId/port-token if Chrome reloaded
-#   scripts/bridge-up.sh down       # stop container (cargo cache preserved)
+#   scripts/bridge-up.sh up                # spawn container, install toolchain
+#   scripts/bridge-up.sh test-live         # sync + build + run live tests
+#   scripts/bridge-up.sh test-live r_send  # filter to a substring
+#   scripts/bridge-up.sh test-all          # fmt + clippy + unit + non-live + live
+#   scripts/bridge-up.sh sync              # re-copy sources after local edits
+#   scripts/bridge-up.sh refresh           # re-sync clientId/port-token
+#   scripts/bridge-up.sh down              # stop container (cargo cache kept)
+#
+# `test` is kept as an alias for `test-live` for backwards compatibility.
 
 set -euo pipefail
 
@@ -233,6 +236,8 @@ cmd_up() {
   docker exec "$CONTAINER" chown -R rstudio:rstudio /home/rstudio/.cargo
 
   log "installing Rust toolchain (cached in $CARGO_CACHE_VOL volume)"
+  # Profile `default` (vs `minimal`) ships rustfmt + clippy so `test-all`
+  # can run the same gauntlet as the local CI workflow.
   docker exec \
     -u rstudio \
     -e HOME=/home/rstudio \
@@ -242,7 +247,12 @@ cmd_up() {
       set -e
       if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
         curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
-          | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path >/dev/null
+          | sh -s -- -y --default-toolchain stable --profile default --no-modify-path >/dev/null
+      else
+        # Existing install (cache hit): make sure rustfmt + clippy are
+        # present in case the volume was built with an older `minimal`
+        # profile install.
+        "$HOME/.cargo/bin/rustup" component add rustfmt clippy >/dev/null 2>&1 || true
       fi
     '
 
@@ -283,14 +293,14 @@ cmd_sync() {
   sync_sources
 }
 
-cmd_test() {
+cmd_test_live() {
   local filter="${1:-}"
   # shellcheck disable=SC1090
   source "$BRIDGE_ENV"
 
   sync_sources
 
-  log "building tests in container"
+  log "building live tests in container"
   in_container "$CONTAINER" bash -c \
     'cd /home/rstudio/rstudio-cli && cargo test --test live --no-run 2>&1' \
     | tail -3
@@ -301,6 +311,42 @@ cmd_test() {
     -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
     "$CONTAINER" bash -c \
     "cd /home/rstudio/rstudio-cli && cargo test --test live $filter -- --ignored --test-threads=1"
+}
+
+# Run the *full* test suite inside the container: cargo fmt --check,
+# cargo clippy, cargo test (unit + non-live integration), then the live
+# tests on top. Matches what the local preflight gauntlet in CLAUDE.md
+# enforces before a release tag.
+cmd_test_all() {
+  # shellcheck disable=SC1090
+  source "$BRIDGE_ENV"
+
+  sync_sources
+
+  log "cargo fmt --check"
+  in_container "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && cargo fmt --check'
+
+  log "cargo clippy --all-targets -- -D warnings"
+  in_container "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && cargo clippy --all-targets -- -D warnings 2>&1' \
+    | tail -5
+
+  log "cargo test (unit + non-live integration)"
+  # --tests runs every integration binary including `live` — but its tests
+  # are #[ignore]d by default so they don't trigger without --ignored.
+  # We filter the output to surface the per-binary summary lines, then run
+  # `live` separately below with --ignored.
+  in_container "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && cargo test --lib --tests 2>&1' \
+    | grep -E "^test result:|^     Running"
+
+  log "cargo test --test live -- --ignored"
+  in_container \
+    -e RSTUDIO_CLI_CLIENT_ID="$RSTUDIO_CLI_CLIENT_ID" \
+    -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
+    "$CONTAINER" bash -c \
+    'cd /home/rstudio/rstudio-cli && cargo test --test live -- --ignored --test-threads=1'
 }
 
 cmd_down() {
@@ -314,7 +360,11 @@ case "$ACTION" in
   up) cmd_up ;;
   refresh) cmd_refresh ;;
   sync) cmd_sync ;;
-  test) cmd_test "$@" ;;
+  test|test-live) cmd_test_live "$@" ;;
+  test-all) cmd_test_all ;;
   down) cmd_down ;;
-  *) echo "usage: $0 [up|refresh|sync|test [filter]|down]" >&2; exit 1 ;;
+  *)
+    echo "usage: $0 [up|refresh|sync|test-live [filter]|test-all|down]" >&2
+    exit 1
+    ;;
 esac

@@ -11,6 +11,7 @@ pane_viewer <- function(target) {
     stop("`target` must be a non-empty length-1 character vector", call. = FALSE)
   }
   rstudioapi::viewer(target)
+  .throttle()
   invisible(NULL)
 }
 
@@ -26,6 +27,7 @@ pane_files_navigate <- function(path) {
     stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
   }
   rstudioapi::filesPaneNavigate(path)
+  .throttle()
   invisible(NULL)
 }
 
@@ -41,6 +43,7 @@ pane_preview_rd <- function(path) {
     stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
   }
   rstudioapi::previewRd(path)
+  .throttle()
   invisible(NULL)
 }
 
@@ -59,6 +62,7 @@ pane_preview_sql <- function(conn, statement) {
     stop("`statement` must be a length-1 character vector", call. = FALSE)
   }
   rstudioapi::previewSql(conn = conn, statement = statement)
+  .throttle()
   invisible(NULL)
 }
 
@@ -82,6 +86,7 @@ pane_save_plot <- function(file, format, width, height) {
     width = as.integer(width),
     height = as.integer(height)
   )
+  .throttle()
   invisible(NULL)
 }
 
@@ -97,6 +102,7 @@ pane_save_plot <- function(file, format, width, height) {
 #' @export
 pane_highlight_ui <- function(queries) {
   rstudioapi::highlightUi(queries = queries)
+  .throttle()
   invisible(NULL)
 }
 
@@ -144,5 +150,6 @@ pane_markers <- function(name, markers, base_path = NULL, auto_select = "none") 
     basePath = base_path,
     autoSelect = auto_select
   )
+  .throttle()
   invisible(NULL)
 }

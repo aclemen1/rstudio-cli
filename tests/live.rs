@@ -1286,13 +1286,6 @@ fn editor_open_set_read_close_cycle() {
     )
     .expect("editor set-contents");
 
-    // setDocumentContents propagates asynchronously through rsession's
-    // event channel; rsession returns the pre-modification buffer in
-    // get_source_document for ~1 s after the mutation. A fixed wait is
-    // friendlier to rsession than a poll loop, which can saturate its
-    // event queue with repeated execute_r_code calls and leave it in a
-    // wedged state for subsequent tests.
-    std::thread::sleep(std::time::Duration::from_secs(2));
     let buf = editor_cmd::run(
         &EditorCmd::ReadBuffer {
             id: Some(doc_id.clone()),
@@ -1312,12 +1305,16 @@ fn editor_open_set_read_close_cycle() {
         "buffer not updated, got: {contents:?}"
     );
 
-    // Don't close the document: editor_close blocks rsession for ~30 s on
-    // this image (rocker/rstudio:4.5.2), which wedges every subsequent
-    // execute_r_code call in the test process. The fixture is under /tmp
-    // so simply unlinking the file is enough — the buffer survives in the
-    // editor but doesn't interfere with other tests.
-    let _ = doc_id;
+    editor_cmd::run(
+        &EditorCmd::Close {
+            id: Some(doc_id),
+            path: None,
+            save: "false".into(),
+        },
+        &rpc,
+        &session,
+    )
+    .expect("editor close");
     let _ = fs::remove_file(&fixture);
 }
 
@@ -1360,8 +1357,6 @@ fn editor_modify_range_replaces_substring() {
     )
     .expect("editor modify-range");
 
-    // Same async propagation caveat as in editor_open_set_read_close_cycle.
-    std::thread::sleep(std::time::Duration::from_secs(2));
     let buf = editor_cmd::run(
         &EditorCmd::ReadBuffer {
             id: Some(doc_id.clone()),
@@ -1385,9 +1380,16 @@ fn editor_modify_range_replaces_substring() {
         "old 'two' still present, got: {contents:?}"
     );
 
-    // See editor_open_set_read_close_cycle: avoid editor_close to keep
-    // rsession responsive for the rest of the suite.
-    let _ = doc_id;
+    editor_cmd::run(
+        &EditorCmd::Close {
+            id: Some(doc_id),
+            path: None,
+            save: "false".into(),
+        },
+        &rpc,
+        &session,
+    )
+    .expect("editor close");
     let _ = fs::remove_file(&fixture);
 }
 
@@ -1429,8 +1431,6 @@ fn editor_set_cursor_moves_active_position() {
     )
     .expect("editor set-cursor");
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
     // Read context: the selection should now be at L2:C2. The wrapper
     // returns `selections` keyed by index (a JSON object, not array),
     // each entry having start_row/start_col/end_row/end_col scalars.
@@ -1461,9 +1461,16 @@ fn editor_set_cursor_moves_active_position() {
         "cursor column mismatch: {first:?}"
     );
 
-    // See editor_open_set_read_close_cycle: avoid editor_close to keep
-    // rsession responsive for the rest of the suite.
-    let _ = doc_id;
+    editor_cmd::run(
+        &EditorCmd::Close {
+            id: Some(doc_id),
+            path: None,
+            save: "false".into(),
+        },
+        &rpc,
+        &session,
+    )
+    .expect("editor close");
     let _ = fs::remove_file(&fixture);
 }
 

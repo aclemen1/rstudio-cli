@@ -76,11 +76,13 @@ term_buffer <- function(id, strip_ansi = TRUE) {
 #' @return The new terminal's handle (character).
 #' @export
 term_create <- function(caption = NULL, shell_type = NULL, show = TRUE) {
-  rstudioapi::terminalCreate(
+  id <- rstudioapi::terminalCreate(
     caption = caption,
     show = show,
     shellType = shell_type
   )
+  .throttle()
+  id
 }
 
 #' Send text to a terminal
@@ -100,6 +102,7 @@ term_send <- function(id, text) {
     stop("`text` must be a length-1 character vector", call. = FALSE)
   }
   rstudioapi::terminalSend(id, text)
+  .throttle()
   invisible(NULL)
 }
 
@@ -119,6 +122,7 @@ term_exec <- function(id, text) {
   }
   if (!endsWith(text, "\n")) text <- paste0(text, "\n")
   rstudioapi::terminalSend(id, text)
+  .throttle()
   invisible(NULL)
 }
 
@@ -135,6 +139,7 @@ term_kill <- function(id) {
     stop("`id` must be a length-1 character vector", call. = FALSE)
   }
   rstudioapi::terminalKill(id)
+  .throttle()
   invisible(NULL)
 }
 
@@ -150,6 +155,7 @@ term_clear <- function(id) {
     stop("`id` must be a length-1 character vector", call. = FALSE)
   }
   rstudioapi::terminalClear(id)
+  .throttle()
   invisible(NULL)
 }
 
@@ -165,6 +171,7 @@ term_activate <- function(id) {
     stop("`id` must be a length-1 character vector", call. = FALSE)
   }
   rstudioapi::terminalActivate(id)
+  .throttle()
   invisible(NULL)
 }
 
@@ -237,10 +244,12 @@ term_run <- function(command, working_dir = NULL, env = NULL, show = TRUE) {
   if (!is.character(command) || length(command) != 1L) {
     stop("`command` must be a length-1 character vector", call. = FALSE)
   }
-  rstudioapi::terminalExecute(
+  id <- rstudioapi::terminalExecute(
     command = command,
     workingDir = working_dir,
     env = env,
     show = show
   )
+  .throttle()
+  id
 }
