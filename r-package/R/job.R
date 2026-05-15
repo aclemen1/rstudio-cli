@@ -32,7 +32,7 @@ job_list <- function() {
 job_add <- function(name, status = "", progress_units = 0L,
                     actions = NULL, running = FALSE,
                     auto_remove = TRUE, show = TRUE) {
-  rstudioapi::jobAdd(
+  id <- rstudioapi::jobAdd(
     name = name,
     status = status,
     progressUnits = as.integer(progress_units),
@@ -41,6 +41,8 @@ job_add <- function(name, status = "", progress_units = 0L,
     autoRemove = auto_remove,
     show = show
   )
+  .throttle()
+  id
 }
 
 #' Remove a job from the Jobs pane
@@ -49,6 +51,7 @@ job_add <- function(name, status = "", progress_units = 0L,
 #' @export
 job_remove <- function(job) {
   rstudioapi::jobRemove(job = job)
+  .throttle()
   invisible(NULL)
 }
 
@@ -126,7 +129,7 @@ job_add_output <- function(job, output, error = FALSE) {
 job_run_script <- function(path, name = NULL, working_dir = NULL,
                            encoding = "unknown", import_env = FALSE,
                            export_env = "") {
-  rstudioapi::jobRunScript(
+  id <- rstudioapi::jobRunScript(
     path = path,
     name = name,
     workingDir = working_dir,
@@ -134,6 +137,8 @@ job_run_script <- function(path, name = NULL, working_dir = NULL,
     importEnv = import_env,
     exportEnv = export_env
   )
+  .throttle()
+  id
 }
 
 #' Are we currently running inside a job's R process?

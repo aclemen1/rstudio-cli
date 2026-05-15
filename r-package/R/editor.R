@@ -158,8 +158,19 @@ editor_save_all <- function() {
 #'   `type` it was created as.
 #' @export
 editor_new <- function(text = "", type = "r", execute = FALSE) {
-  id <- rstudioapi::documentNew(text = text, type = type, execute = execute)
+  # Create the document empty first, wait for the GWT client to stabilise,
+  # then populate via setDocumentContents. documentNew(text = ...) internally
+  # does the same two-step (create + insert) without a pause between them,
+  # which leaves ghost lines in the editor buffer.
+  id <- rstudioapi::documentNew(text = "", type = type, execute = FALSE)
   .throttle()
+  if (nzchar(text)) {
+    rstudioapi::setDocumentContents(text = text, id = id)
+    .throttle()
+  }
+  if (isTRUE(execute)) {
+    rstudioapi::sendToConsole(text, execute = TRUE)
+  }
   list(id = id, type = type)
 }
 

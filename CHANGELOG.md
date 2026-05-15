@@ -4,6 +4,20 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] — 2026-05-15
+
+### Fixed (R side)
+
+- `editor_new()`: create the document empty first, wait one throttle
+  interval, then write the content via `setDocumentContents()`. The
+  previous single-call `documentNew(text = ...)` performed both steps
+  internally without a pause, leaving ghost lines in the editor buffer.
+- `console_activate()`, `job_add()`, `job_remove()`, `job_run_script()`:
+  added the missing `.throttle()` call after each UI-mutating
+  `rstudioapi` invocation. Discrete UI actions (opening a job, giving
+  focus to the console, …) need the same browser-refresh margin as
+  editor operations.
+
 ## [0.16.0] — 2026-05-15
 
 ### Changed (breaking, R side)

@@ -8,6 +8,7 @@
 #' @export
 console_activate <- function() {
   rstudioapi::executeCommand("activateConsole", quiet = TRUE)
+  .throttle()
   invisible(NULL)
 }
 
