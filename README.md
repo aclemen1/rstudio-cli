@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.14.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.15.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 15 categories and 97 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
@@ -221,7 +221,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.14.0
+rstudio version                 # 0.15.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -329,6 +329,25 @@ catalog (`editor_open`, `editor_read_buffer`, `r_exec`, `meta_status`,
 `initialize` response carries an embedded skill (cross-cutting agent
 guidance: defensive `tx` rule, hard constraints, R FIFO semantics)
 that clients inject into the LLM's context automatically.
+
+**MCP design choices.** The server follows the patterns David Soria
+Parra (Anthropic) summarised in
+[*The Future of MCP*](https://www.youtube.com/watch?v=v3Fr2JR47KA):
+
+- **Progressive discovery.** `tools/list` exposes only a minimal
+  bootstrap surface (`meta_status`, `meta_version`, `tx_*`, `r_script`,
+  `tools_search`). The ~90 actions in the catalog are reached via
+  `tools_search({category, action})`, which returns the full
+  `ActionSpec` + `input_schema` + the `mcp_tool_name` to plug into
+  `tools/call`. Keeps the LLM context lean: the agent loads only
+  what it actually needs.
+- **Tool composition over chatty round-trips.** `r_script` accepts an
+  R script that orchestrates several actions internally; only the
+  final value crosses back to the agent. Intermediate buffers /
+  environment dumps never enter the context window.
+- **Atomicity is a first-class tool.** `tx_begin` / `tx_end` (and the
+  shortcut `tx_run`) wrap multi-call sequences so concurrent agents
+  serialise correctly. Errors auto-release the lock.
 
 **Verify** the server runs:
 

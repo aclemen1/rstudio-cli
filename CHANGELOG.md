@@ -4,6 +4,66 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-05-15
+
+The MCP design choices the project already had since 0.13.x (progressive
+discovery via `tools_search`, tool composition via `r_script`, atomicity
+via `tx_begin` / `tx_end` / `tx_run`) line up with the patterns David
+Soria Parra (Anthropic) summarised in his [*The Future of MCP*](https://www.youtube.com/watch?v=v3Fr2JR47KA)
+talk. Worth a watch if you're wondering why the catalog isn't all flat
+in `tools/list`. The README's *MCP server* section now references the
+talk and walks through the three patterns explicitly.
+
+### Changed
+
+- **R companion package renamed: `rstudiocli.mcp` → `rstudiocli`.** The
+  package is used by every CLI command (not just MCP), so the `.mcp`
+  suffix was misleading. **Breaking** for users who had installed
+  `rstudiocli.mcp` 0.14.0 manually: uninstall it before this release
+  (`remove.packages("rstudiocli.mcp")`), then let the auto-install
+  reinstall it under the new name. The internal `.rstudio_mcp_build_id()`
+  helper is also renamed to `.rstudiocli_build_id()`.
+- **`editor read-buffer` no longer returns `dirty`.** The wrapper now
+  goes through `rstudioapi::getSourceEditorContext()` (live buffer)
+  instead of the raw `get_source_document` RPC, which was returning
+  the pre-modification buffer for ~1 s after a `set-contents` /
+  `modify-range`. `getSourceEditorContext()` doesn't expose `dirty`;
+  callers that need it can pull it from `editor list`, which still
+  surfaces `dirty` for every open document.
+
+### Added
+
+- **`callr` and `jsonlite` declared as `Imports`** of the `rstudiocli`
+  R package, so the auto-install pulls them automatically. Previously
+  required manual `install.packages()` for the `r exec --async` path.
+- **Internal `rstudiocli:::.throttle()` between UI-mutating ops.** Every
+  wrapper that touches the editor / pane / terminal state (open, close,
+  set-contents, modify-range, set-cursor, viewer, markers, term create /
+  send / kill / …) now sleeps briefly after the rstudioapi call so the
+  GWT client (Chrome / Electron) has time to acknowledge the event
+  before the next call lands. Default 500 ms, override via
+  `options(rstudiocli.throttle_ms = N)` or `RSTUDIOCLI_THROTTLE_MS=N`;
+  `0` disables it entirely. Solves a back-to-back-RPC saturation issue
+  observed against rocker/rstudio in CI.
+
+### Internal — test harness
+
+- **Self-contained Docker test harness (`scripts/bridge-up.sh`).** A
+  rewrite of the integration test scaffold: everything (rserver, rsession,
+  headless Chromium, the cargo toolchain, the compiled test binary)
+  now runs inside a single `rocker/rstudio:4.5.2` container. No host
+  Chrome, no host Python, no host socat, no bind-mounts — `docker cp`
+  pushes sources in, a named volume keeps the cargo cache warm.
+  Sidesteps a 1-on-1-off `accept()` bug observed when tunneling from
+  the host. New commands: `test-live` (live tests only) and `test-all`
+  (full local-preflight gauntlet against the Linux target).
+- **42 live integration tests** covering status, session, pref, pane,
+  job, term, editor, env, console, project, r exec, r send. Was 13.
+- **CI: new `live` job** that runs the full live test suite on every PR
+  and every push to main via the in-container harness. ~2 min on a warm
+  Docker pull. Runs after the existing `fmt` / `clippy` / `test` jobs,
+  so a plain compilation regression fails fast.
+
 ## [0.14.0] — 2026-05-14
 
 ### Added
