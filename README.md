@@ -97,6 +97,8 @@ will correct it promptly.
 | Zero runtime dependency (single static binary) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Runs from any external terminal, outside RStudio | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Homebrew or binary install, no R/Python required | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Embedded R companion package, auto-installed on first RPC | ✓ | ✗ | ✗ | ✗ | ✗ |
+| R package also usable standalone from any R prompt | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **Platform** | | | | | |
 | RStudio Server (Linux) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | RStudio Desktop (macOS) — documented & tested | ✓ | ~ | ~ | ~ | ~ |
@@ -113,7 +115,7 @@ will correct it promptly.
 | Send visible code AND capture its output | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Configurable per-call timeout | ✓ | ✗ | ✗ | ✗ | ✓ |
 | Structured error kinds (`r_error`, `timeout`, …) | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Async R subprocess (long-running workloads) | ✗ | ✓ | ✗ | ✗ | ✗ |
+| Async R subprocess (long-running, non-blocking, via callr) | ✓ | ✓ | ✗ | ✗ | ✗ |
 | **Environment inspection** | | | | | |
 | List R objects | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Object type, class, structure detail | ✓ | ✓ | ✓ | ~ | ✓ |
@@ -168,7 +170,6 @@ will correct it promptly.
 | Multi-agent collaborative protocol (LLM convention) | ✗ | ✓ | ✗ | ✗ | ✗ |
 | **Safety & output** | | | | | |
 | `client_init` blacklisted (session cannot be stolen) | ✓ | — | — | — | — |
-| Async R execution (non-blocking, via callr) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Block dangerous R calls (`system`, `unlink`, …) | ✗ | ✓ | ✗ | ✗ | ✓ |
 | Persistent CLI-level block list (category or action) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Per-agent execution audit log | ✗ | ✓ | ✗ | ✗ | ✗ |
