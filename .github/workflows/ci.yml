@@ -79,6 +79,15 @@ jobs:
       - name: scripts/bridge-up.sh test-live
         run: scripts/bridge-up.sh test-live
 
+      # Destructive tests verify the dependency pre-check end-to-end:
+      # each iteration tears the container down, brings up a fresh one
+      # with exactly one CRAN package uninstalled (via the
+      # BRIDGE_UNINSTALL_PKG hook in cmd_up), then asserts the
+      # pre-check surfaces the actionable error. Container is left
+      # down on completion, so the Tear down step below is a no-op.
+      - name: scripts/bridge-up.sh test-destructive
+        run: scripts/bridge-up.sh test-destructive
+
       # Surface useful artefacts when the live job fails: rsession logs,
       # Chromium logs, and the per-test stdout from the failing run.
       - name: Dump container logs on failure
