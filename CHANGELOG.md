@@ -4,6 +4,68 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-05-15
+
+### Changed (breaking, R side)
+
+Five `rstudiocli::*` wrappers were renamed to mirror the MCP / CLI
+naming convention (`category.action` with hyphens → underscores). This
+is a breaking change for any user code that imported the old names —
+pre-1.0 we don't ship aliases.
+
+| Before                                   | After                                |
+|------------------------------------------|--------------------------------------|
+| `rstudiocli::editor_get_contents()`      | `rstudiocli::editor_read_buffer()`   |
+| `rstudiocli::editor_document_path()`     | `rstudiocli::editor_path()`          |
+| `rstudiocli::editor_select_range()`      | `rstudiocli::editor_select()`        |
+| `rstudiocli::pane_files_navigate()`      | `rstudiocli::pane_files()`           |
+| `rstudiocli::ui_dialog_update()`         | `rstudiocli::ui_update_dialog()`     |
+
+### Added
+
+- **16 new `rstudiocli::*` exports** for `r_script` parity. Every
+  rsession-touching MCP / CLI action that has a sensible R equivalent
+  now lives in the R package, so an LLM orchestrating a multi-step
+  workflow via `r_script` can call them by name (instead of routing
+  through `tx_run` as a workaround):
+  - `editor_read`, `editor_list`, `editor_reload`, `editor_set_marks`
+  - `env_list`, `env_contents`, `env_info`
+  - `console_history`, `console_context`
+  - `pane_preview`, `pane_preview_md`, `pane_preview_rmd`, `pane_preview_qmd`
+  - `project_new`, `project_init`, `project_clone`
+  - `session_list`
+
+  `console_actions` is left in CLI-only territory (couples to RStudio's
+  private on-disk format); `meta_*`, `observe_*`, `policy_*`,
+  `schema_*`, `skill_*` are CLI infrastructure, not rsession-touching;
+  `r_exec` / `r_send` / `r_poll` would deadlock if called from inside
+  `r_script` itself.
+
+### Fixed
+
+- `r_package::install_from_embedded` no longer muffles
+  `install.packages()` warnings. Previous versions wrapped the call
+  in `withCallingHandlers(warning = invokeRestart('muffleWarning'))`
+  to keep the CLI's auto-install silent — but `install.packages()`
+  signals NAMESPACE-mismatch failures **through warnings**, and the
+  muffler dropped them on the floor. Symptom: install reported
+  success, every subsequent call returned 'there is no package called
+  rstudiocli' with no actionable diagnostic. The new code lets
+  warnings bubble up as `CliError`, plus a `requireNamespace()` check
+  confirms the install actually landed before returning.
+
+  This bug bit us during the 0.16.0 development cycle (a few hours
+  of WTF before noticing) so it earns a CHANGELOG line.
+
+### Added — R package dependencies
+
+- `utils` is now an explicit `Imports`. New wrappers use
+  `utils::savehistory` (console_history) and
+  `utils::capture.output` (env_contents).
+- `markdown`, `rmarkdown`, `quarto` added to `Suggests` (runtime
+  `requireNamespace()` gates in `pane_preview_*`). Users who never
+  preview a document pay no cost.
+
 ## [0.15.1] — 2026-05-15
 
 ### Fixed
