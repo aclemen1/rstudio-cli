@@ -48,3 +48,39 @@ session_restart <- function(command = "") {
   rstudioapi::restartSession(command = command)
   invisible(NULL)
 }
+
+#' List all active RStudio Server rsession sockets for the current user
+#'
+#' Mirrors the MCP / CLI surface `session.list`. Scans
+#' `/var/run/rstudio-server/rstudio-rsession/` (or the path in the
+#' `RS_SESSION_TMP_DIR` env var) for socket files. Useful when an
+#' agent / CLI is running outside RStudio and needs to discover which
+#' sessions it could connect to.
+#'
+#' Empty list on platforms where the directory doesn't exist (Desktop
+#' on macOS, Server with a non-standard config, etc.).
+#'
+#' @return A list with one component `sessions`, a list of records
+#'   each carrying `socket` (the absolute path to the rsession Unix
+#'   domain socket).
+#' @export
+session_list <- function() {
+  dir <- Sys.getenv("RS_SESSION_TMP_DIR",
+                    unset = "/var/run/rstudio-server/rstudio-rsession")
+  if (!dir.exists(dir)) {
+    return(list(sessions = list()))
+  }
+  entries <- list.files(dir, full.names = TRUE, no.. = TRUE)
+  socks <- character()
+  for (p in entries) {
+    # The CLI side filters by uid via stat(); R lacks a portable uid
+    # check. Use the same name-based filter (skip .pid files) and let
+    # downstream connect() report 'permission denied' if a socket
+    # belongs to someone else.
+    if (endsWith(p, ".pid")) next
+    info <- file.info(p)
+    if (isTRUE(info$isdir)) next
+    socks <- c(socks, p)
+  }
+  list(sessions = lapply(socks, function(p) list(socket = p)))
+}

@@ -154,3 +154,124 @@ pane_markers <- function(name, markers, base_path = NULL, auto_select = "none") 
   .throttle()
   invisible(NULL)
 }
+
+#' Render a Markdown / R Markdown / Quarto document and preview it
+#'
+#' Mirrors the MCP / CLI surface `pane.preview`. Auto-detects the
+#' format from the file extension (`.md` / `.Rmd` / `.qmd`) and delegates
+#' to [pane_preview_md()] / [pane_preview_rmd()] / [pane_preview_qmd()].
+#'
+#' @param path Path to the source document.
+#' @param no_view If `TRUE`, render but skip [pane_viewer()] (the html
+#'   file is still produced).
+#' @return A list with `input`, `output`, `format`, `viewer_loaded`.
+#' @export
+pane_preview <- function(path, no_view = FALSE) {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  ext <- tolower(tools::file_ext(path))
+  switch(
+    ext,
+    md = pane_preview_md(path = path, no_view = no_view),
+    rmd = pane_preview_rmd(path = path, no_view = no_view),
+    qmd = pane_preview_qmd(path = path, no_view = no_view),
+    stop(sprintf("unsupported extension '.%s' (expected .md / .Rmd / .qmd)", ext),
+         call. = FALSE)
+  )
+}
+
+#' Render a Markdown file to HTML and preview it in the Viewer pane
+#'
+#' Mirrors the MCP / CLI surface `pane.preview-md`. Uses the `markdown`
+#' package (`mark_html()` on >= 1.0, `markdownToHTML()` otherwise).
+#'
+#' @param path Path to the `.md` source.
+#' @param output_dir Optional output directory. Default: `tempdir()`.
+#' @param no_view If `TRUE`, render but skip [pane_viewer()].
+#' @return A list with `input`, `output`, `format = "html"`, `viewer_loaded`.
+#' @export
+pane_preview_md <- function(path, output_dir = NULL, no_view = FALSE) {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  abs_path <- normalizePath(path, mustWork = TRUE)
+  out_dir <- if (is.null(output_dir)) tempdir() else normalizePath(output_dir, mustWork = TRUE)
+  stem <- tools::file_path_sans_ext(basename(abs_path))
+  out_path <- file.path(out_dir, paste0(stem, ".html"))
+  if (utils::packageVersion("markdown") >= "1.0") {
+    markdown::mark_html(abs_path, output = out_path)
+  } else {
+    markdown::markdownToHTML(abs_path, output = out_path)
+  }
+  if (!isTRUE(no_view)) pane_viewer(out_path)
+  list(
+    input = abs_path,
+    output = out_path,
+    format = "html",
+    viewer_loaded = !isTRUE(no_view)
+  )
+}
+
+#' Knit an R Markdown file to HTML and preview it in the Viewer pane
+#'
+#' Mirrors the MCP / CLI surface `pane.preview-rmd`. Wraps
+#' [rmarkdown::render()] with `output_format = "html_document"`.
+#'
+#' @param path Path to the `.Rmd` source.
+#' @param output_dir Optional output directory. Default: same directory
+#'   as the source.
+#' @param no_view If `TRUE`, render but skip [pane_viewer()].
+#' @return A list with `input`, `output`, `format = "html"`, `viewer_loaded`.
+#' @export
+pane_preview_rmd <- function(path, output_dir = NULL, no_view = FALSE) {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  if (!requireNamespace("rmarkdown", quietly = TRUE)) {
+    stop("pane_preview_rmd: package 'rmarkdown' is required", call. = FALSE)
+  }
+  abs_path <- normalizePath(path, mustWork = TRUE)
+  out_dir <- if (is.null(output_dir)) dirname(abs_path) else normalizePath(output_dir, mustWork = TRUE)
+  out_path <- rmarkdown::render(
+    input = abs_path,
+    output_format = "html_document",
+    output_dir = out_dir,
+    quiet = TRUE
+  )
+  if (!isTRUE(no_view)) pane_viewer(out_path)
+  list(
+    input = abs_path,
+    output = out_path,
+    format = "html",
+    viewer_loaded = !isTRUE(no_view)
+  )
+}
+
+#' Render a Quarto file to HTML and preview it in the Viewer pane
+#'
+#' Mirrors the MCP / CLI surface `pane.preview-qmd`. Uses the `quarto`
+#' package's [quarto::quarto_render()].
+#'
+#' @param path Path to the `.qmd` source.
+#' @param no_view If `TRUE`, render but skip [pane_viewer()].
+#' @return A list with `input`, `output`, `format = "html"`, `viewer_loaded`.
+#' @export
+pane_preview_qmd <- function(path, no_view = FALSE) {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  if (!requireNamespace("quarto", quietly = TRUE)) {
+    stop("pane_preview_qmd: package 'quarto' is required", call. = FALSE)
+  }
+  abs_path <- normalizePath(path, mustWork = TRUE)
+  quarto::quarto_render(input = abs_path, quiet = TRUE)
+  out_path <- sub("\\.qmd$", ".html", abs_path, ignore.case = TRUE)
+  if (!isTRUE(no_view) && file.exists(out_path)) pane_viewer(out_path)
+  list(
+    input = abs_path,
+    output = out_path,
+    format = "html",
+    viewer_loaded = !isTRUE(no_view) && file.exists(out_path)
+  )
+}

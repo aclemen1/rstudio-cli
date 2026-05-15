@@ -309,5 +309,183 @@ editor_path <- function(id = NULL) {
   list(path = p)
 }
 
+#' Read the on-disk contents of a file
+#'
+#' Reads a file from disk (NOT the live editor buffer — use
+#' [editor_read_buffer()] for that). Mirrors the MCP / CLI surface
+#' `editor.read`.
+#'
+#' @param path File path. Tilde and relative paths are normalised.
+#' @param encoding Encoding passed to [readLines()] (default `"UTF-8"`).
+#' @return A list with components:
+#'   * `path`: the canonicalised absolute path.
+#'   * `contents`: the file's contents as a single character string
+#'     (lines joined with `\n`).
+#' @export
+editor_read <- function(path, encoding = "UTF-8") {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  abs_path <- normalizePath(path, mustWork = TRUE)
+  con <- file(abs_path, encoding = encoding)
+  on.exit(close(con), add = TRUE)
+  lines <- readLines(con, warn = FALSE)
+  list(path = abs_path, contents = paste(lines, collapse = "\n"))
+}
+
+#' List every document currently open in the Source pane
+#'
+#' RStudio doesn't expose an `rstudioapi` getter that enumerates open
+#' documents; the catalog is shipped to the GWT client through
+#' `client_init` (which we must NOT call). We scan the on-disk source
+#' database directory (filenames matching `^[0-9A-F]{8}$`) and pair each
+#' id with whatever metadata `getSourceEditorContext(id = ...)` returns.
+#' Mirrors the MCP / CLI surface `editor.list`.
+#'
+#' @return A list with a single component `documents`, a list of
+#'   per-document records. Each record carries at least `id` and `path`
+#'   (path may be the empty string for an unsaved buffer).
+#' @export
+editor_list <- function() {
+  active <- list.files(
+    path = file.path(
+      Sys.getenv("HOME", unset = "~"),
+      ".local", "share", "rstudio", "sessions", "active"
+    ),
+    full.names = FALSE,
+    no.. = TRUE
+  )
+  # Pick the lone live session. Multiple session-* entries imply other
+  # sessions; we still scan only the one rsession is in (no env var
+  # exposes its id, but there should be only one when this R code runs).
+  if (length(active) == 0L) {
+    return(list(documents = list()))
+  }
+  sources_dir <- file.path(
+    Sys.getenv("HOME", unset = "~"),
+    ".local", "share", "rstudio", "sources", active[[1L]]
+  )
+  if (!dir.exists(sources_dir)) {
+    return(list(documents = list()))
+  }
+  files <- list.files(sources_dir, full.names = FALSE, no.. = TRUE)
+  ids <- files[grepl("^[0-9A-F]{8}$", files)]
+  docs <- lapply(ids, function(id) {
+    ctx <- tryCatch(
+      rstudioapi::getSourceEditorContext(id = id),
+      error = function(e) NULL
+    )
+    if (is.null(ctx)) {
+      list(id = id, path = "")
+    } else {
+      list(id = ctx$id, path = ctx$path %||% "")
+    }
+  })
+  list(documents = docs)
+}
+
+#' Reload a document from disk, replacing the live buffer
+#'
+#' Mirrors the MCP / CLI surface `editor.reload`. Useful when an
+#' external tool (shell, git, your own write-to-disk) has updated a
+#' file that's open in RStudio — without this call the user's buffer
+#' would silently shadow the change until they manually reload.
+#'
+#' The document id stays the same so cached references remain valid;
+#' the dirty flag is cleared as a side-effect.
+#'
+#' @param id Document id (length-1 character). Required: we don't pick
+#'   the active document implicitly because reloading a doc the user
+#'   isn't expecting would be surprising.
+#' @param if_clean If `TRUE`, no-op when the buffer has unsaved
+#'   changes (instead of overwriting them). Default `FALSE`.
+#' @return `NULL` invisibly. Side-effect only.
+#' @export
+editor_reload <- function(id, if_clean = FALSE) {
+  if (!is.character(id) || length(id) != 1L || !nzchar(id)) {
+    stop("`id` must be a non-empty length-1 character vector", call. = FALSE)
+  }
+  if (isTRUE(if_clean)) {
+    ctx <- tryCatch(
+      rstudioapi::getSourceEditorContext(id = id),
+      error = function(e) NULL
+    )
+    if (!is.null(ctx) && isTRUE(ctx$dirty)) {
+      return(invisible(NULL))
+    }
+  }
+  # rstudioapi has no public `revertDocument` at the time of writing;
+  # the internal `.rs.api.documentClose(save = "asis")` + reopen would
+  # change the id, which we don't want. Use the private hook directly.
+  if (exists(".rs.api.documentRevert", mode = "function")) {
+    .rs.api.documentRevert(id = id)
+  } else {
+    # Fallback: read from disk and setDocumentContents. Loses the
+    # benefit of preserving cursor/scroll the official RPC gives us,
+    # but works on any RStudio version.
+    p <- rstudioapi::documentPath(id = id)
+    if (is.null(p) || !nzchar(p) || !file.exists(p)) {
+      stop(
+        "editor_reload: document ",
+        id,
+        " has no on-disk path to reload from",
+        call. = FALSE
+      )
+    }
+    rstudioapi::setDocumentContents(
+      text = paste(readLines(p, warn = FALSE), collapse = "\n"),
+      id = id
+    )
+  }
+  .throttle()
+  invisible(NULL)
+}
+
+#' Show grep-style markers in the Markers pane
+#'
+#' Convenience wrapper around [pane_markers()] for the common case of
+#' surfacing grep / ripgrep / ag output in the IDE. Accepts a character
+#' vector of grep-format lines (`file:line:text` or `file:line:col:text`)
+#' and turns them into the `markers` argument
+#' [rstudioapi::sourceMarkers()] expects. Lines that don't match the
+#' grep pattern are silently skipped. Mirrors the MCP / CLI surface
+#' `editor.set-marks`.
+#'
+#' @param lines Character vector of grep-format lines.
+#' @param name Marker pane title (default `"rstudio-cli"`).
+#' @param type Severity applied to every marker. One of `"info"`,
+#'   `"warning"`, `"error"`. Default `"info"`.
+#' @param base_path Optional base directory for resolving relative
+#'   `file` entries. Default `NULL` (let rstudioapi resolve).
+#' @return The list of markers passed to `sourceMarkers()` (invisibly).
+#' @export
+editor_set_marks <- function(lines,
+                             name = "rstudio-cli",
+                             type = "info",
+                             base_path = NULL) {
+  if (!is.character(lines)) {
+    stop("`lines` must be a character vector", call. = FALSE)
+  }
+  type <- match.arg(type, c("info", "warning", "error"))
+  # Match grep -n / rg --vimgrep: file:line[:col]:text
+  pat <- "^([^:]+):([0-9]+)(?::([0-9]+))?:(.*)$"
+  m <- regmatches(lines, regexec(pat, lines))
+  parsed <- Filter(function(x) length(x) == 5L, m)
+  if (length(parsed) == 0L) {
+    return(invisible(list()))
+  }
+  markers <- lapply(parsed, function(x) {
+    list(
+      type = type,
+      file = x[[2L]],
+      line = as.integer(x[[3L]]),
+      column = if (nzchar(x[[4L]])) as.integer(x[[4L]]) else 1L,
+      message = x[[5L]]
+    )
+  })
+  pane_markers(name = name, markers = markers, base_path = base_path)
+  invisible(markers)
+}
+
 # Local %||% so we don't depend on rlang.
 `%||%` <- function(x, y) if (is.null(x)) y else x
