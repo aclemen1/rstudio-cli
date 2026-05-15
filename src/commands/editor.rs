@@ -147,13 +147,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         category: "editor",
         name: "read-buffer",
         summary: "Read the live editor buffer of an open document by id (includes unsaved edits).",
-        description: "Wraps the get_source_document RPC and returns the buffer's current \
-                      contents along with id, path and the dirty flag. Unlike `editor read` \
-                      (which reads the on-disk file) and `editor context --include-contents` \
-                      (which works only on the active document), this lets you read any open \
-                      doc's buffer, active or not. Note: the dirty flag is read from the \
-                      source_database snapshot which can lag the frontend by a fraction of a \
-                      second after rapid edits.",
+        description: "Wraps rstudioapi::getSourceEditorContext() and returns the buffer's \
+                      current contents along with id and path. Unlike `editor read` (which \
+                      reads the on-disk file) and `editor context --include-contents` (which \
+                      works only on the active document), this lets you read any open doc's \
+                      buffer, active or not. \
+                      \
+                      The dirty flag (whether the buffer differs from the on-disk file) is NOT \
+                      returned here — getSourceEditorContext() doesn't expose it. Use \
+                      `editor list` to obtain the dirty flag for every open document.",
         params: &[
             ParamSpec {
                 name: "id",
@@ -176,7 +178,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor read-buffer D4F4972F",
-                explanation: "Returns {id, path, contents, dirty} for that open document.",
+                explanation: "Returns {id, path, contents} for that open document.",
             },
             ExampleSpec {
                 cmd: "rstudio editor read-buffer --path /tmp/foo.R",
@@ -186,15 +188,19 @@ pub const ACTIONS: &[ActionSpec] = &[
                 cmd: "rstudio --format text editor read-buffer D4F4972F",
                 explanation: "Pretty-prints the JSON; pipe through `jq -r .contents` for raw text.",
             },
+            ExampleSpec {
+                cmd: "rstudio editor list | jq '.documents[] | select(.id == \"D4F4972F\") | .dirty'",
+                explanation: "Need the dirty flag? Pull it from `editor list` instead.",
+            },
         ],
-        returns: "{id: string, path: string, contents: string, dirty: bool}",
+        returns: "{id: string, path: string, contents: string}",
         errors: &[ErrorSpec {
             kind: "user_error",
             when: "Neither <id> nor --path was given, or --path doesn't match any open doc, \
                        or --path matches multiple open docs (ambiguous).",
         }],
-        rstudioapi_fn: None,
-        rpc_method: Some("get_source_document"),
+        rstudioapi_fn: Some("getSourceEditorContext"),
+        rpc_method: None,
     },
     ActionSpec {
         category: "editor",
