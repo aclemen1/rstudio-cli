@@ -24,13 +24,15 @@
 #   export RSTUDIO_CLI_PORT_TOKEN=<chrome's port-token cookie>
 #
 # Usage:
-#   scripts/bridge-up.sh up                # spawn container, install toolchain
-#   scripts/bridge-up.sh test-live         # sync + build + run live tests
-#   scripts/bridge-up.sh test-live r_send  # filter to a substring
-#   scripts/bridge-up.sh test-all          # fmt + clippy + unit + non-live + live
-#   scripts/bridge-up.sh sync              # re-copy sources after local edits
-#   scripts/bridge-up.sh refresh           # re-sync clientId/port-token
-#   scripts/bridge-up.sh down              # stop container (cargo cache kept)
+#   scripts/bridge-up.sh up                       # spawn container, install toolchain
+#   scripts/bridge-up.sh test-live                # sync + build + run live tests
+#   scripts/bridge-up.sh test-live r_send         # filter to a substring
+#   scripts/bridge-up.sh test-destructive         # down/up between each (slow but reliable)
+#   scripts/bridge-up.sh test-destructive jsonlite # only the jsonlite scenario
+#   scripts/bridge-up.sh test-all                 # fmt + clippy + unit + non-live + live + destructive
+#   scripts/bridge-up.sh sync                     # re-copy sources after local edits
+#   scripts/bridge-up.sh refresh                  # re-sync clientId/port-token
+#   scripts/bridge-up.sh down                     # stop container (cargo cache kept)
 #
 # `test` is kept as an alias for `test-live` for backwards compatibility.
 
@@ -241,6 +243,18 @@ cmd_up() {
   docker exec "$CONTAINER" R -e \
     'install.packages(c("rstudioapi","jsonlite","callr"), repos="https://cloud.r-project.org", quiet=TRUE)' \
     >/dev/null 2>&1
+
+  # Destructive-test hook: if $BRIDGE_UNINSTALL_PKG is set, remove that
+  # package now — BEFORE Chromium starts and triggers rsession spawn.
+  # This is what gives the pre-check probe a real missing-dep to see;
+  # uninstalling after rsession is running has no effect because rsession
+  # keeps namespaces loaded in memory regardless of disk state.
+  if [[ -n "${BRIDGE_UNINSTALL_PKG:-}" ]]; then
+    log "uninstalling '${BRIDGE_UNINSTALL_PKG}' (destructive-test hook)"
+    docker exec "$CONTAINER" R --vanilla --quiet -e \
+      "remove.packages('${BRIDGE_UNINSTALL_PKG}')" \
+      >/dev/null 2>&1
+  fi
   # Make the cache volume writable by the rstudio user (named volumes are
   # owned by root by default).
   docker exec "$CONTAINER" chown -R rstudio:rstudio /home/rstudio/.cargo
@@ -363,6 +377,68 @@ cmd_test_live() {
     "cd /home/rstudio/rstudio-cli && cargo test --test live $filter -- --ignored --test-threads=1"
 }
 
+# Run the destructive test binary. Each test needs a freshly-spawned
+# container with exactly one CRAN package uninstalled before the test
+# starts. Respawning rsession from inside the test process is brittle
+# (races against rserver's client_init handshake), so we use the
+# crowbar approach: down + up between tests. Slower (~30 s / test) but
+# rock-solid.
+#
+# Usage:
+#   scripts/bridge-up.sh test-destructive          # both tests
+#   scripts/bridge-up.sh test-destructive jsonlite # only jsonlite
+cmd_test_destructive() {
+  local filter="${1:-}"
+  local packages=("jsonlite" "rstudioapi")
+  if [[ -n "$filter" ]]; then
+    packages=("$filter")
+  fi
+
+  for pkg in "${packages[@]}"; do
+    log "=== destructive test: '${pkg}' missing ==="
+
+    # Fresh container so no state leaks between iterations. We pass
+    # BRIDGE_UNINSTALL_PKG to `cmd_up`, which removes the package
+    # before Chromium starts — otherwise rsession would load the
+    # namespace in memory before the test could observe its absence.
+    cmd_down >/dev/null 2>&1 || true
+    BRIDGE_UNINSTALL_PKG="$pkg" cmd_up
+
+    # shellcheck disable=SC1090
+    source "$BRIDGE_ENV"
+
+    sync_sources
+
+    log "building destructive test binary in container"
+    in_container "$CONTAINER" bash -c \
+      'cd /home/rstudio/rstudio-cli && cargo test --test destructive --no-run 2>&1' \
+      | tail -3
+
+    # We deliberately skip warmup_rsession here: it probes via the CLI,
+    # which would itself trip the pre-check (the whole point of the
+    # test) and report failure. The test uses RpcClient directly,
+    # bypassing ensure_installed, so a not-yet-warm rsession is fine —
+    # check_dependencies retries internally if the first call gets an
+    # async handle.
+
+    log "running destructive test for '${pkg}'"
+    local test_name="destructive_precheck_reports_missing_${pkg}"
+    in_container \
+      -e RSTUDIO_CLI_CLIENT_ID="$RSTUDIO_CLI_CLIENT_ID" \
+      -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
+      -e RSTUDIO_CLI_DESTRUCTIVE_TESTS=1 \
+      "$CONTAINER" bash -c \
+      "cd /home/rstudio/rstudio-cli && cargo test --test destructive ${test_name} -- --ignored --exact --test-threads=1"
+  done
+
+  # Leave the container in a clean (i.e. down) state — the last
+  # iteration's container has at least one CRAN package missing, which
+  # would break a subsequent test-live invocation. The user can `up`
+  # again explicitly if they want to keep working.
+  log "=== destructive suite complete (tearing down) ==="
+  cmd_down >/dev/null 2>&1 || true
+}
+
 # Run the *full* test suite inside the container: cargo fmt --check,
 # cargo clippy, cargo test (unit + non-live integration), then the live
 # tests on top. Matches what the local preflight gauntlet in CLAUDE.md
@@ -401,6 +477,10 @@ cmd_test_all() {
     -e RSTUDIO_CLI_PORT_TOKEN="$RSTUDIO_CLI_PORT_TOKEN" \
     "$CONTAINER" bash -c \
     'cd /home/rstudio/rstudio-cli && cargo test --test live -- --ignored --test-threads=1'
+
+  # Destructive tests rebuild the container between iterations, so
+  # they run last and re-orchestrate everything themselves.
+  cmd_test_destructive
 }
 
 cmd_down() {
@@ -415,10 +495,11 @@ case "$ACTION" in
   refresh) cmd_refresh ;;
   sync) cmd_sync ;;
   test|test-live) cmd_test_live "$@" ;;
+  test-destructive) cmd_test_destructive "$@" ;;
   test-all) cmd_test_all ;;
   down) cmd_down ;;
   *)
-    echo "usage: $0 [up|refresh|sync|test-live [filter]|test-all|down]" >&2
+    echo "usage: $0 [up|refresh|sync|test-live [filter]|test-destructive [pkg]|test-all|down]" >&2
     exit 1
     ;;
 esac

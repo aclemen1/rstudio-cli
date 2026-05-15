@@ -1492,3 +1492,29 @@ fn schema_registry_is_populated() {
         assert!(categories.contains(required), "missing category {required}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// r_package dependency pre-check
+// ---------------------------------------------------------------------------
+
+/// Healthy-session baseline: a session reachable by `live_session()` must
+/// have all hard CRAN deps loadable (otherwise no other live test could
+/// pass). The probe must agree — false positives here would break every
+/// CLI/MCP call.
+///
+/// The error path (probe reports a real missing dep) is covered by the
+/// `destructive` test binary, which actually uninstalls a package and
+/// kills rsession to force a respawn under the missing-dep condition.
+/// That requires container-only fixtures gated by
+/// `RSTUDIO_CLI_DESTRUCTIVE_TESTS=1`; see `tests/destructive.rs`.
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn dep_precheck_reports_no_missing_on_healthy_session() {
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+    let missing = rstudio_cli::r_package::check_dependencies(&rpc).expect("probe runs");
+    assert!(
+        missing.is_empty(),
+        "healthy session should have no missing deps, got: {missing:?}"
+    );
+}

@@ -42,6 +42,19 @@ const R_PACKAGE_BUILD_ID: &str = include_str!(concat!(env!("OUT_DIR"), "/r-packa
 
 const R_PACKAGE_NAME: &str = "rstudiocli";
 
+/// Hard runtime dependencies of the embedded `rstudiocli` R package.
+/// Listed in DESCRIPTION's `Imports:`; without them the tarball install
+/// fails opaquely (R prints `ERROR: dependencies ... are not available`
+/// on stderr, then `install.packages()` returns NULL with a generic
+/// warning). We probe for them first so we can surface a clear,
+/// actionable message instead.
+///
+/// `callr` is intentionally NOT in this list: it's only needed by
+/// `rstudio r --async`, and the call site in `commands/r.rs` already
+/// guards itself with `requireNamespace("callr", ...)`. Treating it as
+/// hard here would force every CLI/MCP user to install it.
+const R_HARD_DEPS: &[&str] = &["rstudioapi", "jsonlite"];
+
 /// Memoise "we already ensured installation in this process" so that
 /// chains of CLI invocations or MCP tool calls don't repeat the
 /// version-check round-trip.
@@ -68,9 +81,19 @@ pub fn ensure_installed(rpc: &RpcClient<'_>) -> Result<(), CliError> {
         return Ok(());
     }
     // Set the marker FIRST so the nested `execute_r_code` inside
-    // check_installed / install_from_embedded short-circuits when they
-    // re-enter the RPC layer (which now also calls ensure_installed).
+    // check_dependencies / check_installed / install_from_embedded
+    // short-circuits when they re-enter the RPC layer (which now also
+    // calls ensure_installed).
     let _ = ENSURED.set(());
+
+    // Probe for hard CRAN dependencies before attempting the tarball
+    // install. Without this, `install.packages()` fails with a generic
+    // "non-zero exit status" warning and the agent has no idea the
+    // root cause is missing rstudioapi/jsonlite on the user's system.
+    let missing = check_dependencies(rpc)?;
+    if !missing.is_empty() {
+        return Err(missing_deps_error(&missing));
+    }
 
     let status = check_installed(rpc)?;
     if matches!(status, InstallStatus::CurrentVersion) {
@@ -86,6 +109,96 @@ enum InstallStatus {
     CurrentVersion,
     /// Either not installed, or installed at a different version.
     NeedsInstall,
+}
+
+/// Probe rsession for the presence of the hard CRAN dependencies of
+/// the embedded `rstudiocli` package. Returns the subset that is NOT
+/// installed, preserving `R_HARD_DEPS` order.
+///
+/// We deliberately probe with `requireNamespace(..., quietly = TRUE)`
+/// rather than `find.package()` — the former is the same check
+/// `install.packages()` uses internally, so the answer matches what
+/// would actually happen when we try to install.
+///
+/// Exposed at crate level so the live-test harness can call the probe
+/// directly without going through `ensure_installed`'s `OnceLock`
+/// short-circuit (which would otherwise pin the result of the first
+/// call for the rest of the process).
+pub fn check_dependencies(rpc: &RpcClient<'_>) -> Result<Vec<String>, CliError> {
+    let deps_r = R_HARD_DEPS
+        .iter()
+        .map(|d| r_quote(d))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let probe = format!(
+        "cat(paste0(vapply(c({deps}), function(p) \
+         if (requireNamespace(p, quietly = TRUE)) '1' else '0', character(1)), \
+         collapse = ''))",
+        deps = deps_r
+    );
+    let raw = r_eval::run(rpc, &probe)?;
+    parse_dep_probe(raw.trim(), R_HARD_DEPS)
+}
+
+/// Pure parser for the bitstring payload produced by the R probe.
+/// Extracted from `check_dependencies` so the parsing logic can be
+/// exercised without a live rsession: every code path (well-formed
+/// "11" / "10" / "01" / "00", and the length-mismatch error) is
+/// reproducible from a string fixture.
+fn parse_dep_probe(bits: &str, names: &[&str]) -> Result<Vec<String>, CliError> {
+    if bits.len() != names.len() {
+        return Err(CliError::internal(format!(
+            "r_package: dependency probe returned unexpected payload: {bits:?}"
+        )));
+    }
+    Ok(names
+        .iter()
+        .zip(bits.chars())
+        .filter_map(|(name, ch)| {
+            if ch == '0' {
+                Some((*name).to_string())
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
+/// Build the user-facing error for missing hard dependencies. The
+/// message is the canonical actionable text — same wording across CLI
+/// and MCP, so an agent reading either surface gets the same hint.
+///
+/// Exposed at crate level for live tests that exercise the error path
+/// (the unit tests cover the wording; live tests can use this to
+/// confirm `check_dependencies` → error-construction stays consistent).
+pub fn missing_deps_error(missing: &[String]) -> CliError {
+    let list = missing
+        .iter()
+        .map(|d| format!("  - {d}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let install_arg = missing
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let install_cmd = if missing.len() == 1 {
+        format!("install.packages({install_arg})")
+    } else {
+        format!("install.packages(c({install_arg}))")
+    };
+    // Lead with a "no side effect" sentence: agents otherwise tend to
+    // claim partial success ("the file was opened in RStudio") because
+    // the tool name implies an action. Stating up-front that nothing
+    // happened lets the agent relay the failure cleanly to the user.
+    CliError::internal(format!(
+        "Nothing was opened, run, or modified in RStudio.\n\n\
+         rstudio-cli requires the following R packages, which are not installed:\n\
+         {list}\n\n\
+         Install them in your R session with:\n  \
+         {install_cmd}\n\n\
+         Then retry the call. (callr is optional; only needed for `rstudio r --async`.)"
+    ))
 }
 
 fn check_installed(rpc: &RpcClient<'_>) -> Result<InstallStatus, CliError> {
@@ -226,5 +339,73 @@ mod tests {
     #[test]
     fn version_constant_matches_cargo() {
         assert_eq!(R_PACKAGE_VERSION, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn missing_deps_error_lists_packages_and_gives_install_cmd() {
+        let msg = format!(
+            "{}",
+            missing_deps_error(&["rstudioapi".into(), "jsonlite".into()])
+        );
+        assert!(msg.contains("- rstudioapi"));
+        assert!(msg.contains("- jsonlite"));
+        assert!(msg.contains("install.packages(c(\"rstudioapi\", \"jsonlite\"))"));
+    }
+
+    #[test]
+    fn missing_deps_error_single_uses_bare_install_packages() {
+        let msg = format!("{}", missing_deps_error(&["jsonlite".into()]));
+        assert!(msg.contains("install.packages(\"jsonlite\")"));
+    }
+
+    #[test]
+    fn missing_deps_error_leads_with_no_side_effect_guard() {
+        // The agent-facing message must open with a clear "nothing
+        // happened" statement so agents don't claim partial success
+        // when relaying the failure to the user.
+        let msg = format!("{}", missing_deps_error(&["jsonlite".into()]));
+        assert!(
+            msg.starts_with("Nothing was opened, run, or modified in RStudio."),
+            "message must lead with the no-side-effect guard; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_dep_probe_all_present_returns_empty() {
+        let names = &["rstudioapi", "jsonlite"];
+        assert_eq!(parse_dep_probe("11", names).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_dep_probe_all_missing_returns_all_names_in_order() {
+        let names = &["rstudioapi", "jsonlite"];
+        assert_eq!(
+            parse_dep_probe("00", names).unwrap(),
+            vec!["rstudioapi".to_string(), "jsonlite".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_dep_probe_partial_preserves_input_order() {
+        // Convention: '1' = installed, '0' = missing. So "01" means the
+        // FIRST name is missing and the SECOND is installed.
+        let names = &["rstudioapi", "jsonlite"];
+        assert_eq!(
+            parse_dep_probe("01", names).unwrap(),
+            vec!["rstudioapi".to_string()]
+        );
+        assert_eq!(
+            parse_dep_probe("10", names).unwrap(),
+            vec!["jsonlite".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_dep_probe_length_mismatch_is_an_error() {
+        let names = &["rstudioapi", "jsonlite"];
+        let err = parse_dep_probe("1", names).unwrap_err();
+        assert!(format!("{err}").contains("unexpected payload"));
+        let err = parse_dep_probe("111", names).unwrap_err();
+        assert!(format!("{err}").contains("unexpected payload"));
     }
 }
