@@ -348,3 +348,117 @@ fn tx_run_executes_multiple_ops() {
     }
     c.shutdown();
 }
+
+// Regression test for an observed agent failure: when a registry-derived
+// tool (e.g. `editor_new`) is NOT listed in tools/list, some agents wrongly
+// conclude they must route the call through tx_run. The canonical workflow
+// is: tools_search to discover -> tools/call DIRECT to invoke. This test
+// asserts that the direct path works end-to-end so the documentation
+// staying true to the implementation is enforced by CI.
+//
+// No live RStudio session needed: we use the offline `observe_events` tool
+// (registry-derived, not in tools/list) which deterministically returns a
+// catalog without touching rsession.
+#[test]
+fn registry_tool_callable_directly_after_tools_search() {
+    let mut c = McpClient::spawn();
+
+    // Step 1: confirm observe_events is NOT in tools/list (progressive
+    // discovery — only the core surface should appear).
+    c.send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
+    let resp = c.next_response().unwrap();
+    let names: Vec<String> = resp["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !names.contains(&"observe_events".to_string()),
+        "observe_events leaked into tools/list (progressive discovery broken): {names:?}"
+    );
+
+    // Step 2: discover via tools_search. The response must carry an
+    // mcp_tool_name field that the agent can plug straight into tools/call.
+    c.send(&json!({
+        "jsonrpc": "2.0", "id": 2,
+        "method": "tools/call",
+        "params": {"name": "tools_search",
+                   "arguments": {"category": "observe", "action": "events"}}
+    }));
+    let resp = c.next_response().unwrap();
+    let spec: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        spec["mcp_tool_name"], "observe_events",
+        "tools_search must surface mcp_tool_name at the top level so the \
+         agent can plug it straight into tools/call without transcribing \
+         hyphens to underscores"
+    );
+
+    // Step 3: invoke the tool by name via tools/call DIRECT. No tx_run,
+    // no tools_search round-trip beyond the discovery one above. This is
+    // the canonical agent workflow documented in the MCP skill.
+    c.send(&json!({
+        "jsonrpc": "2.0", "id": 3,
+        "method": "tools/call",
+        "params": {"name": "observe_events", "arguments": {}}
+    }));
+    let resp = c.next_response().unwrap();
+    assert_eq!(
+        resp["result"]["isError"], false,
+        "direct tools/call on a registry tool must succeed without tx_run"
+    );
+
+    c.shutdown();
+}
+
+// Companion to the above: documents that putting a single tool-call inside
+// tx_run is *valid* but unnecessary — and asserts both shapes return the
+// same payload. If the skill docs ever start telling agents to route
+// everything through tx_run, this test will keep both paths working at
+// least, even while we educate.
+#[test]
+fn tx_run_with_one_op_is_equivalent_to_direct_tools_call() {
+    let mut c = McpClient::spawn();
+
+    // Direct call.
+    c.send(&json!({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "tools/call",
+        "params": {"name": "observe_events", "arguments": {}}
+    }));
+    let direct = c.next_response().unwrap();
+    let direct_payload: Value =
+        serde_json::from_str(direct["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let direct_events = direct_payload["result"]["events"].as_array().unwrap();
+
+    // Same thing inside tx_run.
+    c.send(&json!({
+        "jsonrpc": "2.0", "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tx_run",
+            "arguments": {
+                "operations": [{"tool": "observe_events", "arguments": {}}]
+            }
+        }
+    }));
+    let tx = c.next_response().unwrap();
+    let tx_payload: Value =
+        serde_json::from_str(tx["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    // tx_run wraps each operation's full envelope (the wrapped tool's own
+    // {ok, result} response) under results[N].result. So the path to the
+    // events array is one level deeper than for a direct call.
+    let tx_first = &tx_payload["results"][0];
+    assert_eq!(tx_first["ok"], true);
+    let tx_events = tx_first["result"]["result"]["events"].as_array().unwrap();
+
+    assert_eq!(
+        direct_events.len(),
+        tx_events.len(),
+        "direct call and tx_run wrapper return different event counts"
+    );
+
+    c.shutdown();
+}

@@ -19,8 +19,31 @@ single tool's metadata.
 
 **Every other tool is still callable via `tools/call`** — they're just
 not listed up front, to keep your context lean. Use `tools_search` to
-find them. It's a 3-level drill-down that mirrors the `rstudio schema`
-CLI command (single source of truth for both surfaces):
+find them, then call them by name via `tools/call`. Concrete example
+(create a new R document):
+
+```json
+// 1. discover
+{"method": "tools/call", "params":
+  {"name": "tools_search",
+   "arguments": {"category": "editor", "action": "new"}}}
+// → response carries: "mcp_tool_name": "editor_new", "input_schema": {...}
+
+// 2. invoke
+{"method": "tools/call", "params":
+  {"name": "editor_new",
+   "arguments": {"text": "# scratch\nx <- 42", "type": "r"}}}
+// → response: {"id": "F0A05266", "type": "r"}
+```
+
+**Common mistake**: do NOT route every non-core tool through `tx_run`.
+`tx_run` is exclusively for **atomic multi-call sequences** that need
+the per-session writer lock (see the *Multi-agent safety* section
+below). For a single tool call, `tools/call` directly is the right
+shape; the server enforces a per-call mutex automatically.
+
+`tools_search` is a 3-level drill-down that mirrors the `rstudio
+schema` CLI command (single source of truth for both surfaces):
 
 | Call | Returns | Approx. tokens |
 |---|---|---:|
@@ -65,6 +88,14 @@ writer lock:
 - **`tx_end`** — release the lock. Always pair with `tx_begin`.
 - **`tx_run`** — `{operations: [{tool, arguments}]}` — execute a
   pre-known sequence under one tx, with auto-cleanup on error.
+
+These three exist **only to serialise multi-call sequences against
+other agents**. They are NOT a generic wrapper for invoking tools —
+single tool-calls (any tool, in or out of `tools/list`) go directly
+through `tools/call`. Putting a single call inside `tx_run` works
+but it's wasteful: a `tx_begin` + `tx_end` round-trip plus an
+operations dispatch for what the per-call mutex would have done
+automatically.
 
 ### The rule
 
