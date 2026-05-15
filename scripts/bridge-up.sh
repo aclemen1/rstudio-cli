@@ -61,11 +61,21 @@ sync_sources() {
   docker exec "$CONTAINER" bash -c \
     'rm -rf /home/rstudio/rstudio-cli && mkdir -p /home/rstudio/rstudio-cli && chown rstudio:rstudio /home/rstudio/rstudio-cli'
   # Pipe a tar archive of the sources into a tar-extract running inside the
-  # container. This sidesteps `docker cp`'s xattr propagation: macOS bsdtar
-  # bakes xattrs (com.apple.provenance, etc.) into the archive even with
-  # COPYFILE_DISABLE / --no-mac-metadata, and Linux refuses them on
-  # lsetxattr. GNU tar inside the container ignores unknown xattrs gracefully.
-  COPYFILE_DISABLE=1 tar --no-mac-metadata \
+  # container. We pick the right "strip macOS metadata" flag based on the
+  # host's tar dialect:
+  #   - macOS bsdtar:  --no-mac-metadata
+  #   - GNU tar (Linux runners): --no-xattrs (and macOS xattrs are absent
+  #     anyway, so the flag is just defensive)
+  # Without the strip, macOS bsdtar bakes xattrs (com.apple.provenance, …)
+  # into the archive and the Linux extractor inside the container would
+  # otherwise refuse them on lsetxattr.
+  local tar_strip_xattrs=()
+  if tar --help 2>&1 | grep -q -- '--no-mac-metadata'; then
+    tar_strip_xattrs=(--no-mac-metadata)
+  elif tar --help 2>&1 | grep -q -- '--no-xattrs'; then
+    tar_strip_xattrs=(--no-xattrs)
+  fi
+  COPYFILE_DISABLE=1 tar "${tar_strip_xattrs[@]}" \
     --exclude='./target' --exclude='./.git' \
     --exclude='./.jj' --exclude='./node_modules' \
     -cf - -C "$REPO_ROOT" . \

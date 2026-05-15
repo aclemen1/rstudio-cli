@@ -40,6 +40,58 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.1
       - run: cargo build --verbose
       - run: cargo test --lib --verbose
-      # Integration tests under tests/live.rs require a running RStudio
-      # Server session. They are not run in CI; verify build only:
-      - run: cargo build --tests --verbose
+      # Non-live integration tests (locking, mcp, replay) run host-side.
+      # The `live` binary requires a running RStudio session — it builds
+      # here (no --ignored), and its tests run in the in-container job
+      # below.
+      - run: cargo test --tests --verbose
+
+  live:
+    name: live tests (Docker rocker/rstudio + Chromium)
+    runs-on: ubuntu-latest
+    # The 'test' job catches plain compilation regressions cheaply; this
+    # job adds ~5 min and depends on Docker, so we run it serially after
+    # 'test' to avoid wasting CI minutes on a doomed build.
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+
+      # The in-container harness compiles the test binary INSIDE the
+      # rocker/rstudio container (Linux aarch64/x86_64 depending on the
+      # runner), so we don't need a host-side Rust toolchain for the build
+      # itself. But we still want the host's cargo cache to speed up the
+      # checkout-side `cargo build --tests` that ci's `test` job does in
+      # parallel — see above. This job is independent.
+
+      - name: Verify Docker is available
+        run: docker version
+
+      # Bring up the bridge: pulls rocker/rstudio:4.5.2 (~1.2 GB),
+      # installs apt deps + Chromium + Rust inside the container, mints
+      # clientId/port-token.
+      - name: scripts/bridge-up.sh up
+        run: scripts/bridge-up.sh up
+
+      # Full gauntlet inside the container: fmt + clippy + every test
+      # binary (unit + locking + mcp + replay + live --ignored).
+      # Redundant with the host-side `fmt` / `clippy` / `test` jobs above
+      # for the non-live bits — but cheap to keep and gives us one
+      # signal-of-truth for "everything green against the Linux target".
+      - name: scripts/bridge-up.sh test-all
+        run: scripts/bridge-up.sh test-all
+
+      # Surface useful artefacts when the live job fails: rsession logs,
+      # Chromium logs, and the per-test stdout from the failing run.
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "=== rstudio-bridge container logs ==="
+          docker logs rstudio-bridge 2>&1 | tail -200 || true
+          echo "=== rsession session state ==="
+          docker exec rstudio-bridge bash -c 'ls /home/rstudio/.local/share/rstudio/sessions/active/ 2>&1 && cat /home/rstudio/.local/share/rstudio/sessions/active/*/session-persistent-state 2>&1' || true
+          echo "=== Chromium logs ==="
+          docker exec rstudio-bridge cat /tmp/chrome.log 2>&1 | tail -100 || true
+
+      - name: Tear down
+        if: always()
+        run: scripts/bridge-up.sh down || true
