@@ -131,23 +131,11 @@ pub fn list_sessions() -> Result<Option<Value>, CliError> {
 }
 
 fn info(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    // versionInfo() is a list with fields {version, long_version, release_name, mode, citation};
-    // we project the useful fields and add user / project info from the other helpers.
-    let r_code = r#"local({
-  vi <- rstudioapi::versionInfo()
-  proj <- rstudioapi::getActiveProject()
-  out <- list(
-    version = as.character(vi$version),
-    long_version = vi$long_version,
-    release_name = vi$release_name,
-    mode = vi$mode,
-    user_identity = rstudioapi::userIdentity(),
-    system_username = rstudioapi::systemUsername(),
-    has_color_console = rstudioapi::hasColorConsole(),
-    active_project = if (is.null(proj)) NA else proj
-  )
-  cat(jsonlite::toJSON(out, auto_unbox = TRUE, na = "null", null = "null"))
-})"#;
+    // Delegated to the rstudiocli R package: see `r-package/R/session.R`.
+    let r_code = r#"cat(jsonlite::toJSON(
+        rstudiocli::session_info(),
+        auto_unbox = TRUE, na = "null", null = "null"
+    ))"#;
     let raw = r_eval::run(rpc, r_code)?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("session info: invalid JSON: {e}; raw: {raw}")))?;
@@ -166,7 +154,7 @@ fn restart(
         ));
     }
     let cmd_arg = command.map(r_quote).unwrap_or_else(|| "\"\"".into());
-    let r_code = format!("rstudioapi::restartSession(command = {cmd_arg})");
+    let r_code = format!("rstudiocli::session_restart(command = {cmd_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }

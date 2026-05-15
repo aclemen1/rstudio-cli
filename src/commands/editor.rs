@@ -147,13 +147,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         category: "editor",
         name: "read-buffer",
         summary: "Read the live editor buffer of an open document by id (includes unsaved edits).",
-        description: "Wraps the get_source_document RPC and returns the buffer's current \
-                      contents along with id, path and the dirty flag. Unlike `editor read` \
-                      (which reads the on-disk file) and `editor context --include-contents` \
-                      (which works only on the active document), this lets you read any open \
-                      doc's buffer, active or not. Note: the dirty flag is read from the \
-                      source_database snapshot which can lag the frontend by a fraction of a \
-                      second after rapid edits.",
+        description: "Wraps rstudioapi::getSourceEditorContext() and returns the buffer's \
+                      current contents along with id and path. Unlike `editor read` (which \
+                      reads the on-disk file) and `editor context --include-contents` (which \
+                      works only on the active document), this lets you read any open doc's \
+                      buffer, active or not. \
+                      \
+                      The dirty flag (whether the buffer differs from the on-disk file) is NOT \
+                      returned here — getSourceEditorContext() doesn't expose it. Use \
+                      `editor list` to obtain the dirty flag for every open document.",
         params: &[
             ParamSpec {
                 name: "id",
@@ -176,7 +178,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio editor read-buffer D4F4972F",
-                explanation: "Returns {id, path, contents, dirty} for that open document.",
+                explanation: "Returns {id, path, contents} for that open document.",
             },
             ExampleSpec {
                 cmd: "rstudio editor read-buffer --path /tmp/foo.R",
@@ -186,15 +188,19 @@ pub const ACTIONS: &[ActionSpec] = &[
                 cmd: "rstudio --format text editor read-buffer D4F4972F",
                 explanation: "Pretty-prints the JSON; pipe through `jq -r .contents` for raw text.",
             },
+            ExampleSpec {
+                cmd: "rstudio editor list | jq '.documents[] | select(.id == \"D4F4972F\") | .dirty'",
+                explanation: "Need the dirty flag? Pull it from `editor list` instead.",
+            },
         ],
-        returns: "{id: string, path: string, contents: string, dirty: bool}",
+        returns: "{id: string, path: string, contents: string}",
         errors: &[ErrorSpec {
             kind: "user_error",
             when: "Neither <id> nor --path was given, or --path doesn't match any open doc, \
                        or --path matches multiple open docs (ambiguous).",
         }],
-        rstudioapi_fn: None,
-        rpc_method: Some("get_source_document"),
+        rstudioapi_fn: Some("getSourceEditorContext"),
+        rpc_method: None,
     },
     ActionSpec {
         category: "editor",
@@ -1075,8 +1081,9 @@ fn open(
     let col_arg = col.map(|c| format!("{c}L")).unwrap_or_else(|| "-1L".into());
     let move_cursor = if no_cursor { "FALSE" } else { "TRUE" };
 
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "cat(rstudioapi::documentOpen({path}, line = {line_arg}, col = {col_arg}, moveCursor = {move_cursor}))",
+        r#"cat(rstudiocli::editor_open({path}, line = {line_arg}, col = {col_arg}, move_cursor = {move_cursor})$id)"#,
         path = r_quote(&abs_str),
     );
     let id = r_eval::run(rpc, &r_code)?;
@@ -1145,33 +1152,34 @@ fn read_buffer(
         }
     };
 
-    let raw = match rpc.rpc(
-        "get_source_document",
-        vec![Value::String(resolved_id.clone())],
-    ) {
-        Ok(v) => v,
-        Err(e) if rpc_error_is_unknown_doc(&e) => {
-            return Err(CliError::user(format!(
-                "no open document with id {resolved_id} \
-                 (run `editor list` to see open docs)"
-            )));
+    // Use the rstudiocli::editor_get_contents wrapper rather than the raw
+    // get_source_document RPC. The wrapper goes through
+    // rstudioapi::getSourceEditorContext, which sees the live buffer
+    // immediately after a setDocumentContents / modifyRange. The raw RPC,
+    // by contrast, can return the pre-modification state for ~1 s
+    // (observed in the Docker bridge against rocker/rstudio:4.5.2).
+    let r_code = format!(
+        "cat(jsonlite::toJSON(rstudiocli::editor_get_contents({}), auto_unbox = TRUE))",
+        r_quote(&resolved_id),
+    );
+    let raw = match r_eval::run(rpc, &r_code) {
+        Ok(s) => s,
+        Err(e) => {
+            // editor_get_contents stops with a recognisable message when
+            // the id is unknown. Surface it as a user error.
+            if e.message.contains("no open document with id") {
+                return Err(CliError::user(format!(
+                    "no open document with id {resolved_id} \
+                     (run `editor list` to see open docs)"
+                )));
+            }
+            return Err(e);
         }
-        Err(e) => return Err(e),
     };
-    let map = match raw {
-        Value::Object(m) => m,
-        _ => {
-            return Err(CliError::internal(format!(
-                "get_source_document returned unexpected shape for id {resolved_id}"
-            )));
-        }
-    };
-    Ok(Some(json!({
-        "id": resolved_id,
-        "path": map.get("path").and_then(|v| v.as_str()).unwrap_or(""),
-        "contents": map.get("contents").and_then(|v| v.as_str()).unwrap_or(""),
-        "dirty": map.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false),
-    })))
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+        CliError::internal(format!("editor read-buffer: invalid JSON: {e}; raw: {raw}"))
+    })?;
+    Ok(Some(parsed))
 }
 
 /// Implementation of `editor context [--id] [--include-console] [--include-contents]`.
@@ -1192,12 +1200,13 @@ fn context(
         ));
     }
 
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let api_call = if include_console {
-        "rstudioapi::getActiveDocumentContext()".to_string()
+        "rstudiocli::editor_context(console = TRUE)".to_string()
     } else if let Some(id) = id {
-        format!("rstudioapi::getSourceEditorContext(id = {})", r_quote(id))
+        format!("rstudiocli::editor_context(id = {})", r_quote(id))
     } else {
-        "rstudioapi::getSourceEditorContext()".to_string()
+        "rstudiocli::editor_context()".to_string()
     };
 
     let contents_field = if include_contents {
@@ -1241,6 +1250,13 @@ fn context(
 }
 
 fn insert(rpc: &RpcClient<'_>, text: &str, at: &str) -> Result<Option<Value>, CliError> {
+    // `at` defines a `location` to pass to insertText. We keep the
+    // call site inline because the location expressions ("end", "start",
+    // "L:C") need R-side evaluation of getSourceEditorContext for the
+    // "end" branch — the rstudiocli wrapper would lose this
+    // expressiveness. Constructor helpers (`document_position`) stay on
+    // rstudioapi:: since they're tiny zero-side-effect builders, not
+    // endpoints that warrant a re-wrap.
     let location = match at {
         "cursor" => "NULL".to_string(),
         "start" => "rstudioapi::document_position(1L, 1L)".to_string(),
@@ -1282,7 +1298,9 @@ fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<V
         Some(id) => format!(", id = {}", r_quote(id)),
         None => String::new(),
     };
-    let r_code = format!("rstudioapi::setSelectionRanges(list({r_range}){id_arg})");
+    // `document_range` is a constructor; `editor_select_range` is our
+    // wrapper for the actual endpoint (setSelectionRanges).
+    let r_code = format!("rstudiocli::editor_select_range(list({r_range}){id_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }
@@ -1492,8 +1510,9 @@ fn close(
             )));
         }
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        ".rs.api.documentClose(id = {}, save = {save_arg})",
+        "rstudiocli::editor_close(id = {}, save = {save_arg})",
         r_quote(&resolved)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1516,8 +1535,9 @@ fn save(
     let resolved = resolve_target_id(rpc, session, id, path)?;
     let id_expr = match resolved {
         Some(s) => r_quote(&s),
-        None => "rstudioapi::documentId(allowConsole = FALSE)".into(),
+        None => "rstudiocli::editor_active_id(allow_console = FALSE)$id".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"local({{
   .__id <- {id_expr}
@@ -1525,7 +1545,7 @@ fn save(
     cat("null")
     return(invisible())
   }}
-  .rs.api.documentSave(id = .__id)
+  rstudiocli::editor_save(id = .__id)
   cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
 }})"#
     );
@@ -1539,7 +1559,7 @@ fn save(
 }
 
 fn save_all(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    r_eval::run_silent(rpc, ".rs.api.documentSaveAll()")?;
+    r_eval::run_silent(rpc, "rstudiocli::editor_save_all()")?;
     Ok(None)
 }
 
@@ -1555,11 +1575,12 @@ fn new_doc(
         )));
     }
     let exec_arg = if execute { "TRUE" } else { "FALSE" };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__id <- rstudioapi::documentNew(text = {text_q}, type = {type_q}, execute = {exec_arg})
-  cat(jsonlite::toJSON(list(id = .__id, type = {type_q}), auto_unbox = TRUE, null = "null"))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            rstudiocli::editor_new(text = {text_q}, type = {type_q}, execute = {exec_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#,
         text_q = r_quote(text),
         type_q = r_quote(doc_type),
     );
@@ -1571,12 +1592,12 @@ fn new_doc(
 
 fn active_id(rpc: &RpcClient<'_>, no_console: bool) -> Result<Option<Value>, CliError> {
     let allow_console = if no_console { "FALSE" } else { "TRUE" };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__id <- rstudioapi::documentId(allowConsole = {allow_console})
-  if (is.null(.__id)) cat("{{\"id\":null}}")
-  else cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
-}})"#
+        r#"cat(jsonlite::toJSON(
+            rstudiocli::editor_active_id(allow_console = {allow_console}),
+            auto_unbox = TRUE, null = "null"
+        ))"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
@@ -1590,12 +1611,12 @@ fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliEr
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        r#"local({{
-  .__p <- rstudioapi::documentPath({id_arg})
-  if (is.null(.__p)) cat("{{\"path\":null}}")
-  else cat(jsonlite::toJSON(list(path = .__p), auto_unbox = TRUE))
-}})"#
+        r#"cat(jsonlite::toJSON(
+            rstudiocli::editor_document_path(id = {id_arg}),
+            auto_unbox = TRUE, null = "null"
+        ))"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
     let parsed: Value = serde_json::from_str(&raw)
@@ -1615,8 +1636,9 @@ fn set_contents(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudioapi::setDocumentContents(text = {}, id = {id_arg})",
+        "rstudiocli::editor_set_contents(text = {}, id = {id_arg})",
         r_quote(text)
     );
     r_eval::run_silent(rpc, &r_code)?;
@@ -1639,9 +1661,12 @@ fn modify_range(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
+    // `document_range`/`document_position` are zero-side-effect constructors,
+    // not endpoints — left as `rstudioapi::*`.
     let r_code = format!(
-        "rstudioapi::modifyRange(\
-           location = rstudioapi::document_range(\
+        "rstudiocli::editor_modify_range(\
+           range = rstudioapi::document_range(\
              rstudioapi::document_position({l1}L, {c1}L), \
              rstudioapi::document_position({l2}L, {c2}L)), \
            text = {}, id = {id_arg})",
@@ -1665,8 +1690,9 @@ fn set_cursor(
         Some(s) => r_quote(&s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
-        "rstudioapi::setCursorPosition(\
+        "rstudiocli::editor_set_cursor(\
            position = rstudioapi::document_position({line}L, {col}L), \
            id = {id_arg})"
     );
@@ -1834,14 +1860,17 @@ fn set_marks(
         None => "NULL".to_string(),
     };
 
+    // Delegated to the rstudiocli R package's pane_markers wrapper:
+    // see `r-package/R/pane.R`. autoSelect = "first" matches editor
+    // set-marks's "jump to the first hit" semantics.
     let r_code = format!(
         r#"local({{
   markers <- jsonlite::fromJSON({hits_r}, simplifyVector = FALSE)
-  rstudioapi::sourceMarkers(
-    name       = {name_r},
-    markers    = markers,
-    basePath   = {base_path_r},
-    autoSelect = "first"
+  rstudiocli::pane_markers(
+    name        = {name_r},
+    markers     = markers,
+    base_path   = {base_path_r},
+    auto_select = "first"
   )
   cat(jsonlite::toJSON(list(total = length(markers), name = {name_r}), auto_unbox = TRUE))
 }})"#

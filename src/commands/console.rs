@@ -172,7 +172,7 @@ pub fn run(
 }
 
 fn activate(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    r_eval::run_silent(rpc, ".rs.api.executeCommand(\"activateConsole\")")?;
+    r_eval::run_silent(rpc, "rstudiocli::console_activate()")?;
     Ok(None)
 }
 

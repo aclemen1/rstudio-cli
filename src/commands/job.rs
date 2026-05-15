@@ -430,9 +430,9 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
             *auto_remove,
             *show,
         ),
-        JobCmd::Remove { id } => silent_id(rpc, "jobRemove", id),
-        JobCmd::SetProgress { id, units } => silent_id_int(rpc, "jobSetProgress", id, *units),
-        JobCmd::AddProgress { id, units } => silent_id_int(rpc, "jobAddProgress", id, *units),
+        JobCmd::Remove { id } => silent_id(rpc, "job_remove", id),
+        JobCmd::SetProgress { id, units } => silent_id_int(rpc, "job_set_progress", id, *units),
+        JobCmd::AddProgress { id, units } => silent_id_int(rpc, "job_add_progress", id, *units),
         JobCmd::SetState { id, state } => set_state(rpc, id, state),
         JobCmd::SetStatus { id, status } => set_status(rpc, id, status),
         JobCmd::AddOutput { id, output, error } => add_output(rpc, id, output, *error),
@@ -455,11 +455,11 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
 }
 
 fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    let r = r#"local({
-  jobs <- .rs.api.listJobs()
-  if (length(jobs) == 0) cat("{\"jobs\":{}}")
-  else cat(jsonlite::toJSON(list(jobs = jobs), auto_unbox = TRUE, null = "null"))
-})"#;
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
+    let r = r#"cat(jsonlite::toJSON(
+        list(jobs = rstudiocli::job_list()),
+        auto_unbox = TRUE, null = "null"
+    ))"#;
     let raw = r_eval::run(rpc, r)?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("job list: invalid JSON: {e}; raw: {raw}")))?;
@@ -475,18 +475,19 @@ fn add(
     auto_remove: bool,
     show: bool,
 ) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        r#"local({{
-  .__id <- rstudioapi::jobAdd(
-    name = {name_q},
-    status = {status_q},
-    progressUnits = {progress_units}L,
-    running = {running_arg},
-    autoRemove = {auto_remove_arg},
-    show = {show_arg}
-  )
-  cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            list(id = rstudiocli::job_add(
+                name = {name_q},
+                status = {status_q},
+                progress_units = {progress_units}L,
+                running = {running_arg},
+                auto_remove = {auto_remove_arg},
+                show = {show_arg}
+            )),
+            auto_unbox = TRUE
+        ))"#,
         name_q = r_quote(name),
         status_q = r_quote(status),
         running_arg = if running { "TRUE" } else { "FALSE" },
@@ -499,20 +500,22 @@ fn add(
     Ok(Some(parsed))
 }
 
-fn silent_id(rpc: &RpcClient<'_>, api_fn: &str, id: &str) -> Result<Option<Value>, CliError> {
-    let r = format!("rstudioapi::{api_fn}(job = {})", r_quote(id));
+fn silent_id(rpc: &RpcClient<'_>, pkg_fn: &str, id: &str) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
+    let r = format!("rstudiocli::{pkg_fn}(job = {})", r_quote(id));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }
 
 fn silent_id_int(
     rpc: &RpcClient<'_>,
-    api_fn: &str,
+    pkg_fn: &str,
     id: &str,
     units: u32,
 ) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudioapi::{api_fn}(job = {}, units = {units}L)",
+        "rstudiocli::{pkg_fn}(job = {}, units = {units}L)",
         r_quote(id)
     );
     r_eval::run_silent(rpc, &r)?;
@@ -525,8 +528,9 @@ fn set_state(rpc: &RpcClient<'_>, id: &str, state: &str) -> Result<Option<Value>
             "invalid state '{state}'. Expected: idle, running, succeeded, cancelled, failed."
         )));
     }
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudioapi::jobSetState(job = {}, state = {})",
+        "rstudiocli::job_set_state(job = {}, state = {})",
         r_quote(id),
         r_quote(state)
     );
@@ -535,8 +539,9 @@ fn set_state(rpc: &RpcClient<'_>, id: &str, state: &str) -> Result<Option<Value>
 }
 
 fn set_status(rpc: &RpcClient<'_>, id: &str, status: &str) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudioapi::jobSetStatus(job = {}, status = {})",
+        "rstudiocli::job_set_status(job = {}, status = {})",
         r_quote(id),
         r_quote(status)
     );
@@ -551,8 +556,9 @@ fn add_output(
     error: bool,
 ) -> Result<Option<Value>, CliError> {
     let err_arg = if error { "TRUE" } else { "FALSE" };
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        "rstudioapi::jobAddOutput(job = {}, output = {}, error = {err_arg})",
+        "rstudiocli::job_add_output(job = {}, output = {}, error = {err_arg})",
         r_quote(id),
         r_quote(output)
     );
@@ -580,17 +586,18 @@ fn run_script(
         Some(s) => r_quote(s),
         None => "NULL".into(),
     };
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
     let r = format!(
-        r#"local({{
-  .__id <- rstudioapi::jobRunScript(
-    path = {path_q},
-    name = {name_arg},
-    workingDir = {wd_arg},
-    importEnv = {import_env_arg},
-    exportEnv = {export_env_q}
-  )
-  cat(jsonlite::toJSON(list(id = .__id), auto_unbox = TRUE))
-}})"#,
+        r#"cat(jsonlite::toJSON(
+            list(id = rstudiocli::job_run_script(
+                path = {path_q},
+                name = {name_arg},
+                working_dir = {wd_arg},
+                import_env = {import_env_arg},
+                export_env = {export_env_q}
+            )),
+            auto_unbox = TRUE
+        ))"#,
         path_q = r_quote(&abs_str),
         import_env_arg = if import_env { "TRUE" } else { "FALSE" },
         export_env_q = r_quote(export_env),
@@ -603,7 +610,8 @@ fn run_script(
 }
 
 fn is_active(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
-    let r = "cat(jsonlite::toJSON(list(is_job = rstudioapi::isJob()), auto_unbox = TRUE))";
+    // Delegated to the rstudiocli R package: see `r-package/R/job.R`.
+    let r = "cat(jsonlite::toJSON(rstudiocli::job_is_active(), auto_unbox = TRUE))";
     let raw = r_eval::run(rpc, r)?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("job is-active: invalid JSON: {e}; raw: {raw}")))?;

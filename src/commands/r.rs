@@ -301,7 +301,10 @@ fn send_with_capture(
         .ok()
         .and_then(|s| s.trim().strip_prefix("[1] ").and_then(|n| n.parse().ok()));
 
-    let result_path = std::env::temp_dir().join(match rsession_pid {
+    // Result file path. The CLI and rsession share the same filesystem
+    // (Desktop or Server-on-same-host), so a single path serves both for
+    // polling on the CLI side and for the R wrapper's writeLines target.
+    let filename = match rsession_pid {
         Some(pid) => format!("rstudio_cap_{pid}.json"),
         None => format!(
             "rstudio_cap_fallback_{}.json",
@@ -310,8 +313,9 @@ fn send_with_capture(
                 .unwrap_or_default()
                 .subsec_nanos()
         ),
-    });
-    let result_path_str = result_path.to_string_lossy();
+    };
+    let result_path = std::env::temp_dir().join(&filename);
+    let result_path_for_r = result_path.to_string_lossy().into_owned();
 
     // Remove any leftover from a previously killed call.
     let _ = std::fs::remove_file(&result_path);
@@ -321,7 +325,7 @@ fn send_with_capture(
     let env_name = current_environment_name(rpc);
 
     // Install R() with the result path and target environment baked in.
-    r_eval::run_silent(rpc, &build_capture_fn(&result_path_str, &env_name))?;
+    r_eval::run_silent(rpc, &build_capture_fn(&result_path_for_r, &env_name))?;
 
     // Send the wrapper via console_input — visible to the user, no quotes or
     // path argument exposed. Single-line code stays on one line; multi-line
@@ -333,10 +337,9 @@ fn send_with_capture(
     };
     console_input(rpc, &call)?;
 
-    // Poll the filesystem until R() writes the result file.
-    // Two early-exit signals:
-    //   • the result file appears (normal completion or R-side interrupt sentinel)
-    //   • rsession process is no longer alive (crash / kill)
+    // Poll the filesystem until R() writes the result file. Two early-exit
+    // signals: the result file appears (normal completion or R-side interrupt
+    // sentinel), or rsession is no longer alive (crash / kill).
     let deadline = timeout.map(|t| Instant::now() + Duration::from_secs_f64(t));
     loop {
         std::thread::sleep(SEND_POLL_INTERVAL);

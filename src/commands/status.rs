@@ -151,28 +151,11 @@ fn format_as_text(v: &Value) -> String {
 
 /// Single R round-trip that collects everything we need from the rsession.
 fn collect_r_info(rpc: &RpcClient<'_>) -> Result<serde_json::Map<String, Value>, CliError> {
-    let r_code = r#"local({
-  out <- list(
-    r_version = R.version$version.string,
-    rstudio_version = tryCatch(
-      as.character(rstudioapi::versionInfo()$version),
-      error = function(e) NULL
-    ),
-    active_project = tryCatch(
-      rstudioapi::getActiveProject(),
-      error = function(e) NULL
-    ),
-    active_doc_id = tryCatch(
-      rstudioapi::documentId(allowConsole = FALSE),
-      error = function(e) NULL
-    ),
-    active_doc_path = tryCatch(
-      rstudioapi::documentPath(),
-      error = function(e) NULL
-    )
-  )
-  cat(jsonlite::toJSON(out, auto_unbox = TRUE, null = "null"))
-})"#;
+    // Delegated to the rstudiocli R package: see `r-package/R/status.R`.
+    let r_code = r#"cat(jsonlite::toJSON(
+        rstudiocli::status_snapshot(),
+        auto_unbox = TRUE, null = "null"
+    ))"#;
     let raw = r_eval::run(rpc, r_code)?;
     let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
         CliError::internal(format!(

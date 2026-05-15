@@ -37,14 +37,23 @@ impl<'a> RpcClient<'a> {
     }
 
     fn auth_headers(&self, csrf: &str) -> Vec<(String, String)> {
+        // Build the base Cookie header. In bridge mode (Dockerised
+        // integration tests), rsession's `client_init` response sets a
+        // `port-token=<hex>` cookie that subsequent requests must echo
+        // back, otherwise the clientId is rejected. The harness captures
+        // the token from its own `client_init` and exposes it via this
+        // env var.
+        let mut cookie = format!("rs-csrf-token={csrf}; csrf-token={csrf}");
+        if let Ok(port_token) = std::env::var("RSTUDIO_CLI_PORT_TOKEN")
+            && !port_token.is_empty()
+        {
+            cookie.push_str(&format!("; port-token={port_token}"));
+        }
         let mut headers = vec![
             ("X-Session-Postback".into(), "1".into()),
             ("X-RStudioUserIdentity".into(), self.session.user.clone()),
             ("X-RS-CSRF-Token".into(), csrf.into()),
-            (
-                "Cookie".into(),
-                format!("rs-csrf-token={csrf}; csrf-token={csrf}"),
-            ),
+            ("Cookie".into(), cookie),
         ];
         // Desktop authenticates by shared secret instead of SO_PEERCRED. The
         // header is the only thing the listener checks; the Server-style
@@ -106,6 +115,16 @@ impl<'a> RpcClient<'a> {
     /// browser→rsession state transition that causes transient code-6 rejections).
     /// Remove if the root cause is identified via rsession source inspection.
     pub fn rpc(&self, method: &str, params: Vec<Value>) -> Result<Value, CliError> {
+        // Ensure the `rstudiocli` companion R package is installed
+        // in the active rsession before any RPC that may execute R
+        // code referencing it. Memoised per-process via `OnceLock` so
+        // the first call within a process pays at most one round-trip
+        // (version check) plus the install if needed, and subsequent
+        // calls are free. Re-entrant: ensure_installed itself calls
+        // RPCs, but it sets the OnceLock before doing so, so nested
+        // calls short-circuit.
+        crate::r_package::ensure_installed(self)?;
+
         let client_id = self.client_id(false)?;
         match self.rpc_with_client_id(method, &params, &client_id) {
             Err(e) if e.code == RPC_INVALID_CLIENT_ID => {

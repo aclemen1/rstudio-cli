@@ -2,9 +2,47 @@
 
 You're connected to the **rstudio-cli** MCP server (version __VERSION__).
 This server bridges to a running RStudio Server (Linux) or RStudio
-Desktop (macOS) IDE. Roughly 90 tools are exposed through `tools/list`;
-each carries its own description and `inputSchema`. This document
-covers what you can't infer from a single tool's metadata.
+Desktop (macOS) IDE. Roughly 90 tools are available, but only a small
+**core set** is surfaced in `tools/list` (progressive discovery — see
+the next section). This document covers what you can't infer from a
+single tool's metadata.
+
+## Discovering tools
+
+`tools/list` returns only a core set:
+
+- `meta_version`, `meta_status` — bridge health and session info.
+- `tools_search` — discover the rest of the catalog on demand.
+- `tx_begin`, `tx_end`, `tx_run` — multi-agent serialisation (see below).
+- `r_script` — run an R script that calls multiple actions in one
+  round-trip (programmatic tool calling — see below).
+
+**Every other tool is still callable via `tools/call`** — they're just
+not listed up front, to keep your context lean. Use `tools_search` to
+find them. It's a 3-level drill-down that mirrors the `rstudio schema`
+CLI command (single source of truth for both surfaces):
+
+| Call | Returns | Approx. tokens |
+|---|---|---:|
+| `tools_search({})` | catalog: 15 categories with `action_count` | ~450 |
+| `tools_search({category: "editor"})` | actions of that category as `[{name, summary, param_count}]` | ~400 |
+| `tools_search({category: "editor", action: "read-buffer"})` | full ActionSpec + `input_schema` + `mcp_tool_name` ready for `tools/call` | ~250 |
+| `tools_search({search: "buffer"})` | regex-matching actions across all categories (flat list) | varies |
+
+**Workflow**: catalog → pick a category → list its actions → drill into
+the one you want → `tools/call` using the `mcp_tool_name` from the
+level-2 response.
+
+The level-2 response gives you `mcp_tool_name` (e.g. `editor_read_buffer`)
+so you don't have to translate hyphens to underscores yourself.
+
+**Shortcut**: if you already know a tool's name from prior context or
+from the convention `<category>_<action>` (hyphens → underscores), call
+it directly via `tools/call` — `tools_search` is only needed when you
+don't yet know what's available.
+
+Categories: `editor`, `r`, `console`, `term`, `env`, `pane`, `skill`,
+`project`, `session`, `pref`, `job`, `ui`, `observe`, `policy`, `meta`.
 
 ## Tool naming
 
@@ -84,6 +122,56 @@ wall time ≈ sum of per-call time. Implications:
   separate pty/process, not bound to the R FIFO.
 - Postbacks (`editor_edit`) and `r_send` (visible console input) bypass
   the R queue.
+
+## Programmatic tool calling: `r_script`
+
+For workflows that chain several reads, transformations, and writes,
+prefer **`r_script`** to a chain of `tools/call`s. You send a small R
+program; the server runs it in the active rsession, and only the final
+value comes back. Intermediate data — buffer contents, file
+trees, regex matches — **never traverses your context window**.
+
+```r
+# r_script body example:
+buf <- editor_get_contents()
+lines <- strsplit(buf$contents, "\n", fixed = TRUE)[[1]]
+list(
+  path = buf$path,
+  total_lines = length(lines),
+  too_long = which(nchar(lines) > 80)
+)
+```
+
+The script runs with the `rstudiocli` R package on the search
+path; its exported functions follow the MCP tool naming (`editor_*`,
+`pane_*`, …). Inspect the surface from inside the script via
+`ls("package:rstudiocli")`.
+
+Rules:
+
+- The last expression's value is serialised with `jsonlite::toJSON
+  (auto_unbox = TRUE)` and returned in the `result` field.
+- Throw `stop("msg")` to signal a logical error — the server returns
+  `isError: true` with the message.
+- **Forbidden inside `tx_begin`**: an active transaction holds the
+  session lock that `r_script`'s nested CLI calls would also need →
+  deadlock. The server rejects the combination with a clear message.
+  Choose one or the other per call.
+
+When to prefer `r_script` over chained `tools/call`s:
+
+- The intermediate data is large (file contents, env dumps) and the
+  final answer is small (counts, summaries, ids).
+- The orchestration uses control flow (loops, conditions) that
+  `tx_run`'s declarative `operations` array can't express.
+- You want a single round-trip atomic from the agent's perspective.
+
+When to prefer chained `tools/call`s:
+
+- You need to reason between calls (e.g. "did the markers reveal a
+  bug? then open that file"). The LLM has to see the intermediate
+  values.
+- The sequence is short (2-3 calls).
 
 ## Patterns worth knowing
 
@@ -168,9 +256,10 @@ use tx_begin/end to be atomic with respect to other agents).
 
 - `meta_status` — current session info, R version, open documents, lock
   state. Good first call to confirm the bridge is healthy.
+- `tools_search` — find tools by keyword or category (see the
+  "Discovering tools" section above). This is the canonical way to
+  reach the ~85 tools that aren't in the core `tools/list`.
 - `observe_events` — static catalog of every event type emitted by
   `observe_stream` (which you can invoke from a shell context if
-  needed; not recommended through MCP since it never returns).
-- The schema-style drill-down is also available: invoke `schema_*`
-  family for self-describing surface, or just rely on `tools/list`
-  which is auto-generated from the same registry.
+  needed; not recommended through MCP since it never returns). Reach
+  it via `tools_search({query: "observe events"})` or call directly.

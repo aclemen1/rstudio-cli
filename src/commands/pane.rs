@@ -611,7 +611,8 @@ fn viewer(rpc: &RpcClient<'_>, target: &str) -> Result<Option<Value>, CliError> 
             .map_err(|e| CliError::user(format!("cannot resolve {target}: {e}")))?;
         p.to_string_lossy().into_owned()
     };
-    let r_code = format!("rstudioapi::viewer({})", r_quote(&resolved));
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
+    let r_code = format!("rstudiocli::pane_viewer({})", r_quote(&resolved));
     r_eval::run_silent(rpc, &r_code)?;
     Ok(Some(json!({ "target": resolved })))
 }
@@ -621,7 +622,8 @@ fn files(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
-    let r_code = format!("rstudioapi::filesPaneNavigate({})", r_quote(&abs_str));
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
+    let r_code = format!("rstudiocli::pane_files_navigate({})", r_quote(&abs_str));
     r_eval::run_silent(rpc, &r_code)?;
     Ok(Some(json!({ "path": abs_str })))
 }
@@ -631,14 +633,18 @@ fn preview_rd(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliErro
         .canonicalize()
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
-    let r = format!("rstudioapi::previewRd({})", r_quote(&abs_str));
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
+    let r = format!("rstudiocli::pane_preview_rd({})", r_quote(&abs_str));
     r_eval::run_silent(rpc, &r)?;
     Ok(Some(json!({ "path": abs_str })))
 }
 
 fn preview_sql(rpc: &RpcClient<'_>, conn_expr: &str, sql: &str) -> Result<Option<Value>, CliError> {
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
+    // The `conn` argument is an R expression (e.g. `con`, `pool::poolCheckout(p)`),
+    // evaluated lazily by R in the active env — pass it inline, don't quote.
     let r = format!(
-        "rstudioapi::previewSql(conn = ({}), statement = {})",
+        "rstudiocli::pane_preview_sql(conn = ({}), statement = {})",
         conn_expr,
         r_quote(sql)
     );
@@ -701,7 +707,7 @@ fn preview_md(
     let viewer_call = if no_view {
         String::new()
     } else {
-        format!("rstudioapi::viewer({})\n  ", r_quote(&out_str))
+        format!("rstudiocli::pane_viewer({})\n  ", r_quote(&out_str))
     };
 
     // mark_html() was introduced in markdown >= 1.0 (API rewrite).
@@ -770,7 +776,7 @@ fn preview_rmd(
     let viewer_call = if no_view {
         String::new()
     } else {
-        format!("rstudioapi::viewer({})\n  ", r_quote(&out_str))
+        format!("rstudiocli::pane_viewer({})\n  ", r_quote(&out_str))
     };
 
     let r_code = format!(
@@ -820,7 +826,7 @@ fn preview_qmd(rpc: &RpcClient<'_>, path: &Path, no_view: bool) -> Result<Option
     let viewer_call = if no_view {
         String::new()
     } else {
-        format!("rstudioapi::viewer({})\n  ", r_quote(&out_str))
+        format!("rstudiocli::pane_viewer({})\n  ", r_quote(&out_str))
     };
 
     let r_code = format!(
@@ -871,8 +877,9 @@ fn save_plot(
             .join(file)
     };
     let abs_str = abs.to_string_lossy().into_owned();
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
     let r = format!(
-        "rstudioapi::savePlotAsImage(file = {}, format = {}, width = {width}L, height = {height}L)",
+        "rstudiocli::pane_save_plot(file = {}, format = {}, width = {width}L, height = {height}L)",
         r_quote(&abs_str),
         r_quote(format),
     );
@@ -889,8 +896,9 @@ fn highlight_ui(rpc: &RpcClient<'_>, queries_json: &str) -> Result<Option<Value>
     // Validate JSON CLI-side.
     let _: Value = serde_json::from_str(queries_json)
         .map_err(|e| CliError::user(format!("invalid --queries-json: {e}")))?;
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
     let r = format!(
-        "rstudioapi::highlightUi(queries = jsonlite::fromJSON({}, simplifyDataFrame = FALSE))",
+        "rstudiocli::pane_highlight_ui(queries = jsonlite::fromJSON({}, simplifyDataFrame = FALSE))",
         r_quote(queries_json)
     );
     r_eval::run_silent(rpc, &r)?;
@@ -945,16 +953,19 @@ fn build_markers_r_code(
         return Err(CliError::user("markers array is empty"));
     }
     let count = arr.len();
+    // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
+    // The R wrapper normalises line/column integers and forwards to
+    // rstudioapi::sourceMarkers. We pass the parsed-and-coerced data.frame
+    // form because sourceMarkers accepts both list-of-lists and data.frame,
+    // and the data.frame route is what the previous inline R built.
     let r_code = format!(
         r#"local({{
   m <- jsonlite::fromJSON({json_q}, simplifyDataFrame = TRUE)
   if (!is.data.frame(m)) m <- as.data.frame(m, stringsAsFactors = FALSE)
-  m$line   <- as.integer(m$line)
-  if (is.null(m$column)) m$column <- 1L else m$column <- as.integer(m$column)
-  rstudioapi::sourceMarkers(
+  rstudiocli::pane_markers(
     name = {name_q},
     markers = m,
-    autoSelect = {auto_q}
+    auto_select = {auto_q}
   )
 }})"#,
         json_q = r_quote(json_str),
@@ -1090,18 +1101,17 @@ mod tests {
         assert_eq!(count, 2);
     }
 
-    // Fix #4: R code must include as.integer coercions for line and column.
+    // Fix #4 (historical): line/column must be coerced to R integers before
+    // sourceMarkers receives them. The coercion has since moved into the
+    // `rstudiocli::pane_markers()` R wrapper, so we now just check
+    // that the generated R code delegates to that wrapper.
     #[test]
-    fn markers_r_code_coerces_line_and_column_to_integer() {
+    fn markers_r_code_delegates_to_rstudiocli_mcp() {
         let json = r#"[{"type":"error","file":"a.R","line":5,"column":3,"message":"e"}]"#;
         let (r_code, _) = build_markers_r_code("lint", json, "none").unwrap();
         assert!(
-            r_code.contains("as.integer(m$line)"),
-            "R code must coerce line to integer"
-        );
-        assert!(
-            r_code.contains("as.integer(m$column)"),
-            "R code must coerce column to integer"
+            r_code.contains("rstudiocli::pane_markers"),
+            "R code must call the rstudiocli wrapper; got:\n{r_code}"
         );
     }
 }

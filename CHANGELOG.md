@@ -4,6 +4,89 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-05-14
+
+### Added
+
+- **Embedded R companion package `rstudiocli.mcp`.** A real CRAN-style R
+  package, source tree in `r-package/`, gets packaged into the binary
+  at compile time (`build.rs`) and auto-installed at first use into
+  the user's R library (silent, policy 1). Single source of truth for
+  the R-side surface used by both the CLI and human R users:
+  `library(rstudiocli.mcp); editor_set_contents(...)` works directly
+  from any R session. The package now wraps ~50 endpoints across all
+  categories (editor, term, pane, job, ui, session, pref, project,
+  console, status). Roxygen-documented, testthat-tested, R CMD check
+  clean.
+- **MCP `r_script` tool — programmatic tool calling.** Send an R
+  script that orchestrates multiple actions; only the final value is
+  returned to the agent. Intermediate data (buffer contents, env
+  dumps) never traverses the LLM's context window. Forbidden inside
+  an active `tx_begin` (would deadlock); the server rejects the
+  combination with a clear message.
+- **Compile-time version sync + build-id** (`build.rs`):
+  `Cargo.toml::version` must match `r-package/DESCRIPTION::Version`
+  (mismatch fails the build). A content-hash of the package source
+  tree is baked in as a build-id and exposed via
+  `rstudiocli.mcp:::.rstudio_mcp_build_id()` — the runtime install
+  check compares this hash so any change to the R package (even
+  within the same Cargo version) triggers a reinstall. Stale
+  loaded namespaces are `unloadNamespace()`-ed after install so
+  newly-shipped exports take effect immediately.
+
+### Internal
+
+- New `src/r_package.rs` module: tarball embed + auto-install
+  (memoised per-process via `OnceLock`, recursion-safe re-entry
+  through the RPC layer).
+- `RpcClient::rpc()` now calls `r_package::ensure_installed()` once
+  per process before any RPC — guarantees that any code path that
+  reaches rsession finds the companion package available.
+- `tempfile` moved from dev-dependencies to dependencies.
+- The legacy `format!("rstudioapi::...")` call sites in
+  `src/commands/*.rs` (95+ of them) have all migrated to
+  `format!("rstudiocli.mcp::...")`, with the exception of two
+  intentionally-kept sites (`editor insert` end-of-document
+  resolution and `console context` selection projection) plus the
+  `document_position` / `document_range` constructors that aren't
+  endpoints.
+
+## [0.13.0] — 2026-05-14
+
+### Changed (breaking)
+
+- **`rstudio schema` (level 0) now returns only the 15 categories** with
+  their description and an `action_count`, instead of the full flat list
+  of every action with category + summary. Pick a category and call
+  `rstudio schema <cat>` for the actions, or use the new shortcut
+  `rstudio schema --search '.*'` to recover the legacy flat output.
+  Levels 1 and 2 are unchanged. Motivation: align with the MCP server's
+  new progressive-discovery surface and reduce default discovery cost
+  for agents.
+
+### Added
+
+- **MCP server: progressive discovery via `tools_search`.** `tools/list`
+  now returns only a small core set (`meta_version`, `meta_status`,
+  `tools_search`, `tx_begin`, `tx_end`, `tx_run`) instead of all ~90
+  registry-derived tools. Other tools remain callable via `tools/call`
+  and discoverable through the new `tools_search` tool, which mirrors
+  the 3-level drill-down of `rstudio schema`:
+  - `tools_search({})` — list of categories with `action_count`.
+  - `tools_search({category: "editor"})` — actions in that category.
+  - `tools_search({category, action})` — full ActionSpec, augmented with
+    the MCP `input_schema` and `mcp_tool_name` ready for `tools/call`.
+  - `tools_search({search: "<regex>"})` — matching actions across all
+    categories (regex on category|name|summary).
+  Net effect: the fixed per-turn cost of `tools/list` drops from ~2 300
+  to ~1 000 tokens (-57%) for every connected agent.
+- **`schema::browse()`** shared helper used by both `rstudio schema`
+  (CLI) and `tools_search` (MCP) so the two surfaces stay in lockstep.
+- **`scripts/bench_discovery.py`** — tokenizer-based bench
+  (cl100k_base / tiktoken) that measures the cost of each drill-down
+  level vs. the pre-progressive baseline. Run with
+  `uv run --with tiktoken scripts/bench_discovery.py`.
+
 ## [0.12.4] — 2026-05-12
 
 ### Fixed
