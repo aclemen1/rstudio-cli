@@ -477,8 +477,16 @@ fn registry_tool_callable_directly_after_tools_search() {
 // same payload. If the skill docs ever start telling agents to route
 // everything through tx_run, this test will keep both paths working at
 // least, even while we educate.
+//
+// Requires a live RStudio session: tx_run acquires the per-session writer
+// lock, which fails fast on CI runners with no rsession reachable.
 #[test]
 fn tx_run_with_one_op_is_equivalent_to_direct_tools_call() {
+    if !rstudio_available() {
+        eprintln!("skipping: RStudio not running");
+        return;
+    }
+    let _serial = serial();
     let mut c = McpClient::spawn();
 
     // Direct call.
