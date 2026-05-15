@@ -4,6 +4,18 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-05-15
+
+### Added
+
+- **Hard-dependency pre-check.** Before installing the embedded
+  `rstudiocli` R package, the CLI now probes for `rstudioapi` and
+  `jsonlite` via `requireNamespace()`. If either is missing, every
+  CLI/MCP call fails early with an actionable error message:
+  "Nothing was opened, run, or modified in RStudio." followed by the
+  exact `install.packages(…)` command. `callr` remains optional (gated
+  at the `rstudio r --async` call site).
+
 ## [0.16.1] — 2026-05-15
 
 ### Fixed (R side)
