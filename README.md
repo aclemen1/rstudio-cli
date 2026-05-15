@@ -45,13 +45,19 @@ across 15 categories and 97 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
 with embedded MCP-flavored agent guidance via `initialize.instructions`.
-`r send` now captures stdout, messages and errors while keeping the code
-visible in the user's R console — agents get the output, users see the
-execution. Automatic update check (background, TTL 24 h): `_update_available`
-injected into every MCP tool response; bare notice on `stderr` in CLI mode.
-Dedicated `project` category for project lifecycle (new / init / clone
-/ open / current). Live-tested end-to-end on both
-**RStudio Server** (Linux) and **RStudio Desktop** (macOS).
+Every command runs by calling an [`rstudiocli`](#the-rstudiocli-r-companion-package)
+R function (companion package embedded in the binary, auto-installed on
+first RPC; usable standalone from any R prompt). `r send` captures
+stdout, messages and errors while keeping the code visible in the user's
+R console — agents get the output, users see the execution. Automatic
+update check (background, TTL 24 h): `_update_available` injected into
+every MCP tool response; bare notice on `stderr` in CLI mode. Dedicated
+`project` category for project lifecycle (new / init / clone / open /
+current). 42 live integration tests across every category, runnable
+against an open Desktop session or against a self-contained
+`rocker/rstudio` Docker harness with headless Chromium (used by the
+`live` CI job). Tested end-to-end on both **RStudio Server** (Linux)
+and **RStudio Desktop** (macOS).
 
 | category | actions | summary |
 |---|---|---|
@@ -196,6 +202,38 @@ rg --vimgrep "FIXME" .               | rstudio editor set-marks --type warning
 This is why `editor find` does not exist: it would duplicate `grep`
 without adding value, and violate the single-responsibility principle
 that makes Unix pipelines composable.
+
+## The `rstudiocli` R companion package
+
+Every CLI command runs by calling a function in the `rstudiocli` R
+package shipped inside the binary (source tree under `r-package/`,
+embedded via `include_bytes!` at compile time, auto-installed into the
+user's R library on the first RPC — silent, idempotent). One source of
+truth for the R-side surface, used by:
+
+- the **CLI** (`rstudio editor open` → `rstudiocli::editor_open(...)`),
+- the **MCP server** (every tool call routes through the same wrappers),
+- **human R sessions** (`library(rstudiocli); editor_set_contents(...)`
+  works directly from any R prompt — Desktop or Server),
+- and the **`r_script` MCP tool** (orchestrate multiple actions in one
+  R script, return only the final value to the agent).
+
+Roxygen-documented, testthat-tested, R CMD check clean. Wraps ~50 of
+the 117 functions in `rstudioapi`, with AI-native ergonomics:
+structured `list()` returns, robust id/path resolution, uniform
+errors via `stop()`.
+
+Two configuration knobs (both optional, sensible defaults):
+
+```r
+# Throttle between UI-mutating ops. Gives the GWT client time to
+# acknowledge each event before the next call lands. Default 500 ms.
+options(rstudiocli.throttle_ms = 200)     # snappier; risk: event saturation
+options(rstudiocli.throttle_ms = 0)       # disabled; only safe on Desktop
+
+# Same setting via env var, for non-interactive use (CI, container, …)
+Sys.setenv(RSTUDIOCLI_THROTTLE_MS = "200")
+```
 
 ## [AI-native](https://github.com/aclemen1/ai-native-cli) pattern
 
@@ -434,18 +472,38 @@ rstudio session info
 
 ## Tests
 
+Three tiers:
+
 ```sh
-cargo test                                # unit tests, fast, no live session needed
-cargo test --test live -- --ignored       # integration tests against a live session
+cargo test --lib                          # 97 unit tests (~0.3 s, no R needed)
+cargo test --tests                        # +31 non-live integration tests (~5 s)
+cargo test --test live -- --ignored       # +42 live tests against a real rsession
 ```
 
-The integration tests skip silently (`SKIP: no live RStudio session
-available`) when no `rsession` socket is reachable, so the suite is
-safe to run anywhere. Tests that create R variables clean up after
-themselves with `r exec` (synchronous). The `r send` tests appear
-briefly in the user's console but leave no lasting state. All 23
-live tests are serialised through a process-wide mutex so they never
-contend on the Desktop rsession socket.
+The live tests skip silently (`SKIP: no live RStudio session available`)
+when no `rsession` socket is reachable. They cover every CLI command
+category (status, session, project, pref, pane, job, term, editor, env,
+console, r exec, r send) and serialise through a process-wide mutex so
+they never contend on the Desktop rsession socket. R-side state is
+torn down at the end of each test.
+
+### Docker test harness
+
+For a clean-room run of the live tests without an open RStudio Desktop
+session, `scripts/bridge-up.sh` brings up a self-contained
+`rocker/rstudio:4.5.2` container with headless Chromium, compiles the
+test binary inside, and runs the full suite against the in-container
+`rsession`:
+
+```sh
+scripts/bridge-up.sh up         # one-time setup (~3 min on a cold pull)
+scripts/bridge-up.sh test-live  # sync + build + run 42 live tests (~2 min)
+scripts/bridge-up.sh test-all   # fmt + clippy + every test binary (~3 min)
+scripts/bridge-up.sh down       # stop the container (cargo cache kept)
+```
+
+This is the same harness the `live` job in `.github/workflows/ci.yml`
+runs on every PR and every push to `main`.
 
 ## Concurrency model
 
