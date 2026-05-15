@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.15.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.15.1** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 15 categories and 97 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
@@ -260,7 +260,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.15.0
+rstudio version                 # 0.15.1
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

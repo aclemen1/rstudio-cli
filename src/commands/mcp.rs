@@ -6,13 +6,25 @@
 //!
 //! Architecture:
 //!
-//! - `tools/list` returns a small **core set** only: `meta_version`,
-//!   `meta_status`, `tools_search`, and the three `tx_*` controls. The
-//!   full action registry (~90 tools) is reachable via `tools/call`
-//!   regardless of whether they appear in the list — `tools_search`
-//!   reveals additional tools (with full `inputSchema`) on demand. This
-//!   is the "progressive discovery" pattern: keep the agent's initial
-//!   context lean, let it fan out only into the surface it needs.
+//! - `tools/list` returns the full registry (~90 tools) plus a small
+//!   bootstrap **core set** (`meta_version`, `meta_status`,
+//!   `tools_search`, the three `tx_*` controls, `r_script`). The core is
+//!   annotated with `_meta["anthropic/alwaysLoad"] = true` so Claude
+//!   Code surfaces their full schemas in the LLM's catalog from the
+//!   start; the rest carry no `alwaysLoad` flag, so Claude Code in
+//!   tst mode defers them — their names still appear in the catalog
+//!   (so dispatch works) but their full schemas are fetched on demand
+//!   through `ToolSearch`. Non-Claude-Code clients ignore the `_meta`
+//!   field and load every schema upfront; equivalent to Claude Code's
+//!   "standard" mode.
+//!
+//! - Earlier server versions exposed only the 7-tool core in
+//!   `tools/list` and expected agents to discover the rest via
+//!   `tools_search`. That worked on paper but Claude Code's
+//!   ToolSearchTool refused to dispatch tools absent from `tools/list`,
+//!   leaving agents stuck routing everything through `tx_run`. See
+//!   <https://www.youtube.com/watch?v=v3Fr2JR47KA> (David Soria Parra
+//!   on MCP best practices) for the deferred-tools rationale.
 //!
 //! - The full set is auto-derived from `crate::schema::registry()`.
 //!   Each `ActionSpec` becomes one MCP tool, name = `{category}_{action}`
@@ -92,9 +104,11 @@ struct McpServer {
     /// kernel close on the underlying File descriptor — no manual
     /// release path needed.
     current_tx: Option<SessionLock>,
-    /// The core set surfaced in `tools/list` — the progressive-discovery
-    /// entrypoint. Other tools are reachable via `tools/call` directly
-    /// (and discoverable through `tools_search`).
+    /// The bootstrap core — every tool here is annotated with
+    /// `_meta["anthropic/alwaysLoad"] = true` so Claude Code keeps their
+    /// full schemas in the LLM's tool catalog from the start. The full
+    /// registry is emitted alongside (without alwaysLoad) by
+    /// `handle_tools_list`; see its docstring for the rationale.
     core_tools: Vec<McpTool>,
     /// Lookup table for `tools/call` dispatch: maps every MCP tool name
     /// in the registry-derived surface to its underlying ActionSpec.
@@ -105,16 +119,29 @@ struct McpTool {
     name: String,
     description: String,
     input_schema: Value,
+    /// When true, the tool is annotated with `_meta["anthropic/alwaysLoad"]
+    /// = true` so Claude Code surfaces its full schema in the LLM's tool
+    /// catalog from the start (instead of marking it deferred and hiding
+    /// it behind ToolSearch). Non-Claude-Code clients ignore `_meta`.
+    ///
+    /// We set this on the small bootstrap surface (meta_*, tools_search,
+    /// tx_*, r_script). The ~90 registry-derived actions are also listed
+    /// but without this flag — Claude Code (in tst mode) keeps them
+    /// deferred to save context, and surfaces names via system-reminder
+    /// so the LLM can request their full schemas via ToolSearch on demand.
+    /// In "standard" mode (no tst), every tool stays loadable directly,
+    /// just with full schema present.
+    always_load: bool,
 }
 
 impl McpServer {
     fn new(overrides: SessionOverrides, lock_timeout: Duration) -> Self {
-        // Build the registry-derived dispatch table. These actions are NOT
-        // surfaced in tools/list — they're discovered via `tools_search`
+        // Build the registry-derived dispatch table. Every action appears
+        // in tools/list (so MCP clients with strict catalog validation
+        // can dispatch them) and is also reachable through `tools_search`
         // (which delegates to `schema::browse` for DRY consistency with
-        // the `rstudio schema` CLI command) and invoked directly via
-        // tools/call. The table here exists solely to map MCP tool names
-        // back to their ActionSpec when a call comes in.
+        // the `rstudio schema` CLI command). This table maps MCP tool
+        // names back to their ActionSpec when a tools/call comes in.
         let mut actions_by_mcp_name = HashMap::new();
         for action in registry() {
             // meta_tx is documentation for the CLI's `rstudio tx --` —
@@ -144,6 +171,7 @@ impl McpServer {
                     name: tool_name,
                     description: format!("{}\n\n{}", action.summary, action.description),
                     input_schema: build_input_schema(action.params),
+                    always_load: true,
                 });
             }
         }
@@ -153,6 +181,7 @@ impl McpServer {
             name: "tools_search".into(),
             description: tools_search_description(),
             input_schema: tools_search_input_schema(),
+            always_load: true,
         });
         core_tools.push(McpTool {
             name: "tx_begin".into(),
@@ -162,6 +191,7 @@ impl McpServer {
                  if the MCP server exits."
                 .into(),
             input_schema: empty_schema(),
+            always_load: true,
         });
         core_tools.push(McpTool {
             name: "tx_end".into(),
@@ -169,6 +199,7 @@ impl McpServer {
                  No-op when no tx is active."
                 .into(),
             input_schema: empty_schema(),
+            always_load: true,
         });
         core_tools.push(McpTool {
             name: "tx_run".into(),
@@ -199,11 +230,13 @@ impl McpServer {
                 "required": ["operations"],
                 "additionalProperties": false
             }),
+            always_load: true,
         });
         core_tools.push(McpTool {
             name: "r_script".into(),
             description: r_script_description(),
             input_schema: r_script_input_schema(),
+            always_load: true,
         });
 
         Self {
@@ -314,7 +347,51 @@ impl McpServer {
     }
 
     fn handle_tools_list(&self) -> Value {
-        let tools: Vec<Value> = self.core_tools.iter().map(tool_to_json).collect();
+        // tools/list returns BOTH the bootstrap core (with alwaysLoad=true,
+        // so Claude Code keeps their full schema in the LLM's catalog) AND
+        // every registry-derived action (without alwaysLoad, so Claude Code
+        // in tst mode defers them and surfaces only their names via
+        // system-reminder — the LLM requests full schemas through
+        // ToolSearch on demand).
+        //
+        // The shape works across clients:
+        //   - Claude Code in tst mode: small loaded catalog + deferred pool.
+        //   - Claude Code in standard mode: all tools loaded, full schemas.
+        //   - Cline / Cursor / Continue: all tools loaded, no `_meta`
+        //     interpretation; equivalent to standard mode for them.
+        //
+        // Earlier versions of the server exposed only the 7-tool core and
+        // expected agents to discover the rest via `tools_search`. That
+        // worked on paper but Claude Code's ToolSearchTool refused to
+        // dispatch tools absent from tools/list, leaving agents stuck
+        // calling everything through `tx_run` as a workaround.
+        let mut tools: Vec<Value> = self.core_tools.iter().map(tool_to_json).collect();
+        // Track names already emitted via the bootstrap core so we don't
+        // duplicate them (meta_status / meta_version come from the registry
+        // and are also surfaced as core).
+        let core_names: std::collections::HashSet<&str> =
+            self.core_tools.iter().map(|t| t.name.as_str()).collect();
+        for (mcp_tool_name, action) in &self.actions_by_mcp_name {
+            if core_names.contains(mcp_tool_name.as_str()) {
+                continue;
+            }
+            tools.push(tool_to_json(&McpTool {
+                name: mcp_tool_name.clone(),
+                description: format!("{}\n\n{}", action.summary, action.description),
+                input_schema: build_input_schema(action.params),
+                // No alwaysLoad → Claude Code in tst mode treats these as
+                // deferred. In standard mode the schema is still sent
+                // (deferred is just about which schemas live in the
+                // upfront catalog vs are fetched on demand).
+                always_load: false,
+            }));
+        }
+        // Stable order for snapshot-style tests + nicer debug logs.
+        tools.sort_by(|a, b| {
+            let an = a["name"].as_str().unwrap_or("");
+            let bn = b["name"].as_str().unwrap_or("");
+            an.cmp(bn)
+        });
         json!({ "tools": tools })
     }
 
@@ -599,11 +676,22 @@ fn empty_schema() -> Value {
 }
 
 fn tool_to_json(t: &McpTool) -> Value {
-    json!({
+    let mut obj = json!({
         "name": t.name,
         "description": t.description,
         "inputSchema": t.input_schema,
-    })
+    });
+    if t.always_load
+        && let Some(map) = obj.as_object_mut()
+    {
+        // Claude Code-specific hint: this MCP tool's full schema should be
+        // present in the LLM's catalog from the start (not deferred via
+        // ToolSearch). Non-Claude-Code clients ignore unknown _meta fields.
+        // See https://docs.claude.com/en/docs/agents-and-tools/mcp for the
+        // namespace convention.
+        map.insert("_meta".into(), json!({"anthropic/alwaysLoad": true}));
+    }
+    obj
 }
 
 fn tools_search_description() -> String {
@@ -968,14 +1056,16 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_only_core_set() {
+    fn tools_list_includes_core_and_registry_with_alwaysload_on_core() {
         let server = McpServer::new(SessionOverrides::default(), Duration::from_secs(30));
         let tools = server.handle_tools_list();
         let arr = tools["tools"].as_array().unwrap();
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
-        // The progressive-discovery core: small, fixed, predictable.
-        let expected = [
+        // Bootstrap core: small, fixed, every member annotated with
+        // _meta["anthropic/alwaysLoad"]=true so Claude Code keeps their
+        // full schema in the LLM's catalog from the start.
+        let core = [
             "meta_version",
             "meta_status",
             "tools_search",
@@ -984,21 +1074,44 @@ mod tests {
             "tx_run",
             "r_script",
         ];
-        for name in expected {
+        for name in core {
             assert!(names.contains(&name), "core tool missing: {name}");
+            let t = arr.iter().find(|t| t["name"] == name).unwrap();
+            assert_eq!(
+                t["_meta"]["anthropic/alwaysLoad"],
+                serde_json::Value::Bool(true),
+                "{name} should carry _meta[\"anthropic/alwaysLoad\"]=true"
+            );
         }
-        assert_eq!(names.len(), expected.len(), "tools/list grew beyond core");
 
-        // Registry-derived tools must NOT appear in tools/list anymore.
-        // (r_script is the MCP-specific programmatic-calling tool, not a
-        // registry-derived r.* action — those would be r_exec, r_send, etc.)
-        assert!(!names.iter().any(|n| n.starts_with("editor_")));
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.starts_with("r_") && *n != "tx_run" && *n != "r_script")
+        // Registry-derived sample: present in tools/list without
+        // alwaysLoad (Claude Code defers them; their names still appear
+        // so dispatch works).
+        let registry_sample = ["editor_open", "r_exec", "r_send", "observe_events"];
+        for name in registry_sample {
+            assert!(
+                names.contains(&name),
+                "registry tool {name} missing from tools/list — clients can no longer dispatch it"
+            );
+            let t = arr.iter().find(|t| t["name"] == name).unwrap();
+            // alwaysLoad must NOT be set on these.
+            let always_load = t["_meta"]
+                .get("anthropic/alwaysLoad")
+                .and_then(|v| v.as_bool())
+                == Some(true);
+            assert!(
+                !always_load,
+                "registry tool {name} should not carry alwaysLoad (token budget)"
+            );
+        }
+
+        // No duplicates (core overrides registry for meta_status / meta_version).
+        let unique: std::collections::HashSet<&&str> = names.iter().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "duplicate names in tools/list: {names:?}"
         );
-        assert!(!names.iter().any(|n| n.starts_with("observe_")));
     }
 
     #[test]

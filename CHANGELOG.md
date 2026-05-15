@@ -4,6 +4,35 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] — 2026-05-15
+
+### Fixed
+
+- **MCP `tools/list` now exposes every action.** Earlier versions
+  surfaced only a 7-tool bootstrap core and expected agents to discover
+  the rest via `tools_search`. Claude Code 2.x's *ToolSearchTool*
+  refused to dispatch tools absent from `tools/list` (it considers the
+  catalog authoritative) and agents fell back to routing everything
+  through `tx_run` — see the diagnostic walkthrough on PR-merge day.
+
+  This release switches to the *deferred tools* pattern Claude Code is
+  actually designed for: every MCP tool ships in `tools/list`, and the
+  bootstrap core carries the `_meta["anthropic/alwaysLoad"] = true`
+  annotation Claude Code recognises (the rest defer cleanly, surfaced
+  via `system-reminder` and reachable through ToolSearch on demand).
+  Non-Claude-Code clients ignore `_meta` and load every schema upfront,
+  which is also fine — same behaviour as Claude Code's "standard" mode.
+
+  Inspired by David Soria Parra's
+  [*The Future of MCP*](https://www.youtube.com/watch?v=v3Fr2JR47KA)
+  talk; references in the README and code comments call it out.
+
+### Changed
+
+- `src/skills/rstudio-mcp.md` rewritten to describe the new catalog
+  layout (bootstrap core + deferred registry) instead of the old
+  progressive-discovery story.
+
 ## [0.15.0] — 2026-05-15
 
 The MCP design choices the project already had since 0.13.x (progressive

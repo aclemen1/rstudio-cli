@@ -2,38 +2,41 @@
 
 You're connected to the **rstudio-cli** MCP server (version __VERSION__).
 This server bridges to a running RStudio Server (Linux) or RStudio
-Desktop (macOS) IDE. Roughly 90 tools are available, but only a small
-**core set** is surfaced in `tools/list` (progressive discovery — see
-the next section). This document covers what you can't infer from a
-single tool's metadata.
+Desktop (macOS) IDE. Roughly 90 tools are available; `tools/list`
+exposes the entire catalog. A small **bootstrap core** is marked with
+`_meta["anthropic/alwaysLoad"] = true` so Claude Code keeps their full
+schemas in your context from the start; the rest are deferred and load
+their full schemas on demand (see *Tool catalog* below).
 
-## Discovering tools
+## Tool catalog
 
-`tools/list` returns only a core set:
+The bootstrap core (always loaded):
 
 - `meta_version`, `meta_status` — bridge health and session info.
-- `tools_search` — discover the rest of the catalog on demand.
+- `tools_search` — search/browse the catalog with full schemas.
 - `tx_begin`, `tx_end`, `tx_run` — multi-agent serialisation (see below).
 - `r_script` — run an R script that calls multiple actions in one
   round-trip (programmatic tool calling — see below).
 
-**Every other tool is still callable via `tools/call`** — they're just
-not listed up front, to keep your context lean. Use `tools_search` to
-find them, then call them by name via `tools/call`. Concrete example
-(create a new R document):
+**Every other tool is in `tools/list` too** and callable directly via
+`tools/call`. Their names appear in your catalog, but their full
+schemas (parameters, descriptions, examples) are fetched on demand
+when you actually invoke them — that's the *deferred* mechanism Claude
+Code uses to keep your context lean. Concrete example (create a new R
+document):
 
 ```json
-// 1. discover
-{"method": "tools/call", "params":
-  {"name": "tools_search",
-   "arguments": {"category": "editor", "action": "new"}}}
-// → response carries: "mcp_tool_name": "editor_new", "input_schema": {...}
-
-// 2. invoke
+// Option A — direct (you know the name and shape):
 {"method": "tools/call", "params":
   {"name": "editor_new",
    "arguments": {"text": "# scratch\nx <- 42", "type": "r"}}}
 // → response: {"id": "F0A05266", "type": "r"}
+
+// Option B — discover via tools_search first (if you don't):
+{"method": "tools/call", "params":
+  {"name": "tools_search",
+   "arguments": {"category": "editor", "action": "new"}}}
+// → response carries: "mcp_tool_name": "editor_new", "input_schema": {...}
 ```
 
 **Common mistake**: do NOT route every non-core tool through `tx_run`.

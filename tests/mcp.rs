@@ -139,7 +139,7 @@ fn initialize_carries_mcp_skill_instructions() {
 }
 
 #[test]
-fn tools_list_contains_tx_and_registry_actions() {
+fn tools_list_exposes_core_and_registry_with_alwaysload_on_core() {
     let mut c = McpClient::spawn();
     c.send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
     let resp = c.next_response().unwrap();
@@ -149,24 +149,79 @@ fn tools_list_contains_tx_and_registry_actions() {
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
 
-    // The MCP server uses a "progressive discovery" surface: tools/list
-    // exposes only a minimal core (meta_*, tools_search, tx_*, r_script).
-    // Registry-derived actions (editor_*, env_*, pane_*, term_*, ...) are
-    // discovered via tools_search and invoked via tools/call but do NOT
-    // appear in tools/list to keep the prompt context small.
-    // Tx control tools
-    assert!(names.contains(&"tx_begin".to_string()));
-    assert!(names.contains(&"tx_end".to_string()));
-    assert!(names.contains(&"tx_run".to_string()));
-    // Core registry-derived
-    assert!(names.contains(&"meta_version".to_string()));
-    assert!(names.contains(&"meta_status".to_string()));
-    assert!(names.contains(&"r_script".to_string()));
-    // tools_search itself
-    assert!(names.contains(&"tools_search".to_string()));
-    // meta_tx must NOT appear (it documents the CLI's `rstudio tx --`,
-    // whose MCP equivalent is the tx_begin/tx_end/tx_run trio above).
+    // tools/list exposes BOTH the bootstrap core (annotated with
+    // _meta["anthropic/alwaysLoad"]=true so Claude Code keeps their full
+    // schema in the LLM's catalog) AND every registry-derived action (no
+    // alwaysLoad — Claude Code in tst mode defers them and pulls schemas
+    // through ToolSearch on demand). Earlier server versions exposed only
+    // the 7-tool core and broke under Claude Code's ToolSearchTool, which
+    // refused to dispatch tools absent from tools/list.
+
+    // Bootstrap core (must carry alwaysLoad).
+    let core = [
+        "meta_version",
+        "meta_status",
+        "tools_search",
+        "tx_begin",
+        "tx_end",
+        "tx_run",
+        "r_script",
+    ];
+    for n in core {
+        assert!(names.contains(&n.to_string()), "missing core tool {n}");
+        let t = tools.iter().find(|t| t["name"] == n).unwrap();
+        assert_eq!(
+            t["_meta"]["anthropic/alwaysLoad"], true,
+            "core tool {n} missing _meta[\"anthropic/alwaysLoad\"]=true"
+        );
+    }
+
+    // Registry-derived sample: a few tools from different categories must
+    // appear, WITHOUT alwaysLoad (so Claude Code defers them).
+    let registry = [
+        "editor_open",
+        "editor_read_buffer",
+        "r_exec",
+        "r_send",
+        "env_list",
+        "term_list",
+    ];
+    for n in registry {
+        assert!(
+            names.contains(&n.to_string()),
+            "missing registry tool {n} from tools/list"
+        );
+        let t = tools.iter().find(|t| t["name"] == n).unwrap();
+        // alwaysLoad should be absent (or false) — Claude Code's default
+        // is to defer MCP tools, which is what we want for the catalog.
+        let has_always_load = t["_meta"]
+            .get("anthropic/alwaysLoad")
+            .and_then(|v| v.as_bool())
+            == Some(true);
+        assert!(
+            !has_always_load,
+            "registry tool {n} should NOT carry alwaysLoad (token budget)"
+        );
+    }
+
+    // meta_tx must NOT appear (it documents the CLI's `rstudio tx --`;
+    // the MCP equivalent is the tx_begin/tx_end/tx_run trio).
     assert!(!names.contains(&"meta_tx".to_string()));
+
+    // No duplicates: each name appears exactly once.
+    let mut sorted = names.clone();
+    sorted.sort();
+    let unique_count = {
+        let mut s = sorted.clone();
+        s.dedup();
+        s.len()
+    };
+    assert_eq!(
+        names.len(),
+        unique_count,
+        "duplicate tool names in tools/list: {sorted:?}"
+    );
+
     c.shutdown();
 }
 
@@ -349,22 +404,26 @@ fn tx_run_executes_multiple_ops() {
     c.shutdown();
 }
 
-// Regression test for an observed agent failure: when a registry-derived
-// tool (e.g. `editor_new`) is NOT listed in tools/list, some agents wrongly
-// conclude they must route the call through tx_run. The canonical workflow
-// is: tools_search to discover -> tools/call DIRECT to invoke. This test
-// asserts that the direct path works end-to-end so the documentation
-// staying true to the implementation is enforced by CI.
+// Regression test for an observed agent failure: registry-derived tools
+// (e.g. `editor_new`, `r_send`) MUST be invocable directly via tools/call
+// — no detour through tx_run, no failed dispatch from Claude Code's
+// ToolSearchTool. Earlier versions hid them from tools/list, which broke
+// dispatch under tst mode. This test now asserts the full path:
+//
+//   1. tools/list contains the registry tool (even if without alwaysLoad).
+//   2. tools_search returns its mcp_tool_name for agents that prefer the
+//      DRY discovery path.
+//   3. tools/call invokes it successfully without tx_run.
 //
 // No live RStudio session needed: we use the offline `observe_events` tool
-// (registry-derived, not in tools/list) which deterministically returns a
-// catalog without touching rsession.
+// which deterministically returns a catalog without touching rsession.
 #[test]
 fn registry_tool_callable_directly_after_tools_search() {
     let mut c = McpClient::spawn();
 
-    // Step 1: confirm observe_events is NOT in tools/list (progressive
-    // discovery — only the core surface should appear).
+    // Step 1: confirm observe_events IS in tools/list now that progressive
+    // discovery has been replaced by deferred-tools with alwaysLoad on the
+    // core only.
     c.send(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
     let resp = c.next_response().unwrap();
     let names: Vec<String> = resp["result"]["tools"]
@@ -374,8 +433,8 @@ fn registry_tool_callable_directly_after_tools_search() {
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
     assert!(
-        !names.contains(&"observe_events".to_string()),
-        "observe_events leaked into tools/list (progressive discovery broken): {names:?}"
+        names.contains(&"observe_events".to_string()),
+        "observe_events missing from tools/list — clients can no longer dispatch it: {names:?}"
     );
 
     // Step 2: discover via tools_search. The response must carry an
