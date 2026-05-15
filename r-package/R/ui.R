@@ -24,11 +24,12 @@ ui_dialog <- function(title, message, url = "") {
 #' Wraps [rstudioapi::updateDialog()]. Mutates the content of the
 #' currently-displayed dialog without re-opening it. Only meaningful
 #' from inside a callback; calling it outside a dialog flow is a no-op.
+#' Mirrors the MCP / CLI surface `ui.update-dialog`.
 #'
 #' @param ... Named arguments passed through to `updateDialog`.
 #' @return `NULL` invisibly. Side-effect only.
 #' @export
-ui_dialog_update <- function(...) {
+ui_update_dialog <- function(...) {
   rstudioapi::updateDialog(...)
   invisible(NULL)
 }

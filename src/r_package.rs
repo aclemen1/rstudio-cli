@@ -157,18 +157,24 @@ fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
     // unloaded so `pkg::fn` calls resolve against the freshly-installed
     // version rather than the in-memory one. We do it inside the same
     // R call so it stays atomic from the agent's perspective.
+    // utils::install.packages() doesn't stop() on failure — it emits a
+    // warning and returns NULL. We wrap the call so that any warning
+    // raises an error visible to the CLI side, plus a final
+    // requireNamespace() check confirms the install actually landed.
     let install_code = format!(
-        "withCallingHandlers(\n  \
-            {{\n    \
-              utils::install.packages({tarball}, repos = NULL, type = 'source', quiet = TRUE)\n    \
-              if ({pkg} %in% loadedNamespaces()) {{\n      \
-                tryCatch(unloadNamespace({pkg}),\n               \
-                         error = function(e) {{}})\n    \
-              }}\n  \
-            }},\n  \
-            warning = function(w) invokeRestart('muffleWarning'),\n  \
-            message = function(m) invokeRestart('muffleMessage')\n\
-         )",
+        "{{\n  \
+           res <- withCallingHandlers(\n    \
+             tryCatch({{\n      \
+               utils::install.packages({tarball}, repos = NULL, type = 'source', quiet = TRUE)\n      \
+               if ({pkg} %in% loadedNamespaces()) tryCatch(unloadNamespace({pkg}), error = function(e) {{}})\n      \
+               TRUE\n    \
+             }}, error = function(e) {{ conditionMessage(e) }}),\n    \
+             warning = function(w) {{ stop(\"install warning: \", conditionMessage(w), call. = FALSE) }},\n    \
+             message = function(m) {{ invokeRestart('muffleMessage') }}\n  \
+           )\n  \
+           if (!isTRUE(res)) stop(\"install.packages returned non-TRUE: \", res, call. = FALSE)\n  \
+           if (!requireNamespace({pkg}, quietly = TRUE)) stop(\"install.packages reported success but {pkg} still not findable\", call. = FALSE)\n\
+         }}",
         pkg = r_quote(R_PACKAGE_NAME),
         tarball = r_quote(&path_str)
     );

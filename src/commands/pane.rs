@@ -623,7 +623,7 @@ fn files(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
         .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
     let abs_str = abs.to_string_lossy().into_owned();
     // Delegated to the rstudiocli R package: see `r-package/R/pane.R`.
-    let r_code = format!("rstudiocli::pane_files_navigate({})", r_quote(&abs_str));
+    let r_code = format!("rstudiocli::pane_files({})", r_quote(&abs_str));
     r_eval::run_silent(rpc, &r_code)?;
     Ok(Some(json!({ "path": abs_str })))
 }

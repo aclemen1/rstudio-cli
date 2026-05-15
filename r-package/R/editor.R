@@ -35,10 +35,11 @@ editor_set_contents <- function(text, id = NULL) {
   )
 }
 
-#' Read the contents of a Source pane document
+#' Read the live editor buffer of a Source pane document
 #'
 #' Returns the live editor buffer (not the on-disk file) for an open
-#' Source pane document, along with its metadata.
+#' Source pane document, along with its metadata. Mirrors the MCP /
+#' CLI surface `editor.read-buffer`.
 #'
 #' @param id Document id. When `NULL`, the active Source pane document
 #'   is targeted.
@@ -49,7 +50,7 @@ editor_set_contents <- function(text, id = NULL) {
 #'   * `contents`: the live editor buffer as a single character string
 #'     (lines separated by `\n`).
 #' @export
-editor_get_contents <- function(id = NULL) {
+editor_read_buffer <- function(id = NULL) {
   ctx <- if (is.null(id)) {
     rstudioapi::getSourceEditorContext()
   } else {
@@ -233,14 +234,15 @@ editor_set_cursor <- function(position, id = NULL) {
 
 #' Set the selection in a document
 #'
-#' Wraps [rstudioapi::setSelectionRanges()].
+#' Wraps [rstudioapi::setSelectionRanges()]. Mirrors the MCP / CLI
+#' surface `editor.select`.
 #'
 #' @param ranges A `document_range` (or list of them) describing the
 #'   new selection.
 #' @param id Document id. When `NULL`, the active document is targeted.
 #' @return `NULL` invisibly. Side-effect only.
 #' @export
-editor_select_range <- function(ranges, id = NULL) {
+editor_select <- function(ranges, id = NULL) {
   if (is.null(id)) {
     rstudioapi::setSelectionRanges(ranges = ranges)
   } else {
@@ -291,13 +293,14 @@ editor_active_id <- function(allow_console = TRUE) {
 
 #' Path of an open document
 #'
-#' Wraps [rstudioapi::documentPath()].
+#' Wraps [rstudioapi::documentPath()]. Mirrors the MCP / CLI surface
+#' `editor.path`.
 #'
 #' @param id Document id. When `NULL`, the active document is used.
 #' @return A list with `path` set to the file path, or `NULL` for an
 #'   unsaved buffer.
 #' @export
-editor_document_path <- function(id = NULL) {
+editor_path <- function(id = NULL) {
   p <- if (is.null(id)) {
     rstudioapi::documentPath()
   } else {

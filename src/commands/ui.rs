@@ -478,7 +478,7 @@ fn update_dialog(rpc: &RpcClient<'_>, fields_json: &str) -> Result<Option<Value>
         ));
     }
     // Delegated to the rstudiocli R package: see `r-package/R/ui.R`.
-    let r = format!("rstudiocli::ui_dialog_update({})", args.join(", "));
+    let r = format!("rstudiocli::ui_update_dialog({})", args.join(", "));
     r_eval::run_silent(rpc, &r)?;
     Ok(None)
 }

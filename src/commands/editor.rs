@@ -1152,14 +1152,14 @@ fn read_buffer(
         }
     };
 
-    // Use the rstudiocli::editor_get_contents wrapper rather than the raw
+    // Use the rstudiocli::editor_read_buffer wrapper rather than the raw
     // get_source_document RPC. The wrapper goes through
     // rstudioapi::getSourceEditorContext, which sees the live buffer
     // immediately after a setDocumentContents / modifyRange. The raw RPC,
     // by contrast, can return the pre-modification state for ~1 s
     // (observed in the Docker bridge against rocker/rstudio:4.5.2).
     let r_code = format!(
-        "cat(jsonlite::toJSON(rstudiocli::editor_get_contents({}), auto_unbox = TRUE))",
+        "cat(jsonlite::toJSON(rstudiocli::editor_read_buffer({}), auto_unbox = TRUE))",
         r_quote(&resolved_id),
     );
     let raw = match r_eval::run(rpc, &r_code) {
@@ -1300,7 +1300,7 @@ fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<V
     };
     // `document_range` is a constructor; `editor_select_range` is our
     // wrapper for the actual endpoint (setSelectionRanges).
-    let r_code = format!("rstudiocli::editor_select_range(list({r_range}){id_arg})");
+    let r_code = format!("rstudiocli::editor_select(list({r_range}){id_arg})");
     r_eval::run_silent(rpc, &r_code)?;
     Ok(None)
 }
@@ -1614,7 +1614,7 @@ fn path_of(rpc: &RpcClient<'_>, id: Option<&str>) -> Result<Option<Value>, CliEr
     // Delegated to the rstudiocli R package: see `r-package/R/editor.R`.
     let r_code = format!(
         r#"cat(jsonlite::toJSON(
-            rstudiocli::editor_document_path(id = {id_arg}),
+            rstudiocli::editor_path(id = {id_arg}),
             auto_unbox = TRUE, null = "null"
         ))"#
     );

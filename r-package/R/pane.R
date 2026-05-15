@@ -17,12 +17,13 @@ pane_viewer <- function(target) {
 
 #' Navigate the Files pane to a directory
 #'
-#' Wraps [rstudioapi::filesPaneNavigate()].
+#' Wraps [rstudioapi::filesPaneNavigate()]. Mirrors the MCP / CLI
+#' surface `pane.files`.
 #'
 #' @param path Absolute directory path.
 #' @return `NULL` invisibly. Side-effect only.
 #' @export
-pane_files_navigate <- function(path) {
+pane_files <- function(path) {
   if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
     stop("`path` must be a non-empty length-1 character vector", call. = FALSE)
   }
