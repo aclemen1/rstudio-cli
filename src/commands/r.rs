@@ -117,6 +117,80 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "r",
+        name: "kill",
+        summary: "Terminate a background R job started with `r exec --async`.",
+        description: "Looks up the job handle stored in the R session's \
+                      .rstudio_cli_async_jobs environment and calls \
+                      callr's process$kill() (SIGTERM). With --tree, kills \
+                      the process AND all its descendants (process$kill_tree()) \
+                      — useful when the async code spawned child processes \
+                      via system(), processx, etc. The job entry is removed \
+                      from the registry regardless of whether the process \
+                      had already finished. Idempotent: killing an already-\
+                      dead job returns {status: \"already-done\"}.",
+        params: &[
+            ParamSpec {
+                name: "id",
+                kind: ParamKind::String,
+                required: true,
+                default: None,
+                allowed: &[],
+                description: "Job ID returned by `r exec --async`.",
+            },
+            ParamSpec {
+                name: "--tree",
+                kind: ParamKind::Bool,
+                required: false,
+                default: Some("false"),
+                allowed: &[],
+                description: "Kill the process tree (descendants too), not just the root process.",
+            },
+        ],
+        examples: &[
+            ExampleSpec {
+                cmd: "rstudio r kill job_20260601_123456_789",
+                explanation: "SIGTERM the async job. Returns {id, status: \"killed\"}.",
+            },
+            ExampleSpec {
+                cmd: "rstudio r kill job_20260601_123456_789 --tree",
+                explanation: "Also terminate any child processes the job spawned.",
+            },
+        ],
+        returns: "{id: string, status: \"killed\" | \"already-done\"}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "Job ID not found in the active R session.",
+        }],
+        rstudioapi_fn: None,
+        rpc_method: Some("execute_r_code"),
+    },
+    ActionSpec {
+        category: "r",
+        name: "interrupt",
+        summary: "Interrupt the R code currently running in the main console.",
+        description: "Equivalent of pressing the Stop button in RStudio's \
+                      console pane, or sending SIGINT to the rsession's R \
+                      interpreter. Targets the foreground R execution — the \
+                      one that `r send` (or a user-typed expression) is \
+                      blocked on. Fires the rsession `interrupt` JSON-RPC \
+                      and returns immediately; the blocked `r send` (in \
+                      another shell / agent) will return with kind=r_error \
+                      and message=\"R execution was interrupted\". Has no \
+                      effect on async jobs (use `r kill`) or on jobs in \
+                      the Jobs pane (use `job kill`).",
+        params: &[],
+        examples: &[ExampleSpec {
+            cmd: "rstudio r interrupt",
+            explanation: "From a second shell, interrupt whatever long expression \
+                          the user (or another agent's `r send`) is running.",
+        }],
+        returns: "{interrupted: true}",
+        errors: &[],
+        rstudioapi_fn: None,
+        rpc_method: Some("interrupt"),
+    },
+    ActionSpec {
+        category: "r",
         name: "send",
         summary: "Send R code to the user's visible console and capture its output.",
         description: "Installs a helper `ℝ` in the session, then sends `ℝ(~{ code })` \
@@ -201,6 +275,15 @@ pub enum RCmd {
     },
     /// Check the status of a background R job started with `r exec --async`.
     Poll { id: String },
+    /// Terminate a background R job started with `r exec --async` (callr SIGTERM).
+    Kill {
+        id: String,
+        /// Kill the whole process tree (descendants too), not just the root.
+        #[arg(long)]
+        tree: bool,
+    },
+    /// Interrupt the R code currently running in the main console (equivalent of Stop).
+    Interrupt,
     /// Send R code to the user's visible console and capture its output.
     Send {
         code: String,
@@ -234,6 +317,8 @@ pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
             Ok(Some(json!({ "output": output })))
         }
         RCmd::Poll { id } => poll_async(rpc, id),
+        RCmd::Kill { id, tree } => kill_async(rpc, id, *tree),
+        RCmd::Interrupt => interrupt(rpc),
         RCmd::Send {
             code,
             no_capture,
@@ -446,12 +531,13 @@ fn build_capture_fn(result_path: &str, env_name: &str) -> String {
 }
 
 fn exec_async(rpc: &RpcClient<'_>, code: &str) -> Result<Option<Value>, CliError> {
+    // `callr` is a hard precheck (see `r_package::R_HARD_DEPS`): the CLI
+    // refuses to dispatch any RPC if it's not installed, so by the time
+    // this code reaches the rsession the package is guaranteed loadable.
+    // No defensive `requireNamespace("callr", ...)` guard needed here.
     let code_quoted = r_quote(code);
     let r_code = format!(
         r#"local({{
-  if (!requireNamespace("callr", quietly = TRUE)) {{
-    stop("callr is required for async execution. Install with: install.packages('callr')")
-  }}
   if (!exists(".rstudio_cli_async_jobs", envir = globalenv())) {{
     assign(".rstudio_cli_async_jobs", new.env(parent = emptyenv()), envir = globalenv())
   }}
@@ -514,6 +600,58 @@ fn poll_async(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> 
     Ok(Some(parsed))
 }
 
+fn build_kill_async_code(id: &str, tree: bool) -> String {
+    // Mirrors poll_async()'s lookup, then dispatches to process$kill() /
+    // process$kill_tree() depending on --tree. We don't error on
+    // is_alive()==FALSE: a kill against an already-finished job is a no-op
+    // and returns {status:"already-done"} so callers can be idempotent.
+    let id_quoted = r_quote(id);
+    let kill_call = if tree {
+        "proc$kill_tree()"
+    } else {
+        "proc$kill()"
+    };
+    format!(
+        r#"local({{
+  job_id <- {id_quoted}
+  if (!exists(".rstudio_cli_async_jobs", envir = globalenv())) {{
+    stop(paste0("Job not found: ", job_id))
+  }}
+  jobs <- get(".rstudio_cli_async_jobs", envir = globalenv())
+  if (!exists(job_id, envir = jobs)) {{
+    stop(paste0("Job not found: ", job_id))
+  }}
+  proc <- get(job_id, envir = jobs)
+  status <- if (proc$is_alive()) {{
+    try({kill_call}, silent = TRUE)
+    "killed"
+  }} else {{
+    "already-done"
+  }}
+  rm(list = job_id, envir = jobs)
+  cat(jsonlite::toJSON(list(id = job_id, status = status), auto_unbox = TRUE))
+}})"#
+    )
+}
+
+fn kill_async(rpc: &RpcClient<'_>, id: &str, tree: bool) -> Result<Option<Value>, CliError> {
+    let r_code = build_kill_async_code(id, tree);
+    let raw = r_eval::run(rpc, &r_code)?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::internal(format!("r kill: invalid JSON: {e}; raw: {raw}")))?;
+    Ok(Some(parsed))
+}
+
+fn interrupt(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
+    // The `interrupt` RPC is handled by rsession on a side channel — it
+    // signals the R interpreter to abort its current evaluation (same as
+    // the Stop button in the console pane). It returns essentially
+    // immediately even if R is busy. We discard the (typically empty)
+    // result and return a canonical envelope so agents can assert success.
+    rpc.rpc("interrupt", Vec::new())?;
+    Ok(Some(json!({ "interrupted": true })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,6 +689,90 @@ mod tests {
         assert!(
             code.contains(r#"".GlobalEnv""#) && code.contains("globalenv()"),
             "default env_name must resolve to globalenv()"
+        );
+    }
+
+    #[test]
+    fn registry_exposes_kill_and_interrupt() {
+        // Catalog contract: `rstudio schema r kill` and `rstudio schema r
+        // interrupt` must succeed. Guards against accidental removal from
+        // the ACTIONS slice — also worth catching here as well as in the
+        // mcp dispatch table test, since these actions are visible to
+        // agents through both surfaces.
+        assert!(
+            ACTIONS.iter().any(|a| a.name == "kill"),
+            "r.kill must be in the registry"
+        );
+        assert!(
+            ACTIONS.iter().any(|a| a.name == "interrupt"),
+            "r.interrupt must be in the registry"
+        );
+    }
+
+    #[test]
+    fn interrupt_action_documents_rpc_method_interrupt() {
+        // The RPC method name was empirically validated against rsession —
+        // pin it so a typo refactor (e.g. "interrupt_r") is caught at test
+        // time instead of at runtime against a live session.
+        let interrupt = ACTIONS
+            .iter()
+            .find(|a| a.name == "interrupt")
+            .expect("r.interrupt action");
+        assert_eq!(
+            interrupt.rpc_method,
+            Some("interrupt"),
+            "r.interrupt must declare the rsession RPC method it issues"
+        );
+    }
+
+    #[test]
+    fn kill_async_default_uses_kill_not_kill_tree() {
+        let code = build_kill_async_code("job_abc", false);
+        assert!(
+            code.contains("proc$kill()"),
+            "without --tree, must call proc$kill(): {code}"
+        );
+        assert!(
+            !code.contains("proc$kill_tree()"),
+            "without --tree, must NOT call proc$kill_tree(): {code}"
+        );
+    }
+
+    #[test]
+    fn kill_async_tree_uses_kill_tree() {
+        let code = build_kill_async_code("job_abc", true);
+        assert!(
+            code.contains("proc$kill_tree()"),
+            "with --tree, must call proc$kill_tree(): {code}"
+        );
+        assert!(
+            !code.contains("proc$kill()"),
+            "with --tree, must NOT call proc$kill() alone: {code}"
+        );
+    }
+
+    #[test]
+    fn kill_async_quotes_id_safely() {
+        // The id flows from CLI args — any quotes/backslashes in it must be
+        // escaped so the R parser doesn't reinterpret them as a string boundary
+        // or a control sequence. Without r_quote, an id of `"; system("rm -rf");"`
+        // would be a trivially exploitable injection.
+        let code = build_kill_async_code(r#"abc"def\xyz"#, false);
+        assert!(
+            code.contains(r#""abc\"def\\xyz""#),
+            "id must be R-quoted: {code}"
+        );
+    }
+
+    #[test]
+    fn kill_async_emits_idempotent_status_branches() {
+        let code = build_kill_async_code("job_abc", false);
+        // Both branches must be present: running → "killed", finished → "already-done".
+        // The contract documented in the ActionSpec and the skill depends on it.
+        assert!(code.contains("\"killed\""), "missing killed branch: {code}");
+        assert!(
+            code.contains("\"already-done\""),
+            "missing already-done branch: {code}"
         );
     }
 

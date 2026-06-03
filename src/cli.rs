@@ -420,8 +420,12 @@ fn needs_write_lock(cmd: &Command) -> bool {
         | Command::Editor(editor::EditorCmd::List) => false,
         Command::Editor(_) => true,
 
-        // R: poll is read-only, exec / send are writes.
+        // R: poll is read-only; kill mutates the async-job registry; exec / send
+        // are writes. Interrupt is a write conceptually but MUST skip the lock —
+        // its raison d'être is to unblock whoever currently holds it (typically
+        // an `r send` waiting for a capture). Otherwise: classic deadlock.
         Command::R(r::RCmd::Poll { .. }) => false,
+        Command::R(r::RCmd::Interrupt) => false,
         Command::R(_) => true,
 
         // Console: history / actions / context are reads, activate is a write.

@@ -188,6 +188,148 @@ fn r_exec_async_and_poll() {
     }
 }
 
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn r_kill_terminates_running_async_job() {
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+
+    // Launch a slow async job, give it a beat to actually start, then kill.
+    let launched = r_cmd::run(
+        &RCmd::Exec {
+            code: "Sys.sleep(60); 42".into(),
+            timeout: None,
+            r#async: true,
+        },
+        &rpc,
+    )
+    .expect("r exec --async")
+    .expect("some result");
+    let job_id = launched
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("job id")
+        .to_string();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let killed = r_cmd::run(
+        &RCmd::Kill {
+            id: job_id.clone(),
+            tree: false,
+        },
+        &rpc,
+    )
+    .expect("r kill")
+    .expect("some result");
+    assert_eq!(
+        killed.get("status").and_then(|v| v.as_str()),
+        Some("killed"),
+        "expected status=killed on a running job, got: {killed:?}"
+    );
+
+    // After kill, the registry entry is gone — `r poll` must report the
+    // job as not found. This guards the idempotency contract.
+    let poll_err = r_cmd::run(&RCmd::Poll { id: job_id.clone() }, &rpc)
+        .expect_err("poll after kill must error");
+    assert!(
+        poll_err.message.contains("Job not found"),
+        "expected 'Job not found' error, got: {poll_err:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn r_kill_already_finished_returns_already_done() {
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+
+    // Tiny job that completes almost immediately.
+    let launched = r_cmd::run(
+        &RCmd::Exec {
+            code: "1 + 1".into(),
+            timeout: None,
+            r#async: true,
+        },
+        &rpc,
+    )
+    .expect("r exec --async")
+    .expect("some result");
+    let job_id = launched
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("job id")
+        .to_string();
+    // Generous wait — callr::r_bg startup + 1+1 + teardown.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let killed = r_cmd::run(
+        &RCmd::Kill {
+            id: job_id,
+            tree: false,
+        },
+        &rpc,
+    )
+    .expect("r kill on done job")
+    .expect("some result");
+    assert_eq!(
+        killed.get("status").and_then(|v| v.as_str()),
+        Some("already-done"),
+        "killing an already-finished job must yield status=already-done, got: {killed:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn r_interrupt_unblocks_a_blocked_r_send() {
+    // This test exercises the two-shell scenario from a single process:
+    // spawn `r send` on a worker thread (which then blocks on a long
+    // Sys.sleep loop in the rsession), then call `r interrupt` from the
+    // main thread. The worker must return with an r_error message
+    // "R execution was interrupted" — the canonical signal contract.
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+
+    // The serial lock guarantees no OTHER live test runs concurrently, but
+    // inside this test we need a separate Session/RpcClient for the worker
+    // since RpcClient is !Send (interior mutability via RefCell). Detect a
+    // second session from the same env.
+    let worker_session = Session::detect(SessionOverrides::default()).expect("worker session");
+
+    let handle = std::thread::spawn(move || {
+        let worker_rpc = RpcClient::new(&worker_session);
+        r_cmd::run(
+            &RCmd::Send {
+                code: "for (i in 1:600) Sys.sleep(0.1)".into(),
+                no_capture: false,
+                timeout: Some(60.0),
+            },
+            &worker_rpc,
+        )
+    });
+
+    // Give the worker time to dispatch and start sleeping in R.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Fire the interrupt. Returns immediately on success.
+    let interrupted = r_cmd::run(&RCmd::Interrupt, &rpc)
+        .expect("r interrupt")
+        .expect("some result");
+    assert_eq!(
+        interrupted.get("interrupted").and_then(|v| v.as_bool()),
+        Some(true),
+        "r interrupt must return {{interrupted: true}}, got: {interrupted:?}"
+    );
+
+    // The worker's blocked r_send must now resolve with the canonical
+    // "R execution was interrupted" error.
+    let worker_result = handle.join().expect("worker thread");
+    let err = worker_result.expect_err("r send must error after interrupt");
+    assert!(
+        err.message.contains("R execution was interrupted"),
+        "expected canonical interrupt message, got: {err:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // r send
 // ---------------------------------------------------------------------------
@@ -1021,6 +1163,107 @@ fn job_add_lifecycle() {
 
     // Teardown: explicit remove (auto_remove was disabled).
     job_cmd::run(&JobCmd::Remove { id: job_id }, &rpc).expect("job remove");
+}
+
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn job_kill_manual_add_sets_cancelled_state_without_hard_kill() {
+    // Manual jobs created via `job add` have no underlying sub-process, so
+    // the rsession `execute_job_action` RPC has nothing to terminate. The
+    // contract is: cancelled=true (jobSetState fallback ran), hard_killed=false.
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+
+    let added = job_cmd::run(
+        &JobCmd::Add {
+            name: "smoke-kill-manual".into(),
+            status: "running".into(),
+            progress_units: 100,
+            running: true,
+            auto_remove: false,
+            show: false,
+        },
+        &rpc,
+    )
+    .expect("job add")
+    .expect("some");
+    let job_id = added
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("job id")
+        .to_string();
+
+    let killed = job_cmd::run(&JobCmd::Kill { id: job_id.clone() }, &rpc)
+        .expect("job kill")
+        .expect("some");
+    assert_eq!(
+        killed.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true),
+        "cancelled must be true (jobSetState fallback): {killed:?}"
+    );
+    assert_eq!(
+        killed.get("hard_killed").and_then(|v| v.as_bool()),
+        Some(false),
+        "hard_killed must be false for a manual job (no sub-process): {killed:?}"
+    );
+
+    // Teardown: jobSetState("cancelled") with the default auto_remove may
+    // have auto-removed the entry — Remove is best-effort here.
+    let _ = job_cmd::run(&JobCmd::Remove { id: job_id }, &rpc);
+}
+
+#[test]
+#[ignore = "requires a live RStudio session"]
+fn job_kill_run_script_hard_kills_the_subprocess() {
+    // `job run-script` jobs DO have a real sub-process — the rsession's
+    // execute_job_action RPC actually terminates it, so the contract is:
+    // cancelled=true, hard_killed=true.
+    let (session, _guard) = require_live!();
+    let rpc = RpcClient::new(&session);
+
+    // Write a script that would run for a full minute if not stopped.
+    let script_path =
+        std::env::temp_dir().join(format!("rstudio-cli-kill-test-{}.R", std::process::id()));
+    fs::write(&script_path, "Sys.sleep(60)\n").expect("write script");
+
+    let launched = job_cmd::run(
+        &JobCmd::RunScript {
+            path: script_path.to_string_lossy().into_owned(),
+            name: Some("smoke-kill-script".into()),
+            working_dir: None,
+            import_env: false,
+            export_env: String::new(),
+        },
+        &rpc,
+    )
+    .expect("job run-script")
+    .expect("some");
+    let job_id = launched
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("job id")
+        .to_string();
+    // Give RStudio a moment to actually spawn the R sub-process.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let killed = job_cmd::run(&JobCmd::Kill { id: job_id.clone() }, &rpc)
+        .expect("job kill")
+        .expect("some");
+    assert_eq!(
+        killed.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true),
+        "cancelled must be true: {killed:?}"
+    );
+    assert_eq!(
+        killed.get("hard_killed").and_then(|v| v.as_bool()),
+        Some(true),
+        "hard_killed must be true for a run-script job (the rsession \
+         RPC `execute_job_action` reaped the sub-process): {killed:?}"
+    );
+
+    // Teardown.
+    let _ = fs::remove_file(&script_path);
+    let _ = job_cmd::run(&JobCmd::Remove { id: job_id }, &rpc);
 }
 
 #[test]

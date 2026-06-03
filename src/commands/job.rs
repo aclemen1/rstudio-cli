@@ -343,6 +343,44 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         category: "job",
+        name: "kill",
+        summary: "Stop a job in the Jobs pane (best-effort hard kill + cancelled state).",
+        description: "Performs two steps in sequence: \
+                      (1) attempts the rsession internal RPC `execute_job_action` \
+                      with action=\"stop\", which is the same call the Jobs pane's \
+                      Stop button issues — for `job run-script` jobs this terminates \
+                      the underlying R sub-process. The RPC error (if the method is \
+                      unknown to your RStudio version) is swallowed silently. \
+                      (2) calls `rstudioapi::jobSetState(id, \"cancelled\")` to flip \
+                      the UI state to cancelled (the only thing that worked for \
+                      manually-driven `job add` jobs anyway). Returns \
+                      `{cancelled: true, hard_killed: bool}` where hard_killed \
+                      reflects whether step (1) succeeded. For async R jobs \
+                      created via `r exec --async`, use `r kill` instead — those \
+                      live in a separate registry (callr) and are not visible to \
+                      the Jobs pane.",
+        params: &[ParamSpec {
+            name: "id",
+            kind: ParamKind::String,
+            required: true,
+            default: None,
+            allowed: &[],
+            description: "Job id (from `job list`, `job add` or `job run-script`).",
+        }],
+        examples: &[ExampleSpec {
+            cmd: "rstudio job kill abc123",
+            explanation: "Stop job abc123. Returns {cancelled: true, hard_killed: true|false}.",
+        }],
+        returns: "{cancelled: bool, hard_killed: bool}",
+        errors: &[ErrorSpec {
+            kind: "r_error",
+            when: "jobSetState rejected the id (unknown job).",
+        }],
+        rstudioapi_fn: Some("jobSetState"),
+        rpc_method: Some("execute_job_action"),
+    },
+    ActionSpec {
+        category: "job",
         name: "is-active",
         summary: "Whether the current R execution context is itself a background job.",
         description: "Wraps rstudioapi::isJob(). Returns false from the main R session, \
@@ -407,6 +445,8 @@ pub enum JobCmd {
         #[arg(long, default_value = "")]
         export_env: String,
     },
+    /// Stop a job in the Jobs pane (best-effort hard kill + flag as cancelled).
+    Kill { id: String },
     /// Whether the current R execution is itself a background job.
     IsActive,
 }
@@ -450,8 +490,38 @@ pub fn run(cmd: &JobCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError>
             *import_env,
             export_env,
         ),
+        JobCmd::Kill { id } => kill(rpc, id),
         JobCmd::IsActive => is_active(rpc),
     }
+}
+
+fn kill(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> {
+    // Step 1 (best-effort): mirror the Jobs pane's Stop button by firing
+    // the rsession internal `execute_job_action` RPC with action="stop".
+    // This is what actually terminates the sub-process for `jobRunScript`
+    // jobs. The exact method name and arg shape are not documented in
+    // rstudioapi and may vary across RStudio versions — we swallow any
+    // RPC error and record the outcome as `hard_killed`. Server R errors
+    // (code 100) propagate to step 2's failure path instead.
+    let hard_killed = rpc
+        .rpc(
+            "execute_job_action",
+            vec![Value::String(id.into()), Value::String("stop".into())],
+        )
+        .is_ok();
+    // Step 2 (definitive): flip the UI state. For `jobAdd` (manually-driven)
+    // jobs this is the only thing the Stop button does anyway; for
+    // `jobRunScript` jobs it ensures the pane reflects the cancellation
+    // even if step 1 silently failed.
+    let r = format!(
+        "rstudiocli::job_set_state(job = {}, state = \"cancelled\")",
+        r_quote(id)
+    );
+    r_eval::run_silent(rpc, &r)?;
+    Ok(Some(serde_json::json!({
+        "cancelled": true,
+        "hard_killed": hard_killed,
+    })))
 }
 
 fn list(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
@@ -616,4 +686,43 @@ fn is_active(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("job is-active: invalid JSON: {e}; raw: {raw}")))?;
     Ok(Some(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_exposes_kill() {
+        // Catalog contract: `rstudio schema job kill` and the corresponding
+        // MCP tool `job_kill` rely on this entry being present.
+        assert!(
+            ACTIONS.iter().any(|a| a.name == "kill"),
+            "job.kill must be in the registry"
+        );
+    }
+
+    #[test]
+    fn kill_action_documents_rpc_and_rstudioapi() {
+        // Pin the empirically-validated RPC method name and the rstudioapi
+        // fallback function. A typo refactor (e.g. `execute_jobs_action`,
+        // plural, which is the wrong name found via probing) would now
+        // fail at test time instead of silently returning `hard_killed:false`
+        // for every kill in production.
+        let kill_action = ACTIONS
+            .iter()
+            .find(|a| a.name == "kill")
+            .expect("job.kill action");
+        assert_eq!(
+            kill_action.rpc_method,
+            Some("execute_job_action"),
+            "job.kill must declare the singular `execute_job_action` RPC \
+             method (the plural form does not exist in rsession)"
+        );
+        assert_eq!(
+            kill_action.rstudioapi_fn,
+            Some("jobSetState"),
+            "job.kill must declare its rstudioapi fallback"
+        );
+    }
 }

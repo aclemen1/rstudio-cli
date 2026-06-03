@@ -223,6 +223,25 @@ When to prefer chained `tools/call`s:
 - **Open a file at a specific line**: `editor_open({path, line})`.
   Non-modal — the file appears in the Source pane. Use `editor_edit`
   for the modal `edit()` dialog.
+- **Stop a long-running computation**: three distinct surfaces, three
+  distinct tools — pick by what you launched.
+  - `r_interrupt()` — equivalent of the Stop button in the console
+    pane. Targets the foreground R execution (a blocked `r_send`, a
+    user-typed loop, …). Returns immediately; the blocked `r_send`
+    call (from another agent or session) resolves with `isError:true`
+    and `message="R execution was interrupted"`. Safe when nothing
+    is running (no-op). **Bypasses the per-session writer lock by
+    design** — its purpose is to unblock whoever holds it.
+  - `r_kill({id, tree?})` — terminate an async job created by
+    `r_exec({async: true})` (callr sub-process). SIGTERM; with
+    `tree: true`, also descendants. Returns
+    `{status: "killed" | "already-done"}`.
+  - `job_kill({id})` — stop a job in the Jobs pane (from `job_add`
+    or `job_run_script`). Best-effort: fires rsession's internal
+    "stop" RPC if available, then forces the UI state to `cancelled`.
+    Returns `{cancelled: true, hard_killed: bool}` — `hard_killed:false`
+    means the pane label flipped but the underlying R sub-process
+    may still be running (depends on RStudio version).
 - **Read the user's recent console history**: `console_history({limit: N})`.
 - **Read RStudio Terminal output**: `term_list` → find the id, then
   `term_buffer({id, limit: N})`. To run a shell command:

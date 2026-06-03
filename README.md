@@ -40,8 +40,8 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.17.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 15 categories and 97 actions. Multi-agent safety via per-session
+**v0.18.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 15 categories and 100 actions. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
 with embedded MCP-flavored agent guidance via `initialize.instructions`.
@@ -62,7 +62,7 @@ and **RStudio Desktop** (macOS).
 | category | actions | summary |
 |---|---|---|
 | `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` `set-marks` | Source pane and document operations |
-| `r`      | `exec` `send` `poll` | Run R code silently, or visibly with captured output; async via callr |
+| `r`      | `exec` `send` `poll` `kill` `interrupt` | Run R code silently, or visibly with captured output; async via callr; stop running R |
 | `console`| `history` `actions` `context` | Console history + buffer + live editor context |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
 | `env`    | `list` `contents` `info` | Live R environment inspection |
@@ -70,7 +70,7 @@ and **RStudio Desktop** (macOS).
 | `project`| `current` `open` `new` `init` `clone` | Project lifecycle: create / init / clone / open / introspect |
 | `session`| `info` `restart` `list` | Whole-session lifecycle |
 | `pref`   | `read` `write` `read-rstudio` `write-rstudio` `get-persistent` `set-persistent` | Preferences + persistent values |
-| `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `is-active` | Background Jobs pane |
+| `job`    | `list` `add` `remove` `set-progress` `add-progress` `set-state` `set-status` `add-output` `run-script` `kill` `is-active` | Background Jobs pane |
 | `ui`     | `dialog` `update-dialog` `prompt` `question` `select-file` `select-dir` `ask-password` `ask-secret` | Modal prompts (BLOCKING) |
 | `observe`| `stream` `events` `replay` | Live JSONL stream; event-type catalog; replay a captured stream |
 | `policy` | `show` `block` `unblock` | Per-user block list (category or action) |
@@ -143,6 +143,7 @@ will correct it promptly.
 | List / add / remove jobs | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Progress tracking (units, state, output stream) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Run an R script as a background job | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Stop a running job / interrupt the R console | ✓ | ✗ | ✗ | ✗ | ✗ |
 | **Modal UI** | | | | | |
 | Dialog / prompt / question modals | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Password / secret prompts | ✓ | ✗ | ✗ | ✗ | ✗ |
@@ -260,7 +261,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.17.0
+rstudio version                 # 0.18.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

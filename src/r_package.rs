@@ -49,11 +49,15 @@ const R_PACKAGE_NAME: &str = "rstudiocli";
 /// warning). We probe for them first so we can surface a clear,
 /// actionable message instead.
 ///
-/// `callr` is intentionally NOT in this list: it's only needed by
-/// `rstudio r --async`, and the call site in `commands/r.rs` already
-/// guards itself with `requireNamespace("callr", ...)`. Treating it as
-/// hard here would force every CLI/MCP user to install it.
-const R_HARD_DEPS: &[&str] = &["rstudioapi", "jsonlite"];
+/// Order matches DESCRIPTION's `Imports:` block: `rstudioapi` is the
+/// API surface, `callr` powers `r exec --async`, `jsonlite` serialises
+/// every R-side response. All three are mandatory for the tarball to
+/// install at all — the `Imports:` declaration in DESCRIPTION makes
+/// `R CMD INSTALL` refuse to proceed otherwise. Keeping `callr` in
+/// the hard-dep precheck means users get the clean upfront error
+/// (with the exact `install.packages(...)` command) instead of the
+/// generic "had non-zero exit status" from a failed tarball install.
+const R_HARD_DEPS: &[&str] = &["rstudioapi", "callr", "jsonlite"];
 
 /// Memoise "we already ensured installation in this process" so that
 /// chains of CLI invocations or MCP tool calls don't repeat the
@@ -197,7 +201,7 @@ pub fn missing_deps_error(missing: &[String]) -> CliError {
          {list}\n\n\
          Install them in your R session with:\n  \
          {install_cmd}\n\n\
-         Then retry the call. (callr is optional; only needed for `rstudio r --async`.)"
+         Then retry the call."
     ))
 }
 

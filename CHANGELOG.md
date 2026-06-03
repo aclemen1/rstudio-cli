@@ -4,6 +4,45 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-06-03
+
+### Changed
+
+- **`callr` is now an officially required dependency.** It was already
+  declared in `Imports:` of the `rstudiocli` companion R package (so
+  `R CMD INSTALL` already refused to proceed without it), but the
+  Rust-side `R_HARD_DEPS` precheck explicitly excluded it, the error
+  message claimed it was optional, and the `r exec --async` call site
+  guarded itself with a `requireNamespace("callr", ...)` check.
+  This inconsistency caused opaque "had non-zero exit status" install
+  failures for users missing `callr` — now they get the same upfront,
+  actionable message that already shielded missing `rstudioapi` /
+  `jsonlite`: a clear list of missing packages and the exact
+  `install.packages(...)` command. The dead defensive check at the
+  `r exec --async` site is removed; the precheck is the single source
+  of truth.
+
+### Added
+
+- **Three new "stop running R" commands**, one per surface (no umbrella
+  command — each surface has different semantics):
+  - `r interrupt` — equivalent of the console pane's Stop button.
+    Fires the rsession `interrupt` JSON-RPC; the foreground R execution
+    aborts and any blocked `r send` resolves with `kind=r_error`,
+    `message="R execution was interrupted"`. Returns `{interrupted: true}`.
+  - `r kill <id> [--tree]` — terminate an async job started with
+    `r exec --async`. Calls callr's `process$kill()` (SIGTERM), or
+    `process$kill_tree()` with `--tree` to also reap descendants.
+    Idempotent: `{status: "killed" | "already-done"}`.
+  - `job kill <id>` — stop a job in the Jobs pane (created via
+    `job add` or `job run-script`). Best-effort: fires the rsession
+    internal `execute_job_action` RPC with `action="stop"` (swallowed
+    on unknown-method to stay compatible across RStudio versions),
+    then always flips the UI state via `jobSetState(id, "cancelled")`.
+    Returns `{cancelled: true, hard_killed: bool}` so callers can tell
+    whether the underlying sub-process was actually reaped or only
+    the pane label changed.
+
 ## [0.17.0] — 2026-05-15
 
 ### Added

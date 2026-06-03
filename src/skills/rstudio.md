@@ -268,6 +268,27 @@ it's intended for debugging and solo scripts.
   `rstudio editor open <path> --line N`. This is the non-modal path —
   the file appears in the Source pane. `editor edit <path>` is the
   *modal* path (R `edit()` dialog with Save/Cancel).
+- **Stop a long-running computation**: three distinct surfaces, three
+  distinct commands — pick by what you launched.
+  - `rstudio r interrupt` — equivalent of the Stop button in the
+    console pane. Targets the foreground R execution (a blocked
+    `r send`, a user-typed loop, …). Returns immediately; the blocked
+    `r send` in the other shell ends with `kind=r_error`,
+    `message="R execution was interrupted"`. Fire-and-forget; safe
+    when nothing is running (no-op). **Bypasses the per-session lock
+    by design** — its purpose is to unblock whoever currently holds
+    the lock, so it must not wait for them to release it.
+  - `rstudio r kill <id> [--tree]` — terminate an async job created
+    by `r exec --async` (callr sub-process). Sends SIGTERM; with
+    `--tree`, also kills descendants spawned via `system()` /
+    `processx`. Returns `{status: "killed" | "already-done"}`.
+  - `rstudio job kill <id>` — stop a job in the Jobs pane (created
+    by `job add` or `job run-script`). Best-effort: fires the
+    rsession internal "stop" RPC if available, then forces the UI
+    state to `cancelled`. Returns `{cancelled: true, hard_killed: bool}`
+    — `hard_killed=false` means the underlying R sub-process may
+    still be running (rare; depends on RStudio version), only the
+    pane label changed.
 - **Read what the user typed lately**: `rstudio console history --limit N`.
 - **Read shell terminal output (RStudio Terminal pane)**: `rstudio term list`
   to find the id, then `rstudio term buffer <id> [--limit N]`. To run a

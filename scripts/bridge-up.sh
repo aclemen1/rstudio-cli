@@ -389,7 +389,7 @@ cmd_test_live() {
 #   scripts/bridge-up.sh test-destructive jsonlite # only jsonlite
 cmd_test_destructive() {
   local filter="${1:-}"
-  local packages=("jsonlite" "rstudioapi")
+  local packages=("jsonlite" "rstudioapi" "callr")
   if [[ -n "$filter" ]]; then
     packages=("$filter")
   fi

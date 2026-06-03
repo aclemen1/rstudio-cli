@@ -133,3 +133,14 @@ fn destructive_precheck_reports_missing_jsonlite() {
 fn destructive_precheck_reports_missing_rstudioapi() {
     assert_missing_dep_is_surfaced("rstudioapi");
 }
+
+#[test]
+#[ignore = "destructive: requires bridge-up.sh test-destructive callr"]
+fn destructive_precheck_reports_missing_callr() {
+    // `callr` joined `R_HARD_DEPS` in 0.18.0 once it was acknowledged as
+    // an officially mandatory dependency (already in DESCRIPTION's
+    // Imports:, but the precheck previously excluded it, leaving users
+    // with an opaque "had non-zero exit status" tarball install error
+    // when callr was missing). This test guards the new contract.
+    assert_missing_dep_is_surfaced("callr");
+}
