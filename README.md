@@ -403,6 +403,93 @@ a Cline MCP server, and a shell `rstudio editor write` invocation
 all serialise correctly via the kernel without any manual
 coordination.
 
+### Remote / containerized MCP
+
+`rstudio mcp` talks to the rsession over a Unix socket under
+`/var/run/rstudio-server/`, so the binary must run **on the same
+host/container as the rsession**. When the rsession lives in a remote
+container (Kubernetes pod, Docker container, SSH host), you don't ship
+sockets across the network — you wrap `rstudio mcp` in a transport
+that relays stdin/stdout verbatim, and the MCP client on your laptop
+speaks JSON-RPC straight through it.
+
+`kubectl exec -i` is the canonical example. Drop this into your
+client's `.mcp.json` (or equivalent) and the JSON-RPC frames flow
+through the tunnel unchanged — handshake, tool calls, notifications,
+all of it:
+
+```json
+{
+  "mcpServers": {
+    "rstudio-remote": {
+      "type": "stdio",
+      "command": "kubectl",
+      "args": [
+        "exec", "-i",
+        "-n", "<NAMESPACE>",
+        "--context", "<KUBE_CONTEXT>",
+        "deployment/<DEPLOYMENT>",
+        "-c", "<CONTAINER>",
+        "--",
+        "sh", "-c",
+        "USER=<RSTUDIO_USER> exec /home/linuxbrew/.linuxbrew/bin/rstudio mcp"
+      ]
+    }
+  }
+}
+```
+
+**Four non-obvious constraints that fail silently if you miss them:**
+
+1. **No PTY.** Use `kubectl exec -i` only — never `-t` / `-it`. A
+   pseudo-TTY injects terminal control sequences that corrupt
+   JSON-RPC framing. Symptom: the `initialize` handshake fails or the
+   stream desyncs erratically. Same rule for any transport:
+   `docker exec` without `-t`, `ssh` without `-t`.
+2. **Export `USER` explicitly.** `kubectl exec` (and most non-login
+   `exec`s) do **not** propagate `$USER`. `rstudio mcp` needs it to
+   locate the rsession; without it you get a `cannot determine user`
+   error. A login shell alone is not enough — set `USER=<rstudio_user>`
+   inline before `exec rstudio mcp`.
+3. **Absolute path to the binary.** Non-login `exec` doesn't inherit
+   the enriched `PATH` (linuxbrew, etc.), so a bare `rstudio` won't
+   resolve. Use the full path (e.g.
+   `/home/linuxbrew/.linuxbrew/bin/rstudio`).
+4. **Target a deployment, not a pod.** Pods are ephemeral; pinning
+   `deployment/<name>` (or a stable service) lets the wiring survive
+   pod restarts. An in-flight stdio connection still drops when the
+   pod is recreated — the client just has to reconnect the server
+   (in Claude Code: `/mcp` → Reconnect).
+
+**End-to-end smoke test** — one handshake is enough to validate the
+whole chain:
+
+```sh
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  | kubectl exec -i -n <NAMESPACE> --context <KUBE_CONTEXT> \
+      deployment/<DEPLOYMENT> -c <CONTAINER> -- \
+      sh -c 'USER=<RSTUDIO_USER> exec /home/linuxbrew/.linuxbrew/bin/rstudio mcp' \
+  | jq '.result.serverInfo.name'
+# → the rstudio-cli server name, no error.
+```
+
+**Other transports.** The recipe isn't kubectl-specific: anything that
+launches `rstudio mcp` in the rsession's context and shuttles
+stdin/stdout without a PTY works the same way — `docker exec -i`,
+`ssh <host> -- sh -c '…'`, `nsenter`, etc. Constraints 2 and 3
+(explicit `USER`, absolute binary path) hold for every transport;
+constraint 1 generalises to "do not allocate a TTY" on whatever tool
+you're using.
+
+**After editing `.mcp.json`** the client must (re)connect the server
+to pick up the change — in Claude Code, `/mcp` → Reconnect. Same
+operation after a pod is recreated.
+
+This pattern is in production at UNIL/UNISIS (project *endreas*),
+where each developer's R/RStudio devspace runs in a Kubernetes pod
+and a local Claude Code drives it through exactly this `.mcp.json`
+shape (auto-generated per devspace).
+
 ## Auto-detection
 
 The CLI reads the following at each invocation:
