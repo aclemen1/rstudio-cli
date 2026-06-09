@@ -4,6 +4,25 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] — 2026-06-09
+
+### Fixed
+
+- **Embedded `rstudiocli` companion package now installs into a
+  CLI-managed library**, out of reach of any renv project shim.
+  Previously the install used the default user library, which under
+  renv-active sessions either landed the tarball in the renv cache
+  without symlinking the project library (so the immediate
+  `requireNamespace()` check failed with "install.packages reported
+  success but 'rstudiocli' still not findable") or polluted the
+  user's `renv.lock` with an internal-only package. The new behaviour
+  installs into `tools::R_user_dir("rstudio-cli", "data")` and
+  prepends that directory to `.libPaths()` for the duration of the
+  R session. The lib is XDG-respecting, dedicated, and invisible to
+  the user's project state. Idempotent: the prepend is wrapped in
+  `unique()` and is now run at the top of every probe so freshly-
+  restarted rsessions self-heal on the next CLI call.
+
 ## [0.18.1] — 2026-06-09
 
 ### Fixed

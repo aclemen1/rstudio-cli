@@ -42,6 +42,30 @@ const R_PACKAGE_BUILD_ID: &str = include_str!(concat!(env!("OUT_DIR"), "/r-packa
 
 const R_PACKAGE_NAME: &str = "rstudiocli";
 
+/// R snippet that ensures a CLI-managed library directory exists and is
+/// the first entry of `.libPaths()` for the rest of the R session.
+///
+/// We install the embedded `rstudiocli` package into this dedicated lib
+/// rather than the default user library because the user's session may
+/// have a renv-isolated `.libPaths()` (extremely common in our target
+/// audience). Under renv, calling `install.packages()` with no `lib =`
+/// either installs into the renv cache without symlinking the project
+/// library (so `requireNamespace()` immediately after fails), or
+/// pollutes the user's renv.lock with our internal package. Both are
+/// wrong. A dedicated, out-of-renv lib (under `tools::R_user_dir()`,
+/// which respects `XDG_DATA_HOME`) sidesteps both issues — the bridge
+/// stays invisible to the user's project state.
+///
+/// Idempotent: running this snippet repeatedly is a no-op after the
+/// first call (dir already exists, lib path already prepended thanks
+/// to `unique()`). Cheap enough to inline at the top of every R probe
+/// so freshly-restarted rsessions self-heal.
+const RSTUDIOCLI_LIB_PREPEND: &str = "{ \
+    .rstudiocli_lib <- tools::R_user_dir('rstudio-cli', 'data'); \
+    dir.create(.rstudiocli_lib, recursive = TRUE, showWarnings = FALSE); \
+    .libPaths(unique(c(.rstudiocli_lib, .libPaths()))); \
+}";
+
 /// Hard runtime dependencies of the embedded `rstudiocli` R package.
 /// Listed in DESCRIPTION's `Imports:`; without them the tarball install
 /// fails opaquely (R prints `ERROR: dependencies ... are not available`
@@ -221,19 +245,23 @@ fn check_installed(rpc: &RpcClient<'_>) -> Result<InstallStatus, CliError> {
     // install. `install_from_embedded` then `unloadNamespace()`s the
     // stale one so the freshly-installed code takes over.
     let probe = format!(
-        "local({{\n  \
-            target_ver <- {ver}\n  \
-            target_bid <- {bid}\n  \
-            disk_ver <- tryCatch(as.character(utils::packageVersion({pkg})),\n                                  \
-                                 error = function(e) NULL)\n  \
-            if (is.null(disk_ver)) {{ cat('missing'); return(invisible()) }}\n  \
-            if (disk_ver != target_ver) {{ cat('disk_version_mismatch:', disk_ver); return(invisible()) }}\n  \
-            disk_bid <- tryCatch(\n               \
-                getFromNamespace('.rstudiocli_build_id', {pkg})(),\n               \
-                error = function(e) '<missing>')\n  \
-            if (disk_bid != target_bid) {{ cat('build_id_mismatch:', disk_bid); return(invisible()) }}\n  \
-            cat('ok')\n  \
-         }})",
+        "{{\n  \
+            {prepend}\n  \
+            local({{\n    \
+                target_ver <- {ver}\n    \
+                target_bid <- {bid}\n    \
+                disk_ver <- tryCatch(as.character(utils::packageVersion({pkg})),\n                                    \
+                                     error = function(e) NULL)\n    \
+                if (is.null(disk_ver)) {{ cat('missing'); return(invisible()) }}\n    \
+                if (disk_ver != target_ver) {{ cat('disk_version_mismatch:', disk_ver); return(invisible()) }}\n    \
+                disk_bid <- tryCatch(\n                 \
+                    getFromNamespace('.rstudiocli_build_id', {pkg})(),\n                 \
+                    error = function(e) '<missing>')\n    \
+                if (disk_bid != target_bid) {{ cat('build_id_mismatch:', disk_bid); return(invisible()) }}\n    \
+                cat('ok')\n  \
+            }})\n  \
+        }}",
+        prepend = RSTUDIOCLI_LIB_PREPEND,
         pkg = r_quote(R_PACKAGE_NAME),
         ver = r_quote(R_PACKAGE_VERSION),
         bid = r_quote(R_PACKAGE_BUILD_ID.trim()),
@@ -266,8 +294,11 @@ fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
         .map_err(|e| CliError::internal(format!("r_package: write tarball: {e}")))?;
 
     // install.packages with repos = NULL and type = "source" installs
-    // from a local tarball. We deliberately let R pick the user library;
-    // overriding lib= here would be surprising for the user.
+    // from a local tarball. We force `lib = .rstudiocli_lib` so the
+    // package lands in our CLI-managed library, out of reach of any
+    // renv project shim. The same prepend snippet is run first so the
+    // post-install `requireNamespace()` check sees the new lib in
+    // `.libPaths()` (mandatory under renv, harmless otherwise).
     //
     // After install, if the package was already loaded with a stale
     // version (common during development), the namespace must be
@@ -280,9 +311,10 @@ fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
     // requireNamespace() check confirms the install actually landed.
     let install_code = format!(
         "{{\n  \
+           {prepend}\n  \
            res <- withCallingHandlers(\n    \
              tryCatch({{\n      \
-               utils::install.packages({tarball}, repos = NULL, type = 'source', quiet = TRUE)\n      \
+               utils::install.packages({tarball}, repos = NULL, type = 'source', lib = .rstudiocli_lib, quiet = TRUE)\n      \
                if ({pkg} %in% loadedNamespaces()) tryCatch(unloadNamespace({pkg}), error = function(e) {{}})\n      \
                TRUE\n    \
              }}, error = function(e) {{ conditionMessage(e) }}),\n    \
@@ -290,8 +322,9 @@ fn install_from_embedded(rpc: &RpcClient<'_>) -> Result<(), CliError> {
              message = function(m) {{ invokeRestart('muffleMessage') }}\n  \
            )\n  \
            if (!isTRUE(res)) stop(\"install.packages returned non-TRUE: \", res, call. = FALSE)\n  \
-           if (!requireNamespace({pkg}, quietly = TRUE)) stop(\"install.packages reported success but {pkg} still not findable\", call. = FALSE)\n\
+           if (!requireNamespace({pkg}, quietly = TRUE)) stop(\"install.packages reported success but {pkg} still not findable in .libPaths() = \", paste(.libPaths(), collapse = \" : \"), call. = FALSE)\n\
          }}",
+        prepend = RSTUDIOCLI_LIB_PREPEND,
         pkg = r_quote(R_PACKAGE_NAME),
         tarball = r_quote(&path_str)
     );
