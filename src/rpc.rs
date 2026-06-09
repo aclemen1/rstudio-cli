@@ -18,7 +18,11 @@ const RPC_INVALID_REQUEST: i32 = 6;
 /// Caught by `rpc()` for a single bounded retry before bubbling up — see
 /// the retry-on-asyncHandle branch there.
 const RPC_ASYNC_QUEUED: i32 = -2;
-const ASYNC_QUEUED_RETRY_DELAY_MS: u64 = 250;
+/// Backoff schedule (ms) for retrying an async-queued RPC. Total added
+/// latency in the worst case ≈ 2.75 s, only paid when rsession is genuinely
+/// busy; the common case clears on the first (250 ms) retry. Tuned to absorb
+/// the post-`r send` Environment-pane refresh window even under CI load.
+const ASYNC_QUEUED_RETRY_DELAYS_MS: [u64; 4] = [250, 500, 1000, 1000];
 
 pub struct RpcClient<'a> {
     session: &'a Session,
@@ -144,25 +148,28 @@ impl<'a> RpcClient<'a> {
                 self.rpc_with_client_id(method, &params, &refreshed)
                     .map_err(stale_client_id_hint)
             }
-            // Single bounded retry on async-queued: rsession was busy when
-            // we made the call (typical case: an Environment-pane refresh
-            // after a prior `r send`). After ~250 ms it has almost always
-            // settled. If the second attempt also returns asyncHandle, we
-            // surface the original error message so the agent learns that
+            // Bounded retries with backoff on async-queued: rsession was busy
+            // when we made the call (typical case: an Environment-pane refresh
+            // still running after a prior `r send`, before `env contents` /
+            // another read arrives). A single short retry clears most cases,
+            // but under load (e.g. CI in a container) the busy window can
+            // outlast one delay, so we retry a few times with increasing
+            // backoff. If every attempt still returns asyncHandle, we surface
+            // the original message as session_unavailable so the agent learns
             // serialisation is required.
             Err(e) if e.code == RPC_ASYNC_QUEUED => {
-                thread::sleep(Duration::from_millis(ASYNC_QUEUED_RETRY_DELAY_MS));
-                match self.rpc_with_client_id(method, &params, &client_id) {
-                    Ok(v) => Ok(v),
-                    Err(retry_err) if retry_err.code == RPC_ASYNC_QUEUED => {
-                        // Re-wrap the persistent async case as session_unavailable
-                        // so the error kind matches the pre-0.19.2 contract for
-                        // genuinely-stuck queues (vs. RpcError for the transient
-                        // first hit).
-                        Err(CliError::session(retry_err.message))
+                let mut last = e;
+                for delay in ASYNC_QUEUED_RETRY_DELAYS_MS {
+                    thread::sleep(Duration::from_millis(delay));
+                    match self.rpc_with_client_id(method, &params, &client_id) {
+                        Ok(v) => return Ok(v),
+                        Err(retry_err) if retry_err.code == RPC_ASYNC_QUEUED => {
+                            last = retry_err;
+                        }
+                        Err(other) => return Err(other),
                     }
-                    Err(other) => Err(other),
                 }
+                Err(CliError::session(last.message))
             }
             other => other,
         }

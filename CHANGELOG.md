@@ -4,6 +4,22 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.4] — 2026-06-10
+
+### Fixed
+
+- **`asyncHandle` retry is now multi-attempt with backoff** (250 / 500 /
+  1000 / 1000 ms) instead of a single 250 ms retry. When rsession is busy
+  it replies with an `asyncHandle` instead of an inline result; the most
+  common trigger is the Environment-pane refresh still running after an
+  `r send` when the next read (`env contents`, `editor read`, …) arrives.
+  A single short retry cleared this most of the time but not under load
+  (e.g. the Docker `live` CI job), where `env_contents_returns_lines`
+  flaked intermittently with `session_unavailable (asyncHandle=…)`. The
+  longer backoff absorbs the busy window; the cost is paid only when
+  rsession is genuinely busy, and the common case still clears on the
+  first retry. Benefits any real agent chaining `r send` → a read.
+
 ## [0.19.3] — 2026-06-10
 
 ### Fixed
