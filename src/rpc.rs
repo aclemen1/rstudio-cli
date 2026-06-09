@@ -130,11 +130,13 @@ impl<'a> RpcClient<'a> {
             Err(e) if e.code == RPC_INVALID_CLIENT_ID => {
                 let refreshed = self.client_id(true)?;
                 self.rpc_with_client_id(method, &params, &refreshed)
+                    .map_err(stale_client_id_hint)
             }
             Err(e) if e.code == RPC_INVALID_REQUEST => {
                 thread::sleep(Duration::from_millis(200));
                 let refreshed = self.client_id(true)?;
                 self.rpc_with_client_id(method, &params, &refreshed)
+                    .map_err(stale_client_id_hint)
             }
             other => other,
         }
@@ -253,6 +255,30 @@ fn parse_rpc_envelope(method: &str, resp: &HttpResponse) -> Result<Value, CliErr
 pub struct PostbackResponse {
     pub exit_code: i32,
     pub body: String,
+}
+
+/// Rewrap a second-attempt RPC failure on code 4 / 6 as an actionable
+/// "refresh your RStudio browser tab" message. The first attempt has
+/// already triggered a re-read of `session-persistent-state`; if the
+/// server still rejects the call with the same code, the most likely
+/// cause is that no browser tab is currently bound to this rsession,
+/// so the `active-client-id` we keep reading is either stale or absent.
+/// Other errors pass through unchanged.
+fn stale_client_id_hint(e: CliError) -> CliError {
+    if matches!(e.kind, crate::error::ErrorKind::RpcError)
+        && (e.code == RPC_INVALID_CLIENT_ID || e.code == RPC_INVALID_REQUEST)
+    {
+        CliError::session(format!(
+            "RStudio session is detected, but no browser tab is currently bound to it. \
+             ACTION: open or refresh the RStudio tab in your browser, wait for it \
+             to finish loading, then retry. \
+             (technical: rsession rejected the call twice with code {} after \
+             re-reading active-client-id from session-persistent-state)",
+            e.code
+        ))
+    } else {
+        e
+    }
 }
 
 pub fn r_quote(s: &str) -> String {

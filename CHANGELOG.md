@@ -4,6 +4,25 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] — 2026-06-09
+
+### Fixed
+
+- **Clearer error message when no browser tab is bound to the rsession.**
+  Previously, when `session-persistent-state` was missing or had no
+  `active-client-id`, or when an RPC was rejected twice in a row with
+  code 4 (`Invalid client id`) or code 6 (`Invalid json-rpc request`)
+  after re-reading the file, the surfaced wording ("No active browser
+  client found … Open RStudio in your browser first") read to LLM
+  agents as "no rsession found" and led to wrong diagnoses (users
+  searching for a missing session that was, in fact, present). The
+  rewording now says explicitly "RStudio session is detected, but no
+  browser tab is currently bound to it. ACTION: open or refresh the
+  RStudio tab in your browser, wait for it to finish loading, then
+  retry." The double-failure RPC retry path in `RpcClient::rpc` now
+  also rewraps the second-attempt error with the same actionable
+  message instead of letting the raw `RpcError` bubble up.
+
 ## [0.18.0] — 2026-06-03
 
 ### Changed

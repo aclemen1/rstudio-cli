@@ -143,8 +143,10 @@ pub fn resolve_client_id(session: &Session) -> Result<String, CliError> {
 pub fn read_active_client_id(state_path: &Path) -> Result<String, CliError> {
     let content = fs::read_to_string(state_path).map_err(|e| {
         CliError::session(format!(
-            "No active browser client found at {} ({e}). \
-             Open RStudio in your browser first, then retry.",
+            "RStudio session is detected, but no browser tab is currently bound to it. \
+             ACTION: open or refresh the RStudio tab in your browser, wait for it \
+             to finish loading, then retry. \
+             (technical: cannot read session-persistent-state at {}: {e})",
             state_path.display()
         ))
     })?;
@@ -159,8 +161,10 @@ pub fn read_active_client_id(state_path: &Path) -> Result<String, CliError> {
         }
     }
     Err(CliError::session(format!(
-        "active-client-id missing in {}. \
-         Open RStudio in your browser first, then retry.",
+        "RStudio session is detected, but no browser tab is currently bound to it. \
+         ACTION: open or refresh the RStudio tab in your browser, wait for it \
+         to finish loading, then retry. \
+         (technical: active-client-id missing in {})",
         state_path.display()
     )))
 }
