@@ -299,9 +299,13 @@ for introspection and for evaluation, but the tools to use differ
 from "normal" R execution.
 
 **Detect**. The `status` tool's response includes `rsession.debugger`
-(`null` at the regular prompt; populated when a browser is active).
-For the full picture — depth, current frame, source location, typed
-locals, full call stack — call `debug_status`.
+(`null` at the regular prompt; populated when a browser is active —
+including a bare `browser()` or one sent via `r_send`). For the full
+picture — current `function`, source location, typed locals, full call
+stack — call `debug_status`. Note: the `Browse[N]>` level is not
+retrievable from R (internal C counter), so `browse_level` is always
+`null`; it's not needed to navigate — `debug_exit` leaves all nested
+browsers at once.
 
 **Evaluate**. `r_send` and `r_exec` are *browser-aware*: when called
 while a debugger is active, they automatically evaluate user code in

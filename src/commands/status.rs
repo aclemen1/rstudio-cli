@@ -143,19 +143,21 @@ fn format_as_text(v: &Value) -> String {
         .unwrap_or("none");
 
     // Debugger line: only shown when active, to avoid noise in the
-    // common idle case. Format mirrors the JSON projection.
+    // common idle case. Format mirrors the JSON projection. We don't print
+    // a Browse[N] number because N is not retrievable (see collect_debugger);
+    // when a user function is identified we name it, otherwise we say the
+    // browser is at the top level.
     let debugger_line = match v.pointer("/rsession/debugger") {
         Some(Value::Object(_)) => {
-            let fn_ = v
+            let where_ = match v
                 .pointer("/rsession/debugger/function")
                 .and_then(Value::as_str)
-                .unwrap_or("?");
-            let depth = v
-                .pointer("/rsession/debugger/depth")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
+            {
+                Some(fn_) => format!("inside {fn_}()"),
+                None => "at top level".to_string(),
+            };
             format!(
-                "debugger        Browse[{depth}]> inside {fn_}() — call `debug status` for the full picture\n"
+                "debugger        active (Browse> {where_}) — call `debug status` for the full picture\n"
             )
         }
         _ => String::new(),
@@ -175,8 +177,25 @@ fn format_as_text(v: &Value) -> String {
 
 /// Minimal projection of `get_environment_state` for ambient debugger
 /// awareness in the `status` envelope. Returns `null` at the top-level
-/// prompt; otherwise `{in_browser: true, depth, function}`. For the full
-/// frame / locals / call-stack picture, agents should call `debug status`.
+/// prompt; otherwise `{in_browser: true, browse_level, function}`. For the
+/// full frame / locals / call-stack picture, agents should call `debug
+/// status`.
+///
+/// Detection uses BOTH `context_depth` AND `call_frames.length`:
+/// rsession increments `context_depth` only when the IDE-side debugger
+/// hook fires (i.e. the user's function was entered via debug() / a
+/// breakpoint / explicit step). A top-level `browser()` — or a
+/// `browser()` invoked through a side channel such as `console_input`,
+/// which is exactly what `r send 'browser()'` does — leaves
+/// `context_depth` at 0 but populates `call_frames` with the active
+/// stack. Treating only `context_depth` as a signal misses that case
+/// and reports `null` while the interpreter is in fact suspended at a
+/// Browse prompt. We accept either signal.
+///
+/// `browse_level` (the N of `Browse[N]>`) is always `null`: R does not
+/// expose it (see `debug::status` for the full rationale). It is kept as
+/// an explicit field so its shape is stable if a future release populates
+/// it via a native helper.
 fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
     let Ok(state) = rpc.rpc("get_environment_state", vec![]) else {
         return Value::Null;
@@ -185,17 +204,30 @@ fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
         .get("context_depth")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    if depth <= 0 {
+    let frames_len = state
+        .get("call_frames")
+        .and_then(Value::as_array)
+        .map(|a| a.len() as i64)
+        .unwrap_or(0);
+    if depth <= 0 && frames_len <= 0 {
         return Value::Null;
     }
-    let function = state
+    // `environment_name` is "fn()" for a function-debug session (strip the
+    // parens → "fn"); for a top-level browser it's ".GlobalEnv", in which
+    // case there is no user function being debugged and we report null
+    // rather than leaking an evaluator-wrapper name.
+    let env_name = state
         .get("environment_name")
         .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .trim_end_matches("()");
+        .unwrap_or("");
+    let function: Option<String> = if env_name != ".GlobalEnv" && !env_name.is_empty() {
+        Some(env_name.trim_end_matches("()").to_string())
+    } else {
+        None
+    };
     json!({
         "in_browser": true,
-        "depth": depth,
+        "browse_level": Value::Null,
         "function": function,
     })
 }

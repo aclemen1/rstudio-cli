@@ -4,6 +4,43 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] — 2026-06-10
+
+### Fixed
+
+- **`debug status`, `debug step`, and `status.rsession.debugger` now
+  detect browsers triggered at the top level or through a side channel.**
+  Previously these keyed off rsession's `context_depth`, which is only
+  incremented when the IDE-side debugger hook fires (a `debug()` flag, a
+  breakpoint, or a step-into). A bare `browser()` at the console — or one
+  invoked via `r send 'browser()'`, or `f()` where `f` calls `browser()`
+  reached through the CLI — leaves `context_depth` at 0, so `debug status`
+  wrongly reported `in_browser: false` and `debug step Q` refused to act
+  ("R is not at a Browse[n]> prompt"), leaving `session restart` as the
+  only escape. Detection now also considers a non-empty `call_frames`
+  stack, so every browser entry is recognised regardless of how it was
+  reached. `debug step` / `debug exit` work in all cases.
+
+### Changed
+
+- **`debug status` no longer reports a `depth` field; it reports
+  `browse_level` (always `null`).** The old `depth` was rsession's
+  selected-frame index (innermost = 1), which is `1` at both `Browse[1]>`
+  and `Browse[2]>` — it was never the browser nesting level and was
+  misleading. The `Browse[N]>` number genuinely cannot be retrieved from
+  R or rsession: `browser()` is a C primitive whose `CTXT_BROWSER` count
+  is not exposed to R (`sys.calls()`/`sys.nframe()` don't reflect it), and
+  rsession regex-matches the prompt to a boolean and discards the digits
+  (RStdCallbacks.cpp). `browse_level` is kept as an explicit, documented
+  `null` so the field's shape is stable if a future release populates it
+  via an optional native helper. The `function` field is now `null` for a
+  top-level browser (instead of leaking the `ℝ` evaluator-wrapper name);
+  the full `call_stack` remains available.
+- **`observe` debug events drop their `depth` payload fields** for the
+  same reason: `debug.entered` / `debug.exited` / `debug.frame_changed`
+  now carry only `function` / `from_function` / `to_function`. Detection
+  is broadened to match `debug status` (context_depth OR non-empty stack).
+
 ## [0.19.2] — 2026-06-09
 
 ### Fixed

@@ -348,8 +348,12 @@ introspection and for evaluation — but the verbs are different from
 
 **Detect**. `rstudio status` reports a top-level `rsession.debugger`
 field (`null` at the regular prompt; populated when a browser is
-active). For the full picture — depth, current frame, source location,
-typed locals, full call stack — call `rstudio debug status`.
+active — including a bare `browser()` or one sent via `r send`). For
+the full picture — current `function`, source location, typed locals,
+full call stack — call `rstudio debug status`. Note: the `Browse[N]>`
+level itself is not retrievable from R (it's an internal C counter), so
+`browse_level` is always `null`; you don't need it to navigate —
+`debug exit` / `debug step Q` leaves all nested browsers at once.
 
 **Evaluate**. `r send` and `r exec` are *browser-aware*: when called
 while a debugger is active, they automatically evaluate the user's code

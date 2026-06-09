@@ -487,13 +487,14 @@ const EVENT_CATALOG: &[EventTypeSpec] = &[
     EventTypeSpec {
         name: "debug.entered",
         tier: 2,
-        source: "get_environment_state.context_depth (0 → >0 transition)",
-        description: "R has entered a debugger frame (browser, debug, recover). \
-                      Emitted on the initial snapshot too, when the agent attaches \
+        source: "get_environment_state: context_depth > 0 OR call_frames non-empty",
+        description: "R has entered the debugger (browser, debug, recover). \
+                      Detected via context_depth OR a non-empty call stack, so \
+                      top-level / side-channel `browser()` calls are caught too. \
+                      Emitted on the initial snapshot when the agent attaches \
                       while a debugger is already active.",
         payload: &[
-            "depth: integer — context_depth, ≥ 1",
-            "function: string — name of the function being debugged",
+            "function: string — innermost debugged function ('' for a top-level browser)",
             "caused_by_ts_ms: integer (optional)",
         ],
         initial: true,
@@ -501,11 +502,10 @@ const EVENT_CATALOG: &[EventTypeSpec] = &[
     EventTypeSpec {
         name: "debug.exited",
         tier: 2,
-        source: "get_environment_state.context_depth (>0 → 0 transition)",
+        source: "get_environment_state: returned to no-debugger state",
         description: "R has left the debugger entirely (all browser frames \
                       collapsed via c/Q/finish-of-function).",
         payload: &[
-            "from_depth: integer",
             "from_function: string",
             "caused_by_ts_ms: integer (optional)",
         ],
@@ -514,13 +514,13 @@ const EVENT_CATALOG: &[EventTypeSpec] = &[
     EventTypeSpec {
         name: "debug.frame_changed",
         tier: 2,
-        source: "get_environment_state.environment_name diff while depth > 0",
+        source: "get_environment_state.environment_name diff while in debugger",
         description: "Active debugger frame switched without leaving the \
                       debugger — typically a step-in (s) into another function \
-                      or a step-out (f) finishing the current call.",
+                      or a step-out (f) finishing the current call. (Note: the \
+                      Browse[N] nesting level is not retrievable from R, so only \
+                      the function identity drives this event, not a depth count.)",
         payload: &[
-            "from_depth: integer",
-            "to_depth: integer",
             "from_function: string",
             "to_function: string",
             "caused_by_ts_ms: integer (optional)",
@@ -894,11 +894,7 @@ fn run_stream(
                 // prompt when observe attaches, emit `debug.entered` so the
                 // agent sees the situation without waiting for a transition.
                 if let Some(d) = &rs.debugger {
-                    emit(
-                        &mut out,
-                        "debug.entered",
-                        json!({ "depth": d.depth, "function": d.function }),
-                    )?;
+                    emit(&mut out, "debug.entered", json!({ "function": d.function }))?;
                 }
                 state.was_busy = rs.elapsed_ms > BUSY_LATENCY_THRESHOLD_MS;
                 state.r_state = Some(rs);
@@ -1165,15 +1161,18 @@ struct RStateSnapshot {
     plot_count: u32,
 
     /// Debugger state, sourced from `get_environment_state` on every tick.
-    /// `None` when R is at the top-level prompt (`context_depth == 0`);
-    /// `Some` while at a `Browse[n]>` prompt. Drives the `debug.entered` /
-    /// `debug.exited` / `debug.frame_changed` events.
+    /// `None` when R is at the top-level prompt; `Some` while at a
+    /// `Browse[n]>` prompt. Drives the `debug.entered` / `debug.exited` /
+    /// `debug.frame_changed` events. Only the function identity is tracked:
+    /// the Browse[N] level is not retrievable from R (see commands/debug.rs),
+    /// and `function` is what distinguishes one debugger frame from another
+    /// for `debug.frame_changed`.
     debugger: Option<DebuggerSnapshot>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct DebuggerSnapshot {
-    depth: i64,
+    /// Innermost debugged function name, or "" for a top-level browser.
     function: String,
 }
 
@@ -1536,19 +1535,41 @@ fn take_r_state(rpc: &RpcClient<'_>, tier: u8) -> Result<RStateSnapshot, CliErro
     // the R interpreter). Best-effort: if the call fails we leave the field
     // None and the next tick will retry. Done at every tier ≥ 2 so the
     // debug.* events are available without needing tier 3.
+    //
+    // We treat ANY of `context_depth > 0` OR `call_frames non-empty` as
+    // "in debugger". context_depth only fires for IDE-tracked debug
+    // sessions (i.e. when a debug() flag / breakpoint / step-into was
+    // the trigger); top-level / side-channel `browser()` calls populate
+    // call_frames but leave context_depth at 0. Without the call_frames
+    // branch, agents tailing `observe` would miss browsers triggered via
+    // `r send 'browser()'` and similar — a class of debugger entries
+    // that LLM-driven workflows produce routinely.
     snap.debugger = if let Ok(state) = rpc.rpc("get_environment_state", vec![]) {
         let depth = state
             .get("context_depth")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        if depth > 0 {
-            let function = state
+        let frames_len = state
+            .get("call_frames")
+            .and_then(Value::as_array)
+            .map(|a| a.len() as i64)
+            .unwrap_or(0);
+        if depth > 0 || frames_len > 0 {
+            // `environment_name` is "fn()" for a function-debug session
+            // ("fn" after stripping); for a top-level browser it's
+            // ".GlobalEnv", where there is no user function being debugged
+            // and we record "" (the call stack only contains evaluator
+            // wrappers we don't want to surface as "the function").
+            let env_name = state
                 .get("environment_name")
                 .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .trim_end_matches("()")
-                .to_string();
-            Some(DebuggerSnapshot { depth, function })
+                .unwrap_or("");
+            let function = if env_name != ".GlobalEnv" && !env_name.is_empty() {
+                env_name.trim_end_matches("()").to_string()
+            } else {
+                String::new()
+            };
+            Some(DebuggerSnapshot { function })
         } else {
             None
         }
@@ -1628,24 +1649,15 @@ fn diff_r_state(
     // frame switches while staying in the debugger.
     match (&prev.debugger, &curr.debugger) {
         (None, Some(d)) => {
-            pending.push(
-                "debug.entered",
-                json!({ "depth": d.depth, "function": d.function }),
-            );
+            pending.push("debug.entered", json!({ "function": d.function }));
         }
         (Some(p), None) => {
-            pending.push(
-                "debug.exited",
-                json!({ "from_depth": p.depth, "from_function": p.function }),
-            );
+            pending.push("debug.exited", json!({ "from_function": p.function }));
         }
         (Some(p), Some(c)) if p != c => {
             pending.push(
                 "debug.frame_changed",
-                json!({
-                    "from_depth": p.depth, "to_depth": c.depth,
-                    "from_function": p.function, "to_function": c.function,
-                }),
+                json!({ "from_function": p.function, "to_function": c.function }),
             );
         }
         _ => {}

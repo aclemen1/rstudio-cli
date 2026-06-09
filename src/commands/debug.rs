@@ -30,20 +30,28 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "debug",
         name: "status",
-        summary: "Read the active R debugger state: depth, frame, locals, full call stack.",
+        summary: "Read the active R debugger state: function, locals, full call stack.",
         description: "Single-RPC projection of `get_environment_state`. \
-                      When R is at a Browse[n]> prompt, returns the depth, \
-                      the current frame (function name + source location), \
-                      the typed locals of that frame (already class+value \
-                      serialized by rsession), and the call stack with one \
-                      entry per frame (innermost first). When R is idle, \
-                      returns {in_browser: false} and no further fields.",
+                      Detects the debugger via context_depth OR a non-empty \
+                      call stack, so it correctly reports `in_browser: true` for \
+                      ALL browser entries — including a `browser()` at the \
+                      top-level prompt or one triggered by `r send 'browser()'`, \
+                      which leave rsession's context_depth at 0. When in the \
+                      debugger, returns the innermost debugged `function` \
+                      (null for a top-level browser), the `src` location, the \
+                      typed `locals` of the current frame, and the full \
+                      `call_stack` (innermost first). \
+                      `browse_level` (the N of Browse[N]>) is always null: R \
+                      does not expose it (browser() is a C primitive; rsession \
+                      reduces the prompt to a boolean), and it is never needed \
+                      to navigate (`debug exit`/`Q` leaves all levels at once). \
+                      When R is idle, returns {in_browser: false}.",
         params: &[],
         examples: &[ExampleSpec {
             cmd: "rstudio debug status",
-            explanation: "Returns {in_browser, depth?, function?, locals?, call_stack?}.",
+            explanation: "Returns {in_browser, function?, browse_level, src?, locals?, call_stack?}.",
         }],
-        returns: "{in_browser: bool, depth?: int, function?: string, \
+        returns: "{in_browser: bool, browse_level: null, function?: string|null, \
                   src?: {file, line}, locals?: [{name, type, class, value}], \
                   call_stack?: [{depth, function, call, src?}]}",
         errors: &[],
@@ -208,6 +216,58 @@ fn context_depth(state: &Value) -> i64 {
         .unwrap_or(0)
 }
 
+/// Number of frames in rsession's `call_frames` array. Non-zero whenever
+/// R is suspended in a function (user-debug or otherwise), including when
+/// a `browser()` was invoked at the top-level or through a side-channel
+/// like `console_input` — cases where rsession's IDE-side `context_depth`
+/// counter is NOT incremented because no `debug()` flag / breakpoint
+/// triggered the entry. See `is_in_debugger`.
+fn call_frames_len(state: &Value) -> usize {
+    state
+        .get("call_frames")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
+
+/// True iff R is currently at a Browse[n]> prompt, regardless of how the
+/// browser was entered.
+///
+/// Why we don't just look at `context_depth`: rsession increments that
+/// counter only when the user's `browser()` call (or `debug()`-set flag,
+/// or breakpoint hit) is observed by the IDE-side debugger hook. A
+/// `browser()` invoked at the top-level prompt, or through a side
+/// channel like `console_input "ℝ(~{ browser() })"`, leaves
+/// `context_depth` at 0 because no IDE hook fired — but the R interpreter
+/// IS suspended at a Browse prompt and `call_frames` reflects the
+/// active stack. We treat any of these signals as "in debugger".
+fn is_in_debugger(state: &Value) -> bool {
+    context_depth(state) > 0 || call_frames_len(state) > 0
+}
+
+/// The user function currently being debugged, or `None`.
+///
+/// rsession populates `environment_name` with the innermost debugged
+/// function's name (suffixed with `()`) — e.g. `"f()"`. We strip the
+/// parens and return `"f"`. When the browser was entered at the top
+/// level (`environment_name == ".GlobalEnv"`: a bare `browser()` typed
+/// at the console, or `r send 'browser()'` which evaluates inside the
+/// CLI's own `ℝ` helper), there is no user function being debugged, so
+/// we return `None` rather than leaking an evaluator-wrapper name like
+/// `ℝ` or `eval` from the call stack. The full `call_stack` is still
+/// available for agents that want the raw frames.
+fn debugged_function(state: &Value) -> Option<String> {
+    let env_name = state
+        .get("environment_name")
+        .and_then(Value::as_str)
+        .unwrap_or(".GlobalEnv");
+    if env_name != ".GlobalEnv" && !env_name.is_empty() {
+        Some(env_name.trim_end_matches("()").to_string())
+    } else {
+        None
+    }
+}
+
 fn project_call_stack(state: &Value) -> Vec<Value> {
     state
         .get("call_frames")
@@ -270,18 +330,32 @@ fn project_current_src(state: &Value) -> Option<Value> {
 
 fn status(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let state = fetch_state(rpc)?;
-    let depth = context_depth(&state);
-    if depth <= 0 {
+    if !is_in_debugger(&state) {
         return Ok(Some(json!({ "in_browser": false })));
     }
-    let function = state
-        .get("environment_name")
-        .and_then(Value::as_str)
-        .map(|s| s.trim_end_matches("()").to_string());
+    // `browse_level` is the N of the `Browse[N]>` prompt. It is NOT
+    // retrievable from R or rsession's R-accessible API: `browser()` is
+    // a C primitive whose nesting counter (a count of `CTXT_BROWSER`
+    // contexts on R's internal stack) is never exposed — it does not
+    // appear in `sys.calls()`, `sys.nframe()` returns the same value at
+    // Browse[1]> and Browse[2]>, rsession regex-matches the prompt to a
+    // boolean and discards the digits (RStdCallbacks.cpp), and no RPC
+    // surfaces it. We therefore report `null` here. (A future release may
+    // populate this via an optional native helper that walks
+    // R_GlobalContext counting CTXT_BROWSER; absent that, it stays null.)
+    //
+    // Note that `context_depth` is NOT the browse level — it is rsession's
+    // selected-frame index (innermost = 1), which is 1 at both Browse[1]>
+    // and Browse[2]>. We deliberately do not expose it as a depth to avoid
+    // implying it tracks browser nesting.
+    //
+    // Practical navigation note: R's `Q` exits ALL nested browsers at once
+    // (documented behaviour, see `?browser`), so the level is never needed
+    // to escape — a single `debug exit` / `debug step Q` suffices.
     Ok(Some(json!({
         "in_browser": true,
-        "depth": depth,
-        "function": function,
+        "browse_level": Value::Null,
+        "function": debugged_function(&state),
         "src": project_current_src(&state),
         "locals": project_locals(&state),
         "call_stack": project_call_stack(&state),
@@ -290,8 +364,7 @@ fn status(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
 
 fn where_cmd(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let state = fetch_state(rpc)?;
-    let depth = context_depth(&state);
-    if depth <= 0 {
+    if !is_in_debugger(&state) {
         return Ok(Some(json!({ "in_browser": false })));
     }
     Ok(Some(json!({
@@ -302,8 +375,7 @@ fn where_cmd(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
 
 fn locals(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let state = fetch_state(rpc)?;
-    let depth = context_depth(&state);
-    if depth <= 0 {
+    if !is_in_debugger(&state) {
         return Ok(Some(json!({ "in_browser": false, "locals": [] })));
     }
     Ok(Some(json!({
@@ -314,8 +386,7 @@ fn locals(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
 
 fn src(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let state = fetch_state(rpc)?;
-    let depth = context_depth(&state);
-    if depth <= 0 {
+    if !is_in_debugger(&state) {
         return Ok(Some(json!({ "in_browser": false })));
     }
     Ok(Some(json!({
@@ -328,9 +399,14 @@ fn step(rpc: &RpcClient<'_>, command: &str) -> Result<Option<Value>, CliError> {
     // Refuse to send a meta-command when no debugger is active: at the
     // regular `>` prompt, `n` / `s` / `c` / `where` are either bare symbols
     // (likely undefined and noisy) or, worse, accidentally rebind a user
-    // variable. Cheap pre-check via get_environment_state.
+    // variable. Cheap pre-check via get_environment_state. We use
+    // `is_in_debugger` (not just `context_depth > 0`) so we correctly
+    // recognise top-level / side-channel `browser()` calls — the kind
+    // that an agent may trigger via `r send 'browser()'`, where the
+    // IDE-side context counter stays at 0 but the R interpreter is
+    // genuinely suspended at a Browse[]> prompt.
     let state = fetch_state(rpc)?;
-    if context_depth(&state) <= 0 {
+    if !is_in_debugger(&state) {
         return Err(CliError::user(format!(
             "debug step '{command}': R is not at a Browse[n]> prompt. \
              Use `rstudio debug status` to confirm, or trigger a browser() \
@@ -433,5 +509,66 @@ mod tests {
         assert_eq!(l[0]["name"], "x");
         assert_eq!(l[0]["value"], "21");
         assert_eq!(l[0]["length"], 1);
+    }
+
+    /// A top-level / side-channel `browser()` (the exact bug-report case):
+    /// rsession leaves `context_depth == 0` but the call stack is non-empty.
+    /// We MUST still detect the debugger — relying on context_depth alone
+    /// (the pre-0.19.3 behaviour) reported `in_browser: false` here and made
+    /// `debug step Q` refuse to act.
+    fn top_level_browser_state() -> Value {
+        json!({
+            "context_depth": 0,
+            "environment_name": ".GlobalEnv",
+            "call_frames": [
+                { "context_depth": 1, "function_name": "ℝ",
+                  "call_summary": "ℝ(~{ base::browser() })",
+                  "file_name": "", "line_number": 0 }
+            ],
+            "environment_list": [],
+        })
+    }
+
+    #[test]
+    fn is_in_debugger_true_when_context_depth_zero_but_frames_present() {
+        let s = top_level_browser_state();
+        assert_eq!(context_depth(&s), 0, "precondition: context_depth is 0");
+        assert!(
+            is_in_debugger(&s),
+            "must detect the debugger via non-empty call_frames even when \
+             context_depth is 0 (top-level / side-channel browser)"
+        );
+    }
+
+    #[test]
+    fn is_in_debugger_true_for_function_debug() {
+        assert!(is_in_debugger(&state(1)));
+    }
+
+    #[test]
+    fn is_in_debugger_false_when_idle() {
+        let idle = json!({
+            "context_depth": 0,
+            "environment_name": ".GlobalEnv",
+            "call_frames": [],
+            "environment_list": [],
+        });
+        assert!(!is_in_debugger(&idle));
+    }
+
+    #[test]
+    fn debugged_function_is_null_for_top_level_browser() {
+        // Must NOT leak the `ℝ` evaluator-wrapper name as "the function".
+        let s = top_level_browser_state();
+        assert_eq!(
+            debugged_function(&s),
+            None,
+            "top-level browser has no user function being debugged"
+        );
+    }
+
+    #[test]
+    fn debugged_function_strips_parens_for_function_debug() {
+        assert_eq!(debugged_function(&state(1)), Some("debug_me".to_string()));
     }
 }
