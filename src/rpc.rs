@@ -13,6 +13,12 @@ use crate::transport::{HttpResponse, request};
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const RPC_INVALID_CLIENT_ID: i32 = 4;
 const RPC_INVALID_REQUEST: i32 = 6;
+/// Synthetic code returned by `parse_rpc_envelope` when Desktop's TCP
+/// listener replies with `asyncHandle` instead of an inline result.
+/// Caught by `rpc()` for a single bounded retry before bubbling up — see
+/// the retry-on-asyncHandle branch there.
+const RPC_ASYNC_QUEUED: i32 = -2;
+const ASYNC_QUEUED_RETRY_DELAY_MS: u64 = 250;
 
 pub struct RpcClient<'a> {
     session: &'a Session,
@@ -138,6 +144,26 @@ impl<'a> RpcClient<'a> {
                 self.rpc_with_client_id(method, &params, &refreshed)
                     .map_err(stale_client_id_hint)
             }
+            // Single bounded retry on async-queued: rsession was busy when
+            // we made the call (typical case: an Environment-pane refresh
+            // after a prior `r send`). After ~250 ms it has almost always
+            // settled. If the second attempt also returns asyncHandle, we
+            // surface the original error message so the agent learns that
+            // serialisation is required.
+            Err(e) if e.code == RPC_ASYNC_QUEUED => {
+                thread::sleep(Duration::from_millis(ASYNC_QUEUED_RETRY_DELAY_MS));
+                match self.rpc_with_client_id(method, &params, &client_id) {
+                    Ok(v) => Ok(v),
+                    Err(retry_err) if retry_err.code == RPC_ASYNC_QUEUED => {
+                        // Re-wrap the persistent async case as session_unavailable
+                        // so the error kind matches the pre-0.19.2 contract for
+                        // genuinely-stuck queues (vs. RpcError for the transient
+                        // first hit).
+                        Err(CliError::session(retry_err.message))
+                    }
+                    Err(other) => Err(other),
+                }
+            }
             other => other,
         }
     }
@@ -239,13 +265,21 @@ fn parse_rpc_envelope(method: &str, resp: &HttpResponse) -> Result<Value, CliErr
     // response open until the result is ready), so this branch only fires
     // on Desktop. See DESKTOP_TEST_RESULTS.md "B1 — wire capture".
     if let Some(handle) = envelope.get("asyncHandle").and_then(|v| v.as_str()) {
-        return Err(CliError::session(format!(
-            "Desktop rsession queued this {method} call \
-             (asyncHandle={handle}); the CLI does not poll the \
-             kAsyncCompletion event channel. Serialise r exec calls \
-             externally, or wait for async support to land. Server is \
-             unaffected."
-        )));
+        // We tag this with RPC_ASYNC_QUEUED so `rpc()` can retry once.
+        // Most async-queue cases are transient: rsession is finishing a
+        // prior call (e.g. an Environment-pane refresh after `r send`) and
+        // the next RPC arrives a few ms too early. A bounded retry after a
+        // short sleep clears it without needing event-channel polling.
+        return Err(CliError::rpc(
+            RPC_ASYNC_QUEUED,
+            format!(
+                "Desktop rsession queued this {method} call \
+                 (asyncHandle={handle}); the CLI does not poll the \
+                 kAsyncCompletion event channel. Serialise r exec calls \
+                 externally, or wait for async support to land. Server is \
+                 unaffected."
+            ),
+        ));
     }
 
     Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
@@ -319,13 +353,23 @@ mod tests {
     }
 
     #[test]
-    fn surfaces_async_handle_as_session_unavailable() {
+    fn surfaces_async_handle_as_retryable_rpc_error() {
+        // parse_rpc_envelope returns an RpcError tagged with
+        // RPC_ASYNC_QUEUED so the outer `rpc()` can retry once. The
+        // PERSISTENT-async-queue contract (after the retry also fails)
+        // is rewrapping to SessionUnavailable — that's checked
+        // separately in the retry path; here we just guard the
+        // envelope parser's output.
         let resp = resp_with_body(
             r#"{"asyncHandle":"22e9ffe3-b62a-41c1-9909-f7f883cca9fc","ep":"false"}"#,
         );
         let err = parse_rpc_envelope("execute_r_code", &resp)
             .expect_err("asyncHandle must be rejected, not silently null");
-        assert!(matches!(err.kind, ErrorKind::SessionUnavailable));
+        assert!(matches!(err.kind, ErrorKind::RpcError));
+        assert_eq!(
+            err.code, RPC_ASYNC_QUEUED,
+            "async-queued must be tagged with RPC_ASYNC_QUEUED for retry"
+        );
         assert!(
             err.message.contains("22e9ffe3-b62a-41c1-9909-f7f883cca9fc"),
             "message must name the handle, got: {}",

@@ -4,6 +4,56 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] — 2026-06-09
+
+### Fixed
+
+- **`RpcClient::rpc` now retries once on Desktop's `asyncHandle`
+  response** (250 ms delay). Most async-queued cases are transient:
+  rsession is finishing a prior call (an Environment-pane refresh
+  after `r send`, a deferred postback completion, …) and the next
+  RPC arrives a few milliseconds too early. The retry clears the
+  vast majority of these without needing event-channel polling. If
+  the retry also returns an `asyncHandle`, the original
+  `session_unavailable` error message is preserved so callers can
+  still distinguish a transient hiccup from a genuinely stuck queue.
+  Fixes intermittent `env_contents_returns_lines` (and similar) CI
+  failures that surfaced after 0.19.0.
+
+### Reverted
+
+- **`r send` in browser mode is back to typing `ℝ(~{ code })`
+  directly at the `Browse[n]>` prompt** (the 0.19.0 path). The
+  0.19.1 silent-via-`execute_r_code` workaround is removed.
+
+  Why the revert: the step-tracer trap that motivated 0.19.1 was
+  not a quirk of `base::browser`; it was triggered by `modulr::browser`,
+  which overrides `base::browser` and uses
+  `do.call(base::browser, args = increment_skipCalls_(...), envir =
+  parent.frame(1L))` — a pattern that dépays the debug context and
+  makes the next typed `{...}` block look like a continuation of the
+  function being debugged. The right fix lives upstream in modulr (or
+  in any other package that overrides `browser()` with non-standard
+  framing); rstudio-cli's `ℝ(~{ code })` path is correct against
+  `base::browser` and against compliant overrides.
+
+  This restores the strict visual contract of `r send` (the user
+  sees `ℝ(~{ code })` typed in their console, identical to the
+  non-browser path) and the agent-side semantics (mutations to
+  browser locals persist via `parent.frame()`).
+
+  All the 0.19.0 additions remain: the `debug` subcommand category,
+  the `eval_env` field in every `r send` / `r exec` / `r poll`
+  response, the three `observe` events (`debug.entered` /
+  `debug.exited` / `debug.frame_changed`), the `rsession.debugger`
+  field in `status`.
+
+  **If you're stuck after a `r send` that hit modulr's trap on a
+  prior version**: from another terminal, run
+  `rstudio --no-lock r interrupt` then `rstudio --no-lock debug exit`.
+  The `--no-lock` flag bypasses the lock that the polling `r send`
+  is holding.
+
 ## [0.19.1] — 2026-06-09
 
 ### Fixed
