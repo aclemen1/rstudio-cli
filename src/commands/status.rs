@@ -67,6 +67,10 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
     let rsession = json!({
         "r_version": r_info.get("r_version").cloned().unwrap_or(Value::Null),
         "rstudio_version": r_info.get("rstudio_version").cloned().unwrap_or(Value::Null),
+        // Debugger awareness at the start of a session — `null` when R is
+        // at the top-level prompt, populated when a `browser()` / `debug()` /
+        // `recover()` frame is active. Cheap: one RPC, no R eval.
+        "debugger": collect_debugger(rpc),
     });
 
     let documents = json!({
@@ -138,6 +142,25 @@ fn format_as_text(v: &Value) -> String {
         .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
         .unwrap_or("none");
 
+    // Debugger line: only shown when active, to avoid noise in the
+    // common idle case. Format mirrors the JSON projection.
+    let debugger_line = match v.pointer("/rsession/debugger") {
+        Some(Value::Object(_)) => {
+            let fn_ = v
+                .pointer("/rsession/debugger/function")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let depth = v
+                .pointer("/rsession/debugger/depth")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            format!(
+                "debugger        Browse[{depth}]> inside {fn_}() — call `debug status` for the full picture\n"
+            )
+        }
+        _ => String::new(),
+    };
+
     format!(
         "rstudio-cli {cli_version} — {mode_label} ({transport_str})\n\
          user            {user}\n\
@@ -145,8 +168,36 @@ fn format_as_text(v: &Value) -> String {
          client_id       {client_id}\n\
          project         {project}\n\
          R / RStudio     {r_version} / {rstudio_version}\n\
-         documents open  {open_count} (active: {active_basename})\n"
+         documents open  {open_count} (active: {active_basename})\n\
+         {debugger_line}"
     )
+}
+
+/// Minimal projection of `get_environment_state` for ambient debugger
+/// awareness in the `status` envelope. Returns `null` at the top-level
+/// prompt; otherwise `{in_browser: true, depth, function}`. For the full
+/// frame / locals / call-stack picture, agents should call `debug status`.
+fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
+    let Ok(state) = rpc.rpc("get_environment_state", vec![]) else {
+        return Value::Null;
+    };
+    let depth = state
+        .get("context_depth")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if depth <= 0 {
+        return Value::Null;
+    }
+    let function = state
+        .get("environment_name")
+        .and_then(|n| n.as_str())
+        .unwrap_or("")
+        .trim_end_matches("()");
+    json!({
+        "in_browser": true,
+        "depth": depth,
+        "function": function,
+    })
 }
 
 /// Single R round-trip that collects everything we need from the rsession.

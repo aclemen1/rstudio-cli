@@ -40,8 +40,12 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.18.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
-across 15 categories and 100 actions. Multi-agent safety via per-session
+**v0.19.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+across 16 categories and 106 actions. First-class support for R's
+debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
+auto-target the active browser frame, every response carries an
+`eval_env` field, and the new `debug` category exposes the meta-commands
+(`n`, `s`, `c`, `Q`, `where`, …) as proper verbs. Multi-agent safety via per-session
 lock + `tx` transaction wrapper. **MCP server mode** exposes the entire
 surface to Claude Code, Cline, Cursor, Continue and any other MCP client,
 with embedded MCP-flavored agent guidance via `initialize.instructions`.
@@ -63,7 +67,8 @@ and **RStudio Desktop** (macOS).
 |---|---|---|
 | `editor` | `open` `edit` `close` `reload` `save` `save-all` `read` `read-buffer` `context` `insert` `select` `list` `new` `active-id` `path` `set-contents` `modify-range` `set-cursor` `set-marks` | Source pane and document operations |
 | `r`      | `exec` `send` `poll` `kill` `interrupt` | Run R code silently, or visibly with captured output; async via callr; stop running R |
-| `console`| `history` `actions` `context` | Console history + buffer + live editor context |
+| `console`| `history` `actions` `context` `activate` | Console history + buffer + live editor context |
+| `debug`  | `status` `step` `where` `locals` `src` `exit` | R debugger introspection (browser/debug/recover) and navigation |
 | `term`   | `list` `buffer` `context` `create` `send` `exec` `kill` `clear` `activate` `busy` `running` `exit-code` `visible` `run` | Terminal pane (live shells) |
 | `env`    | `list` `contents` `info` | Live R environment inspection |
 | `pane`   | `viewer` `files` `markers` `preview-rd` `preview-sql` `preview` `preview-md` `preview-rmd` `preview-qmd` `save-plot` `highlight-ui` | Non-editor panes |
@@ -113,6 +118,9 @@ will correct it promptly.
 | Evaluate code, capture output | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Send code to the visible R console | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Send visible code AND capture its output | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Browser-aware code execution (auto-targets debug frame) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Per-response `eval_env` field (which scope ran the code) | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Dedicated `debug` verbs (`step n`, `where`, `locals`, …) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Configurable per-call timeout | ✓ | ✗ | ✗ | ✗ | ✓ |
 | Structured error kinds (`r_error`, `timeout`, …) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Async R subprocess (long-running, non-blocking, via callr) | ✓ | ✓ | ✗ | ✗ | ✗ |
@@ -261,7 +269,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.18.2
+rstudio version                 # 0.19.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

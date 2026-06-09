@@ -8,8 +8,8 @@ use crate::VERSION;
 use std::time::Duration;
 
 use crate::commands::{
-    console, editor, env, job, mcp, observe, pane, policy_cmd, pref, project, r, raw, schema_cmd,
-    session, skill, status, term, tx, ui,
+    console, debug, editor, env, job, mcp, observe, pane, policy_cmd, pref, project, r, raw,
+    schema_cmd, session, skill, status, term, tx, ui,
 };
 use crate::error::CliError;
 use crate::lock::SessionLock;
@@ -103,6 +103,12 @@ enum Command {
     /// R console history and buffer access.
     #[command(subcommand)]
     Console(console::ConsoleCmd),
+
+    /// Interact with R's active debugger (browser, debug, recover):
+    /// inspect state, step, list locals, exit. All actions no-op or
+    /// error cleanly when no debugger is active.
+    #[command(subcommand)]
+    Debug(debug::DebugCmd),
 
     /// RStudio Terminal pane (live shells).
     #[command(subcommand)]
@@ -245,6 +251,10 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
         // Everything else: category-level granularity is sufficient.
         Command::Editor(_) => Some("editor"),
         Command::Console(_) => Some("console"),
+        // Debug: status / where / locals / src are reads; step / exit
+        // are writes (they push input to the console queue). Use
+        // category-level granularity for policy filtering.
+        Command::Debug(_) => Some("debug"),
         Command::Term(_) => Some("term"),
         Command::Env(_) => Some("env"),
         Command::Pane(_) => Some("pane"),
@@ -332,6 +342,11 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
             console::run(&cmd, &rpc, &session).map(Reply::Wrapped)
+        }
+        Command::Debug(cmd) => {
+            let session = Session::detect(overrides)?;
+            let rpc = RpcClient::new(&session);
+            debug::run(&cmd, &rpc).map(Reply::Wrapped)
         }
         Command::Term(cmd) => {
             let session = Session::detect(overrides)?;
@@ -433,6 +448,14 @@ fn needs_write_lock(cmd: &Command) -> bool {
         | Command::Console(console::ConsoleCmd::Actions { .. })
         | Command::Console(console::ConsoleCmd::Context) => false,
         Command::Console(_) => true,
+
+        // Debug: introspection (status/where/locals/src) is read-only;
+        // navigation (step/exit) pushes to console_input and counts as a write.
+        Command::Debug(debug::DebugCmd::Status)
+        | Command::Debug(debug::DebugCmd::Where)
+        | Command::Debug(debug::DebugCmd::Locals)
+        | Command::Debug(debug::DebugCmd::Src) => false,
+        Command::Debug(_) => true,
 
         // Term: list / buffer / context / busy / running / exit-code / visible are reads.
         Command::Term(term::TermCmd::List)

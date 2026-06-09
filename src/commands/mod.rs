@@ -1,4 +1,5 @@
 pub mod console;
+pub mod debug;
 pub mod editor;
 pub mod env;
 pub mod job;

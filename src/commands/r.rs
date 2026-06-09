@@ -56,7 +56,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio r exec '1+1'",
-                explanation: "Returns {output: \"[1] 2\"}.",
+                explanation: "Returns {output: \"[1] 2\", eval_env: {kind: \"top_level\"}}.",
             },
             ExampleSpec {
                 cmd: "rstudio r exec --timeout 30 'Sys.sleep(10); summary(mtcars)'",
@@ -64,14 +64,18 @@ pub const ACTIONS: &[ActionSpec] = &[
             },
             ExampleSpec {
                 cmd: "rstudio r exec --async 'Sys.sleep(5); paste(\"done\", Sys.time())'",
-                explanation: "Returns {id, status:\"running\"} immediately; poll for result.",
+                explanation: "Returns {id, status:\"running\", eval_env:{kind:\"background_job\"}}; poll for result.",
+            },
+            ExampleSpec {
+                cmd: "rstudio r exec 'ls()'   # while R is at a Browse[n]> prompt",
+                explanation: "Auto-detects the browser frame: ls() lists the locals of the function being debugged. Response carries eval_env={kind:\"browser_frame\", function:\"<fn>\", depth:N}.",
             },
             ExampleSpec {
                 cmd: "rstudio r exec 'stop(\"boom\")'",
                 explanation: "Returns kind=r_error with message=\"boom\".",
             },
         ],
-        returns: "{output: string} or {id: string, status: \"running\"} when --async",
+        returns: "{output: string, eval_env: {kind, ...}} or {id: string, status: \"running\", eval_env: {kind: \"background_job\"}} when --async",
         errors: &[
             ErrorSpec {
                 kind: "r_error",
@@ -200,8 +204,14 @@ pub const ACTIONS: &[ActionSpec] = &[
                       via sink(split=TRUE) and messages via withCallingHandlers, writing \
                       the result as JSON to a tempfile that the CLI polls. Uses \
                       sink.number() to restore sink depth safely even when the code calls \
-                      source() or opens its own sinks. Pass --no-capture for fire-and- \
-                      forget behaviour (no output returned). Pass --timeout to bound the wait.",
+                      source() or opens its own sinks. \
+                      Browser-aware: when R is at a Browse[n]> prompt (active debugger), \
+                      the helper evaluates in `parent.frame()` — the frame of the function \
+                      being debugged — so the code sees the same locals as `n`/`s` would. \
+                      Mutations to those locals persist after `c`. The `eval_env` field of \
+                      the response reports where evaluation actually landed. \
+                      Pass --no-capture for fire-and-forget behaviour (no output returned). \
+                      Pass --timeout to bound the wait.",
         params: &[
             ParamSpec {
                 name: "code",
@@ -232,19 +242,26 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio r send 'sqrt(144)'",
-                explanation: "Returns {stdout: \"[1] 12\", messages: [], error: null}; \
-                              user sees ℝ(~{ sqrt(144) }) in their console.",
+                explanation: "Returns {stdout: \"[1] 12\", messages: [], error: null, \
+                              eval_env: {kind: \"global\"}}; user sees ℝ(~{ sqrt(144) }) in \
+                              their console.",
             },
             ExampleSpec {
                 cmd: "rstudio r send 'message(\"hi\"); 1+1'",
-                explanation: "Returns {stdout: \"[1] 2\", messages: [\"hi\\n\"], error: null}.",
+                explanation: "Returns {stdout: \"[1] 2\", messages: [\"hi\\n\"], error: null, eval_env: {...}}.",
+            },
+            ExampleSpec {
+                cmd: "rstudio r send 'y'   # at a Browse[n]> prompt inside debug_me()",
+                explanation: "Auto-targets the browser frame; reads the local `y`. \
+                              eval_env: {kind: \"browser_frame\", function: \"debug_me\", depth: 1}.",
             },
             ExampleSpec {
                 cmd: "rstudio r send --no-capture 'print(Sys.time())'",
                 explanation: "Fire-and-forget; code runs visibly, nothing returned.",
             },
         ],
-        returns: "{stdout: string, messages: string[], error: string|null} \
+        returns: "{stdout: string, messages: string[], error: string|null, \
+                   eval_env: {kind: \"global\"|\"attached\"|\"browser_frame\", ...}} \
                   or void with --no-capture",
         errors: &[
             ErrorSpec {
@@ -264,6 +281,8 @@ pub const ACTIONS: &[ActionSpec] = &[
 #[derive(Subcommand, Debug)]
 pub enum RCmd {
     /// Run R code silently (capture output and errors; not visible in the user's console).
+    /// Browser-aware: at a Browse[n]> prompt, auto-targets the debugger frame.
+    /// Response includes an `eval_env` field describing where the code ran.
     Exec {
         code: String,
         /// Elapsed-time limit in seconds. 0 = no limit. Ignored with --async.
@@ -285,6 +304,9 @@ pub enum RCmd {
     /// Interrupt the R code currently running in the main console (equivalent of Stop).
     Interrupt,
     /// Send R code to the user's visible console and capture its output.
+    /// Browser-aware: at a Browse[n]> prompt, auto-evaluates in the debugger
+    /// frame (mutations persist). Response includes an `eval_env` field.
+    /// To navigate the debugger itself, use `rstudio debug step <cmd>`.
     Send {
         code: String,
         /// Skip capture; send code as-is and return nothing (fire-and-forget).
@@ -313,8 +335,7 @@ pub fn run(cmd: &RCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
                 Some(t) => EvalTimeout::Limit(*t),
             };
             apply_socket_timeout(rpc, &eval_timeout);
-            let output = r_eval::run_with_timeout(rpc, code, eval_timeout)?;
-            Ok(Some(json!({ "output": output })))
+            exec_aware(rpc, code, eval_timeout)
         }
         RCmd::Poll { id } => poll_async(rpc, id),
         RCmd::Kill { id, tree } => kill_async(rpc, id, *tree),
@@ -362,15 +383,48 @@ fn console_input(rpc: &RpcClient<'_>, code: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn current_environment_name(rpc: &RpcClient<'_>) -> String {
-    rpc.rpc("get_environment_state", vec![])
-        .ok()
-        .and_then(|v| {
-            v.get("environment_name")
-                .and_then(|n| n.as_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| ".GlobalEnv".to_string())
+/// Where `r send`'s ℝ helper should resolve its evaluation environment.
+///
+/// Two RPC-derived inputs drive the choice:
+/// - `get_environment_state.context_depth` — `> 0` means R is suspended in
+///   a function frame (typically a `browser()` prompt). The CLI then
+///   targets that frame so `r send 'y'` reads the debugged function's
+///   local `y`, not a global.
+/// - `get_environment_state.environment_name` — at depth 0, names the
+///   "active" environment the RStudio Environment pane currently shows
+///   (`.GlobalEnv` by default, or a search-path entry after `attach()`).
+///   `r send` follows the user's gaze so that the visible call evaluates
+///   in the same scope they're inspecting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EvalTarget {
+    /// `context_depth > 0`: resolve `parent.frame()` at the time `ℝ` is
+    /// invoked. Since `ℝ` is called from the `Browse[n]>` reader,
+    /// `parent.frame()` is the frame of the function being debugged.
+    BrowserFrame,
+    /// Default: evaluate in `.GlobalEnv`.
+    Global,
+    /// Evaluate in a named search-path entry (post-`attach()` etc.).
+    Attached(String),
+}
+
+fn current_eval_target(rpc: &RpcClient<'_>) -> EvalTarget {
+    let v = match rpc.rpc("get_environment_state", vec![]) {
+        Ok(v) => v,
+        Err(_) => return EvalTarget::Global,
+    };
+    let depth = v.get("context_depth").and_then(Value::as_i64).unwrap_or(0);
+    if depth > 0 {
+        return EvalTarget::BrowserFrame;
+    }
+    let name = v
+        .get("environment_name")
+        .and_then(|n| n.as_str())
+        .unwrap_or(".GlobalEnv");
+    if name == ".GlobalEnv" {
+        EvalTarget::Global
+    } else {
+        EvalTarget::Attached(name.to_string())
+    }
 }
 
 fn send_with_capture(
@@ -405,12 +459,17 @@ fn send_with_capture(
     // Remove any leftover from a previously killed call.
     let _ = std::fs::remove_file(&result_path);
 
-    // Resolve the active environment in the RStudio Environment pane so that
-    // eval() targets the same scope the user is looking at (e.g. after attach).
-    let env_name = current_environment_name(rpc);
+    // Decide where the ℝ helper should evaluate the user's code:
+    //  - depth > 0 (browser/debugger active) → the debugged frame
+    //    (`parent.frame()` at call-time);
+    //  - depth 0 → the env the Environment pane currently shows
+    //    (.GlobalEnv or a search-path entry after `attach()`).
+    // The choice is baked into the helper at install time and surfaced
+    // to the agent via the `eval_env` field of the response payload.
+    let target = current_eval_target(rpc);
 
-    // Install R() with the result path and target environment baked in.
-    r_eval::run_silent(rpc, &build_capture_fn(&result_path_for_r, &env_name))?;
+    // Install ℝ() with the result path and target environment baked in.
+    r_eval::run_silent(rpc, &build_capture_fn(&result_path_for_r, &target))?;
 
     // Send the wrapper via console_input — visible to the user, no quotes or
     // path argument exposed. Single-line code stays on one line; multi-line
@@ -474,19 +533,49 @@ fn process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-fn build_capture_fn(result_path: &str, env_name: &str) -> String {
+fn build_capture_fn(result_path: &str, target: &EvalTarget) -> String {
     let path_r = r_quote(result_path);
-    let env_name_r = r_quote(env_name);
+    // Each target emits two snippets:
+    //   - `env_resolution`: the R lines that set `.eval_env` (and any
+    //     bookkeeping needed to describe it).
+    //   - `meta_expr`: the R expression that produces the `eval_env`
+    //     metadata list embedded in the JSON payload returned to the CLI.
+    //
+    // For BrowserFrame, both must be evaluated INSIDE ℝ's body — `parent.frame()`
+    // and `sys.call(-1L)` only make sense at call-time, after the browser's
+    // reader has invoked ℝ. For Global / Attached, install-time resolution
+    // would also work but we keep the dispatch uniform.
+    let (env_resolution, meta_expr) = match target {
+        EvalTarget::BrowserFrame => (
+            r#"
+    .eval_env <- parent.frame()
+    .ee_fn <- tryCatch(deparse(sys.call(-1L)[[1L]])[1L], error = function(e) NA_character_)
+    .ee_depth <- tryCatch(as.integer(sys.nframe() - 1L), error = function(e) NA_integer_)"#
+                .to_string(),
+            r#"list(kind = "browser_frame", "function" = .ee_fn, depth = .ee_depth)"#.to_string(),
+        ),
+        EvalTarget::Global => (
+            r#"
+    .eval_env <- globalenv()"#
+                .to_string(),
+            r#"list(kind = "global")"#.to_string(),
+        ),
+        EvalTarget::Attached(name) => {
+            let name_q = r_quote(name);
+            (
+                format!(
+                    r#"
+    .eval_env <- tryCatch(as.environment(match({name_q}, search())),
+                          error = function(e) globalenv())"#
+                ),
+                format!(r#"list(kind = "attached", name = {name_q})"#),
+            )
+        }
+    };
     format!(
         r#"local({{
-  .env_name <- {env_name_r}
-  .eval_env <- if (.env_name == ".GlobalEnv") {{
-    globalenv()
-  }} else {{
-    tryCatch(as.environment(match(.env_name, search())), error = function(e) globalenv())
-  }}
   assign("ℝ", function(f) {{
-    .expr <- f[[2]]
+    .expr <- f[[2]]{env_resolution}
     .start <- sink.number()
     .out <- tempfile()
     .oc <- file(.out, "w+")
@@ -505,7 +594,8 @@ fn build_capture_fn(result_path: &str, env_name: &str) -> String {
         jsonlite::toJSON(list(
           stdout = .stdout,
           messages = as.list(.msgs),
-          error = if (.ok) NULL else .err
+          error = if (.ok) NULL else .err,
+          eval_env = {meta_expr}
         ), auto_unbox = TRUE, null = "null")
       }}
       try(writeLines(.payload, {path_r}), silent = TRUE)
@@ -526,6 +616,119 @@ fn build_capture_fn(result_path: &str, env_name: &str) -> String {
     .interrupted <- FALSE
     invisible(NULL)
   }}, envir = globalenv())
+}})"#
+    )
+}
+
+/// Sentinel inserted by `exec_aware`'s wrapper between the captured R
+/// output and a one-line JSON describing the evaluation scope. Picked to
+/// be implausible in any captured user output (zero-width-space + ascii).
+const EXEC_EVAL_ENV_SENTINEL: &str = "\u{200b}__RSCLI_EVAL_ENV__\u{200b}";
+
+/// `r exec` with server-side browser-frame detection.
+///
+/// Wraps the user code in a `local({…})` that walks `sys.calls()` looking
+/// for the first `.rs.*` frame (the boundary between user code and
+/// rsession's RPC plumbing). The frame immediately below that boundary,
+/// when it exists, is the deepest user frame — the one the browser's
+/// reader is sitting on. We eval the user code with `envir = sys.frame(i)`
+/// to that frame, mirroring what the user gets when typing at `Browse[n]>`.
+///
+/// Outside a browser, no user frames sit below an `.rs.*` boundary
+/// (or there are no `.rs.*` frames at all in unusual setups), so we
+/// fall back to `environment()` — the wrapper's local scope, identical
+/// to the pre-0.19 behavior of `r exec` (and to plain `eval(parse(...))`).
+///
+/// The wrapper emits two sections separated by `EXEC_EVAL_ENV_SENTINEL`:
+/// the OK/ER-prefixed captured output (parsed by `r_eval::parse_output`),
+/// then a single JSON line with the `eval_env` metadata.
+fn exec_aware(
+    rpc: &RpcClient<'_>,
+    code: &str,
+    timeout: EvalTimeout,
+) -> Result<Option<Value>, CliError> {
+    let r_code = build_exec_wrapper(code, timeout);
+    let raw = rpc.rpc("execute_r_code", vec![Value::String(r_code)])?;
+    let raw_str = raw
+        .as_str()
+        .ok_or_else(|| CliError::internal(format!("execute_r_code returned non-string: {raw}")))?;
+
+    // Split the captured-output section from the eval_env metadata line.
+    let (main, meta_raw) = match raw_str.rsplit_once(EXEC_EVAL_ENV_SENTINEL) {
+        Some((m, j)) => (m.trim_end_matches('\n'), j.trim()),
+        None => {
+            // Older / partial output (e.g. on timeout): no metadata. We still
+            // honour the OK/ER contract by parsing the whole blob.
+            let output = r_eval::parse_exec_output(raw_str)?;
+            return Ok(Some(json!({
+                "output": output,
+                "eval_env": { "kind": "top_level" }
+            })));
+        }
+    };
+
+    let output = r_eval::parse_exec_output(main)?;
+    let eval_env: Value = serde_json::from_str(meta_raw).unwrap_or_else(|_| {
+        // Best-effort fallback if R emitted something we can't parse — we
+        // still want the user to see the output.
+        json!({ "kind": "top_level" })
+    });
+    Ok(Some(json!({ "output": output, "eval_env": eval_env })))
+}
+
+fn build_exec_wrapper(user_code: &str, timeout: EvalTimeout) -> String {
+    let setup = match timeout {
+        EvalTimeout::ServerDefault => String::new(),
+        EvalTimeout::Limit(secs) => {
+            format!("setTimeLimit(elapsed = {secs}, transient = TRUE)")
+        }
+        EvalTimeout::NoLimit => "setTimeLimit(elapsed = Inf, transient = TRUE)".to_string(),
+    };
+    let code_q = r_quote(user_code);
+    let sentinel = EXEC_EVAL_ENV_SENTINEL;
+    format!(
+        r#"local({{
+  {setup}
+  # --- detect browser frame (server-side, no extra RPC) ---
+  .calls <- sys.calls()
+  .eval_env <- environment()
+  .ee_kind <- "top_level"
+  .ee_fn <- NA_character_
+  .ee_depth <- NA_integer_
+  if (length(.calls) > 0L) {{
+    .boundary <- NA_integer_
+    for (.i in seq_along(.calls)) {{
+      .fn <- tryCatch(deparse(.calls[[.i]][[1L]])[1L], error = function(e) "")
+      if (startsWith(.fn, ".rs.") || startsWith(.fn, ".rstudio")) {{
+        .boundary <- .i
+        break
+      }}
+    }}
+    if (!is.na(.boundary) && .boundary > 1L) {{
+      .target <- .boundary - 1L
+      .eval_env <- sys.frame(.target)
+      .ee_kind <- "browser_frame"
+      .ee_fn <- tryCatch(deparse(.calls[[.target]][[1L]])[1L], error = function(e) NA_character_)
+      .ee_depth <- as.integer(.target)
+    }}
+  }}
+  # --- run user code, OK/ER framing per r_eval contract ---
+  .__r <- tryCatch({{
+    .__c <- capture.output({{
+      .__w <- withVisible(eval(parse(text = {code_q}), envir = .eval_env))
+      if (.__w$visible) print(.__w$value)
+    }})
+    paste0("OK\n", paste(.__c, collapse = "\n"))
+  }}, error = function(e) {{
+    paste0("ER\n", conditionMessage(e))
+  }})
+  cat(.__r, sep = "")
+  # --- sentinel + eval_env metadata ---
+  cat("\n{sentinel}\n")
+  cat(jsonlite::toJSON(
+    list(kind = .ee_kind, "function" = .ee_fn, depth = .ee_depth),
+    auto_unbox = TRUE, null = "null", na = "null"
+  ))
 }})"#
     )
 }
@@ -556,9 +759,12 @@ fn exec_async(rpc: &RpcClient<'_>, code: &str) -> Result<Option<Value>, CliError
 }})"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
-    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+    let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| {
         CliError::internal(format!("r exec --async: invalid JSON: {e}; raw: {raw}"))
     })?;
+    if let Value::Object(ref mut map) = parsed {
+        map.insert("eval_env".to_string(), json!({ "kind": "background_job" }));
+    }
     Ok(Some(parsed))
 }
 
@@ -595,8 +801,13 @@ fn poll_async(rpc: &RpcClient<'_>, id: &str) -> Result<Option<Value>, CliError> 
 }})"#
     );
     let raw = r_eval::run(rpc, &r_code)?;
-    let parsed: Value = serde_json::from_str(&raw)
+    let mut parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| CliError::internal(format!("r poll: invalid JSON: {e}; raw: {raw}")))?;
+    // `r poll` reports on a background callr process — surface its scope
+    // for parity with `r exec --async` and `r exec`.
+    if let Value::Object(ref mut map) = parsed {
+        map.insert("eval_env".to_string(), json!({ "kind": "background_job" }));
+    }
     Ok(Some(parsed))
 }
 
@@ -657,7 +868,7 @@ mod tests {
     use super::*;
 
     fn cap(path: &str) -> String {
-        build_capture_fn(path, ".GlobalEnv")
+        build_capture_fn(path, &EvalTarget::Global)
     }
 
     #[test]
@@ -687,9 +898,90 @@ mod tests {
     fn capture_fn_uses_globalenv_by_default() {
         let code = cap("/tmp/test.json");
         assert!(
-            code.contains(r#"".GlobalEnv""#) && code.contains("globalenv()"),
-            "default env_name must resolve to globalenv()"
+            code.contains("globalenv()") && code.contains(r#"kind = "global""#),
+            "EvalTarget::Global must resolve .eval_env to globalenv() and tag meta as 'global'"
         );
+    }
+
+    #[test]
+    fn capture_fn_browser_frame_uses_parent_frame() {
+        let code = build_capture_fn("/tmp/test.json", &EvalTarget::BrowserFrame);
+        assert!(
+            code.contains("parent.frame()"),
+            "BrowserFrame target must resolve .eval_env via parent.frame() at call-time: {code}"
+        );
+        assert!(
+            code.contains(r#"kind = "browser_frame""#),
+            "BrowserFrame target must tag meta as 'browser_frame': {code}"
+        );
+        // The function name and depth are captured at call-time (inside ℝ),
+        // not baked in at install-time. Check the call-time helpers appear.
+        assert!(
+            code.contains("sys.call(-1L)") && code.contains("sys.nframe()"),
+            "BrowserFrame meta must be captured at call-time via sys.call(-1L)/sys.nframe()"
+        );
+    }
+
+    #[test]
+    fn capture_fn_attached_uses_search_path_match() {
+        let code = build_capture_fn(
+            "/tmp/test.json",
+            &EvalTarget::Attached("package:foo".into()),
+        );
+        assert!(
+            code.contains(r#""package:foo""#) && code.contains("as.environment(match("),
+            "Attached(name) target must use as.environment(match(name, search())): {code}"
+        );
+        assert!(
+            code.contains(r#"kind = "attached""#) && code.contains(r#"name = "package:foo""#),
+            "Attached meta must carry kind=attached and the name verbatim"
+        );
+    }
+
+    #[test]
+    fn capture_fn_payload_carries_eval_env() {
+        // The JSON written to the result file MUST include `eval_env =
+        // <meta_expr>` so the CLI can surface it back to the agent.
+        for target in [
+            EvalTarget::Global,
+            EvalTarget::BrowserFrame,
+            EvalTarget::Attached("X".into()),
+        ] {
+            let code = build_capture_fn("/tmp/t.json", &target);
+            assert!(
+                code.contains("eval_env ="),
+                "capture payload must include `eval_env = ...` for target {target:?}: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn exec_wrapper_carries_browser_detection_and_sentinel() {
+        let code = build_exec_wrapper("1+1", EvalTimeout::ServerDefault);
+        // Server-side detection walks sys.calls() for the .rs.* boundary.
+        assert!(
+            code.contains("sys.calls()") && code.contains(".rs.") && code.contains("sys.frame("),
+            "exec wrapper must walk sys.calls() and resolve sys.frame() at the boundary: {code}"
+        );
+        // The sentinel must be present so the CLI knows where to split.
+        assert!(
+            code.contains(EXEC_EVAL_ENV_SENTINEL),
+            "exec wrapper must emit the EXEC_EVAL_ENV_SENTINEL separator"
+        );
+        // OK/ER framing must be preserved (compatibility with parse_exec_output).
+        assert!(
+            code.contains("\"OK\\n\"") && code.contains("\"ER\\n\""),
+            "exec wrapper must preserve r_eval's OK/ER status framing"
+        );
+    }
+
+    #[test]
+    fn exec_wrapper_emits_eval_env_json_kinds() {
+        let code = build_exec_wrapper("ls()", EvalTimeout::ServerDefault);
+        // Both kinds appear as literal strings in the wrapper, even if only
+        // one is selected at runtime — guards against typos in the meta line.
+        assert!(code.contains(r#""top_level""#));
+        assert!(code.contains(r#""browser_frame""#));
     }
 
     #[test]
@@ -778,7 +1070,10 @@ mod tests {
 
     #[test]
     fn capture_fn_uses_custom_env_name() {
-        let code = build_capture_fn("/tmp/test.json", "mydf");
+        // Legacy contract: a search-path name (e.g. after `attach()`)
+        // resolves via `as.environment(match(name, search()))`. Now
+        // routed through EvalTarget::Attached but R-side semantics unchanged.
+        let code = build_capture_fn("/tmp/test.json", &EvalTarget::Attached("mydf".into()));
         assert!(
             code.contains(r#""mydf""#) && code.contains("as.environment(match("),
             "non-global env_name must use as.environment(match(...))"

@@ -4,6 +4,64 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-06-09
+
+### Added
+
+- **First-class support for R's debugger** (`browser()`, `debug()`,
+  `recover()`). The CLI is now aware when R is at a `Browse[n]>`
+  prompt and adapts every R-execution surface accordingly.
+
+  - **`r send` and `r exec` are now browser-aware**. When the active
+    R session is at a `Browse[n]>` prompt, both commands automatically
+    evaluate user code in the frame being debugged — not in
+    `.GlobalEnv`. This means `r send 'y'` reads the debugged
+    function's local `y`, `r exec 'ls()'` lists the locals of the
+    current frame, and assignments persist after the user types `c`.
+    Detection is best-effort and free: `r send` uses the
+    `context_depth` field already present in `get_environment_state`,
+    `r exec` walks `sys.calls()` server-side to find the user/rsession
+    frame boundary (zero extra RPCs).
+
+  - **Every `r exec` / `r send` response now carries an `eval_env`
+    field** that confirms where the code actually ran. Values:
+    `{kind: "global"}`, `{kind: "attached", name}`,
+    `{kind: "browser_frame", function, depth}`,
+    `{kind: "top_level"}` (for `r exec` outside a debugger), or
+    `{kind: "background_job"}` (for `r exec --async` and `r poll`).
+    Agents reading the response know unambiguously which scope was
+    targeted, without needing to re-poll session state.
+
+  - **New `debug` subcommand category** with six actions:
+    - `debug status` — full debugger state (depth, current frame,
+      source location, typed locals, call stack), projected from
+      `get_environment_state`.
+    - `debug step <n|s|f|c|Q|where|help|r>` — push a browser
+      meta-command via `console_input`, without ever wrapping it in
+      `ℝ(~{…})`. Refuses with `kind=user_error` when no debugger is
+      active.
+    - `debug where` — call stack only (subset of `debug status`).
+    - `debug locals` — typed locals of the current frame only.
+    - `debug src` — `{file, line}` of the current frame (when a real
+      `srcref` is available).
+    - `debug exit` — alias of `debug step Q`.
+
+  - **`rstudio status` gains a `rsession.debugger` field**: `null` at
+    the regular prompt, `{in_browser: true, depth, function}` while a
+    debugger is active. Surfaced in the `--format text` rendering too.
+    Costs one extra RPC at session start; agents land oriented.
+
+  - **Three new `observe` events at Tier 2**: `debug.entered`,
+    `debug.exited`, `debug.frame_changed`. Emitted on transitions of
+    `get_environment_state.context_depth` and `environment_name`.
+    The initial snapshot also emits `debug.entered` when observe
+    attaches while a debugger is already active.
+
+  - **Embedded skill updates** — both `src/skills/rstudio.md` (CLI)
+    and `src/skills/rstudio-mcp.md` (MCP) gain a *Debugging workflow*
+    section documenting the new surface, the `eval_env` envelope
+    contract, and the "don't send `r send 'n'`" footgun.
+
 ## [0.18.2] — 2026-06-09
 
 ### Fixed

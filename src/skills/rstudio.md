@@ -339,6 +339,62 @@ it's intended for debugging and solo scripts.
   skipped-dirty`) if the user has unsaved edits in that buffer. Only
   call once per file write — don't loop.
 
+## Debugging workflow (R's `browser()`, `debug()`, `recover()`)
+
+When the user's R session enters a debugger, the console sits at a
+`Browse[n]>` prompt. The CLI is fully aware of this state — both for
+introspection and for evaluation — but the verbs are different from
+"normal" R execution.
+
+**Detect**. `rstudio status` reports a top-level `rsession.debugger`
+field (`null` at the regular prompt; populated when a browser is
+active). For the full picture — depth, current frame, source location,
+typed locals, full call stack — call `rstudio debug status`.
+
+**Evaluate**. `r send` and `r exec` are *browser-aware*: when called
+while a debugger is active, they automatically evaluate the user's code
+in the frame being debugged (not in `.GlobalEnv`). The response always
+carries an `eval_env` field that confirms where the code actually ran:
+
+      rstudio r send 'y + 1'   # at a Browse[n]> prompt
+      → {stdout: "[1] 43", messages: [], error: null,
+         eval_env: {kind: "browser_frame", function: "debug_me", depth: 1}}
+
+      rstudio r exec 'ls()'    # while at the same prompt
+      → {output: "[1] \"x\" \"y\" \"z\"",
+         eval_env: {kind: "browser_frame", function: "debug_me", depth: 1}}
+
+This works for both reads (`ls()`, `str(x)`) and writes (`y <- 9999L`
+will persist when the user types `c`). `eval_env.kind` is one of:
+`global`, `attached` (search-path env), `browser_frame`, `top_level`
+(`r exec` outside a debugger), or `background_job` (`r exec --async` /
+`r poll`).
+
+**Navigate**. Browser meta-commands have a dedicated verb so they
+never get wrapped in `ℝ(~{…})` (which would evaluate them as bare R
+symbols):
+
+      rstudio debug step n     # next statement
+      rstudio debug step s     # step in
+      rstudio debug step f     # finish current function
+      rstudio debug step c     # continue (exits one level)
+      rstudio debug step Q     # quit all browser levels
+      rstudio debug exit       # alias of `debug step Q`
+
+`debug step` refuses with `kind=user_error` if no debugger is active.
+
+**Inspect**. `debug locals`, `debug where`, `debug src` project
+rsession's `get_environment_state` into compact agent-friendly JSON.
+
+**Observe**. The `observe` stream (`--tier 2`) emits three debugger
+events: `debug.entered`, `debug.exited`, `debug.frame_changed`. Agents
+that tail observe will see browser entries/exits without polling.
+
+**Don't** send raw browser commands via `r send 'n'` — the wrapper
+evaluates `n` as a symbol and errors out with "object 'n' not found".
+Use `debug step n` instead. (`r send --no-capture 'n'` works as an
+escape hatch but is not idiomatic.)
+
 ## Hard constraints
 
 - Never invoke `rstudio rpc client_init`. It's blacklisted at the CLI

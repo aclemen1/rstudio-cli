@@ -72,6 +72,13 @@ fn wrap_for_eval(user_code: &str, timeout: EvalTimeout) -> String {
         .replace("__ESCAPED__", &r_quote(user_code))
 }
 
+/// Public alias of `parse_output` for callers that build their own
+/// `execute_r_code` wrappers but still want to honour this module's OK/ER
+/// status-line contract (currently `r exec`'s browser-aware wrapper).
+pub fn parse_exec_output(raw: &str) -> Result<String, CliError> {
+    parse_output(raw)
+}
+
 fn parse_output(raw: &str) -> Result<String, CliError> {
     let (status, payload) = raw.split_once('\n').unwrap_or((raw, ""));
     match status {

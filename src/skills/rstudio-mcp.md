@@ -291,6 +291,54 @@ before calling these. Same defensive rule as for any sequence: wrap
 in a tx if you're chaining (`project_clone` → `editor_open` → … must
 use tx_begin/end to be atomic with respect to other agents).
 
+## Debugging workflow (R's `browser()`, `debug()`, `recover()`)
+
+When the user's R session enters a debugger, the console sits at a
+`Browse[n]>` prompt. The MCP server is fully aware of this state, both
+for introspection and for evaluation, but the tools to use differ
+from "normal" R execution.
+
+**Detect**. The `status` tool's response includes `rsession.debugger`
+(`null` at the regular prompt; populated when a browser is active).
+For the full picture — depth, current frame, source location, typed
+locals, full call stack — call `debug_status`.
+
+**Evaluate**. `r_send` and `r_exec` are *browser-aware*: when called
+while a debugger is active, they automatically evaluate user code in
+the frame being debugged (not in `.GlobalEnv`). The response always
+carries an `eval_env` field confirming where the code actually ran:
+
+      r_send {code: "y + 1"}   // at a Browse[n]> prompt
+      → {stdout: "[1] 43", messages: [], error: null,
+         eval_env: {kind: "browser_frame", function: "debug_me", depth: 1}}
+
+      r_exec {code: "ls()"}    // while at the same prompt
+      → {output: "[1] \"x\" \"y\" \"z\"",
+         eval_env: {kind: "browser_frame", function: "debug_me", depth: 1}}
+
+Reads and writes both target the browser frame; mutations persist
+when the user continues. `eval_env.kind` ∈ `{global, attached,
+browser_frame, top_level, background_job}`.
+
+**Navigate**. Browser meta-commands have a dedicated tool so they're
+never wrapped in `ℝ(~{…})` (which would evaluate them as bare R
+symbols):
+
+      debug_step {command: "n"}   // next statement
+      debug_step {command: "s"}   // step in
+      debug_step {command: "f"}   // finish current function
+      debug_step {command: "c"}   // continue (exits one level)
+      debug_step {command: "Q"}   // quit all browser levels
+      debug_exit                  // alias of debug_step {command: "Q"}
+
+`debug_step` errors with `kind=user_error` if no debugger is active.
+
+**Inspect**. `debug_locals`, `debug_where`, `debug_src` project
+rsession's `get_environment_state` into compact JSON.
+
+**Don't** send raw browser commands via `r_send {code: "n"}` — the
+wrapper evaluates `n` as a symbol and errors out. Use `debug_step`.
+
 ## Hard constraints
 
 - **Never invoke `rpc` with method `client_init`**. It's blacklisted at

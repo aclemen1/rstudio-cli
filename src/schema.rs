@@ -92,6 +92,13 @@ pub const CATEGORIES: &[CategorySpec] = &[
         description: "R console history, on-disk buffer snapshot, and live console editor context.",
     },
     CategorySpec {
+        name: "debug",
+        description: "R debugger (browser/debug/recover) introspection and navigation. \
+                      `r send` and `r exec` are already browser-aware (they auto-target the \
+                      active frame); `debug` adds structured state queries and meta-commands \
+                      (n/s/f/c/Q/where/help/r).",
+    },
+    CategorySpec {
         name: "term",
         description: "RStudio Terminal pane (live shells, buffer reads, send/exec, lifecycle).",
     },
@@ -149,6 +156,7 @@ pub fn registry() -> Vec<&'static ActionSpec> {
         crate::commands::editor::ACTIONS,
         crate::commands::r::ACTIONS,
         crate::commands::console::ACTIONS,
+        crate::commands::debug::ACTIONS,
         crate::commands::term::ACTIONS,
         crate::commands::env::ACTIONS,
         crate::commands::pane::ACTIONS,
