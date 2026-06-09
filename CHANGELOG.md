@@ -4,6 +4,34 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] — 2026-06-09
+
+### Fixed
+
+- **`r send` in browser mode no longer risks nesting the user into a
+  deeper `Browse[n+1]>`**. The previous 0.19.0 path typed `ℝ(~{ code })`
+  at the `Browse[n]>` prompt, which under some conditions (notably when
+  the function was sourced with `keep.source = TRUE`, or when R's debug
+  stepper was armed for any other reason) was interpreted as a series
+  of statements to single-step through — landing the user in a nested
+  browser. The CLI would then poll indefinitely for a result the ℝ
+  helper could never write, holding the per-session lock and blocking
+  every subsequent call.
+
+  The fix routes browser-mode `r send` through `execute_r_code` (the
+  same side channel `r exec` already uses), with `eval(envir =
+  sys.frame(<depth>))` targeting the browser frame for symbol
+  resolution. A one-line `cat("# rstudio-cli r send (browser-silent):
+  <preview>\n")` marker is sent via `console_input` first so the user
+  still sees that something happened in their console. The response
+  envelope is unchanged: `{stdout, messages, error, eval_env}`.
+
+  **Recovery for sessions still on 0.19.0 that got stuck**: tap `Q`
+  manually in the RStudio console, or from another terminal in that
+  session run `rstudio --no-lock r interrupt` followed by
+  `rstudio --no-lock debug exit`. The `--no-lock` flag bypasses the
+  lock that the stuck `r send` is holding.
+
 ## [0.19.0] — 2026-06-09
 
 ### Added

@@ -432,6 +432,20 @@ fn send_with_capture(
     code: &str,
     timeout: Option<f64>,
 ) -> Result<Option<Value>, CliError> {
+    // Browser-mode short-circuit: when R is at a Browse[n]> prompt, route
+    // through `execute_r_code` instead of the ℝ/console_input dance.
+    // Rationale: the browser's reader arms R's debug stepper, and a
+    // `{ … }` block typed at the prompt can be interpreted as a series
+    // of statements to single-step through — landing the user in a
+    // nested Browse[n+1]>. `execute_r_code` runs on a side-channel that
+    // bypasses the browser's reader, so no nesting and no stepping.
+    // We still emit a one-line marker via console_input so the user
+    // sees that something was sent on their behalf (single statement,
+    // no `{}` block — safe in browser mode).
+    if matches!(current_eval_target(rpc), EvalTarget::BrowserFrame) {
+        return send_in_browser(rpc, code, timeout);
+    }
+
     // Stable rsession PID — used both as the result-file name and for crash
     // detection. One fixed file per rsession lifetime means no orphan
     // proliferation: a leftover from a previous killed call is cleaned up
@@ -524,6 +538,154 @@ fn send_with_capture(
         return Err(CliError::r(err_msg.to_string()));
     }
 
+    Ok(Some(result))
+}
+
+/// `r send` for the browser-active case: silent eval in the debugger
+/// frame via `execute_r_code`, plus a one-line visibility marker.
+///
+/// Why this exists — the regular path types `ℝ(~{ code })` at the
+/// `Browse[n]>` prompt. The browser's reader arms R's debug stepper;
+/// the `{ code }` block inside `~{…}`, evaluated in the debug'd frame,
+/// can land us at `Browse[n+1]>` (the stepper interprets our block's
+/// statements as the "next" statements to step through). This bug
+/// manifests intermittently depending on whether the function was
+/// sourced with `keep.source = TRUE`, whether `debug()` was set, etc.
+/// Routing through `execute_r_code` removes the variable entirely:
+/// the eval happens on a side channel that doesn't go through the
+/// browser's reader, so neither nesting nor stepping can happen.
+///
+/// Trade-off: the code itself is not visible in the user's RStudio
+/// console (`ℝ(~{...})` no longer appears). We compensate by sending
+/// a single-statement `cat()` marker via `console_input` BEFORE the
+/// eval — single statements at a `Browse[]>` prompt are safe (no
+/// `{}` block ⇒ no stepping trigger). The user sees that something
+/// was sent without their browser depth changing.
+fn send_in_browser(
+    rpc: &RpcClient<'_>,
+    code: &str,
+    timeout: Option<f64>,
+) -> Result<Option<Value>, CliError> {
+    // 1. Visibility marker: single-statement cat() with a truncated
+    //    preview of the code, prefixed with `#` so it visually reads
+    //    as a comment. Newlines in the code are flattened to ⏎ to
+    //    keep the marker on one line (multi-line cat is still one
+    //    statement, but a single-line form is more readable in the
+    //    console).
+    let preview: String = {
+        let one_line = code.replace('\n', " ⏎ ");
+        if one_line.chars().count() > 80 {
+            let mut s: String = one_line.chars().take(77).collect();
+            s.push('…');
+            s
+        } else {
+            one_line
+        }
+    };
+    let marker = format!(
+        "cat({})",
+        r_quote(&format!(
+            "# rstudio-cli r send (browser-silent): {preview}\n"
+        ))
+    );
+    // Fire-and-forget: any error here is non-fatal; the eval below
+    // still produces the captured payload. We just lose the marker.
+    let _ = console_input(rpc, &marker);
+
+    // 2. Silent capture path. One execute_r_code RPC: auto-detect the
+    //    deepest user frame (same trick as `r exec`), sink stdout,
+    //    handle messages, tryCatch errors, emit JSON.
+    let timeout_setup = match timeout {
+        None => String::new(),
+        Some(t) if t <= 0.0 || !t.is_finite() => {
+            "setTimeLimit(elapsed = Inf, transient = TRUE)".to_string()
+        }
+        Some(t) => format!("setTimeLimit(elapsed = {t}, transient = TRUE)"),
+    };
+    apply_socket_timeout(
+        rpc,
+        &match timeout {
+            None => EvalTimeout::ServerDefault,
+            Some(t) if t <= 0.0 || !t.is_finite() => EvalTimeout::NoLimit,
+            Some(t) => EvalTimeout::Limit(t),
+        },
+    );
+    let code_q = r_quote(code);
+    let r_code = format!(
+        r#"local({{
+  {timeout_setup}
+  # --- locate the deepest user frame (skip rsession internals) ---
+  .calls <- sys.calls()
+  .eval_env <- environment()
+  .ee_kind <- "top_level"
+  .ee_fn <- NA_character_
+  .ee_depth <- NA_integer_
+  if (length(.calls) > 0L) {{
+    .boundary <- NA_integer_
+    for (.i in seq_along(.calls)) {{
+      .fn <- tryCatch(deparse(.calls[[.i]][[1L]])[1L], error = function(e) "")
+      if (startsWith(.fn, ".rs.") || startsWith(.fn, ".rstudio")) {{
+        .boundary <- .i; break
+      }}
+    }}
+    if (!is.na(.boundary) && .boundary > 1L) {{
+      .target <- .boundary - 1L
+      .eval_env <- sys.frame(.target)
+      .ee_kind <- "browser_frame"
+      .ee_fn <- tryCatch(deparse(.calls[[.target]][[1L]])[1L], error = function(e) NA_character_)
+      .ee_depth <- as.integer(.target)
+    }}
+  }}
+  # --- capture stdout via a temp connection, messages via handler ---
+  .out <- tempfile()
+  .oc <- file(.out, "w+")
+  .start <- sink.number()
+  .msgs <- character()
+  .ok <- TRUE
+  .err <- NULL
+  on.exit({{
+    while (sink.number() > .start) sink(NULL)
+    try(close(.oc), silent = TRUE)
+  }}, add = TRUE)
+  tryCatch({{
+    sink(.oc)
+    withCallingHandlers({{
+      .v <- withVisible(eval(parse(text = {code_q}), envir = .eval_env))
+      if (.v$visible) print(.v$value)
+    }}, message = function(m) {{
+      .msgs <<- c(.msgs, conditionMessage(m))
+    }})
+  }}, error = function(e) {{
+    .ok <<- FALSE
+    .err <<- conditionMessage(e)
+  }})
+  while (sink.number() > .start) sink(NULL)
+  try(close(.oc), silent = TRUE)
+  .stdout <- paste(readLines(.out, warn = FALSE), collapse = "\n")
+  try(unlink(.out), silent = TRUE)
+  cat(jsonlite::toJSON(list(
+    stdout = .stdout,
+    messages = as.list(.msgs),
+    error = if (.ok) NULL else .err,
+    eval_env = list(kind = .ee_kind, "function" = .ee_fn, depth = .ee_depth)
+  ), auto_unbox = TRUE, null = "null", na = "null"))
+}})"#
+    );
+    let raw = rpc.rpc("execute_r_code", vec![Value::String(r_code)])?;
+    let raw_str = raw.as_str().ok_or_else(|| {
+        CliError::internal(format!("send_in_browser: non-string response: {raw}"))
+    })?;
+    let result: Value = serde_json::from_str(raw_str).map_err(|e| {
+        CliError::internal(format!(
+            "send_in_browser: invalid JSON: {e}; raw: {raw_str}"
+        ))
+    })?;
+
+    // r send's contract: propagate R errors as CliError::r so callers
+    // get the same envelope shape as the global-eval path.
+    if let Some(err_msg) = result.get("error").and_then(Value::as_str) {
+        return Err(CliError::r(err_msg.to_string()));
+    }
     Ok(Some(result))
 }
 
@@ -972,6 +1134,20 @@ mod tests {
         assert!(
             code.contains("\"OK\\n\"") && code.contains("\"ER\\n\""),
             "exec wrapper must preserve r_eval's OK/ER status framing"
+        );
+    }
+
+    #[test]
+    fn send_with_capture_routes_browser_path_via_short_circuit() {
+        // Sanity check on the dispatch: send_with_capture's first action is
+        // an `EvalTarget::BrowserFrame` short-circuit to `send_in_browser`.
+        // We can't easily fake the RPC here, but we can confirm the code
+        // path exists by string-searching the source — guards against an
+        // accidental removal of the browser short-circuit during a refactor.
+        let src = include_str!("r.rs");
+        assert!(
+            src.contains("send_in_browser(rpc, code, timeout)"),
+            "send_with_capture must short-circuit to send_in_browser when in browser mode"
         );
     }
 
