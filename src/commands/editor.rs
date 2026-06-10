@@ -374,8 +374,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         summary: "Reload a document's buffer from disk (revert to saved). The id stays the same.",
         description: "Wraps the rsession revert_document RPC. The buffer is replaced with the \
                       current on-disk contents, dirty flag is cleared, and the document id is \
-                      preserved (so cached references stay valid). Never opens a file that isn't \
-                      already in the Source pane — passing --path for an unopened file is a \
+                      preserved (so cached references stay valid). With neither id nor --path, \
+                      defaults to the active source document (like `editor save`); \
+                      action='skipped-no-active-doc' if none is active. Never opens a file that \
+                      isn't already in the Source pane — passing --path for an unopened file is a \
                       silent no-op (action='skipped-not-open'). With --if-clean, dirty buffers \
                       are also no-op'd (action='skipped-dirty'); without it, dirty buffers are \
                       reverted and unsaved edits are lost.",
@@ -386,7 +388,8 @@ pub const ACTIONS: &[ActionSpec] = &[
                 required: false,
                 default: None,
                 allowed: &[],
-                description: "Document id (8 hex chars). Mutually exclusive with --path.",
+                description: "Document id (8 hex chars). Omit both id and --path to reload \
+                              the active source document. Mutually exclusive with --path.",
             },
             ParamSpec {
                 name: "--path",
@@ -916,8 +919,10 @@ pub enum EditorCmd {
         save: String,
     },
     /// Reload a document's buffer from disk (revert to saved). Id stays the same.
+    /// With no id and no --path, reloads the active source document.
     Reload {
-        /// Document id (8 hex chars). Mutually exclusive with --path.
+        /// Document id (8 hex chars). Omit id and --path to reload the active
+        /// source document. Mutually exclusive with --path.
         id: Option<String>,
         /// Resolve the id from this file path. Mutually exclusive with the positional id.
         #[arg(long, conflicts_with = "id")]
@@ -1305,6 +1310,23 @@ fn select(rpc: &RpcClient<'_>, range: &str, id: Option<&str>) -> Result<Option<V
     Ok(None)
 }
 
+/// Resolve the active SOURCE document id (console excluded), or `None`
+/// when no source document is active. Used to default `editor reload` to
+/// the active doc, mirroring `editor save`'s no-arg behaviour.
+fn resolve_active_source_id(rpc: &RpcClient<'_>) -> Result<Option<String>, CliError> {
+    let raw = r_eval::run(
+        rpc,
+        "local({ .id <- rstudiocli::editor_active_id(allow_console = FALSE)$id; \
+         if (is.null(.id)) cat(\"null\") else cat(.id) })",
+    )?;
+    let t = raw.trim();
+    if t == "null" || t.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(t.to_string()))
+    }
+}
+
 fn reload(
     rpc: &RpcClient<'_>,
     session: &Session,
@@ -1318,9 +1340,21 @@ fn reload(
         (Some(id), _) => fetch_doc_meta(rpc, id)?,
         (None, Some(p)) => find_open_doc_by_path(rpc, session, p)?,
         (None, None) => {
-            return Err(CliError::user(
-                "editor reload requires either <id> or --path <path>.",
-            ));
+            // No target given → default to the active source document
+            // (matching `editor save`'s no-arg behaviour). `status` /
+            // `editor active-id` already expose this id; reloading the
+            // doc the user is looking at is the natural default.
+            let active = resolve_active_source_id(rpc)?;
+            match active {
+                Some(active_id) => fetch_doc_meta(rpc, &active_id)?,
+                None => {
+                    return Ok(Some(json!({
+                        "id": Value::Null,
+                        "path": Value::Null,
+                        "action": "skipped-no-active-doc",
+                    })));
+                }
+            }
         }
     };
 

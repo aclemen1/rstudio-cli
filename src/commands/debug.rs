@@ -19,6 +19,8 @@
 //! return `{ in_browser: false }` or refuse with `kind = not_in_debugger`
 //! depending on whether the verb makes sense outside the debugger.
 
+use std::time::{Duration, Instant};
+
 use clap::Subcommand;
 use serde_json::{Value, json};
 
@@ -26,6 +28,15 @@ use crate::error::CliError;
 use crate::r_eval;
 use crate::rpc::RpcClient;
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
+
+/// `debug step` post-send confirmation timing. After sending the command we
+/// wait `STEP_INITIAL_DELAY` (so console_input is processed and we don't read
+/// the pre-step state), then poll every `STEP_POLL_INTERVAL` until the state
+/// is stable across two reads, capped at `STEP_SETTLE_TIMEOUT`. The cap is
+/// bounded because `c`/`Q` can run arbitrarily long.
+const STEP_INITIAL_DELAY: Duration = Duration::from_millis(200);
+const STEP_SETTLE_TIMEOUT: Duration = Duration::from_millis(2000);
+const STEP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
@@ -76,8 +87,11 @@ pub const ACTIONS: &[ActionSpec] = &[
                       n=next, s=step in, f=finish, c=continue (exit one level), \
                       Q=quit (exit all browsers), where=print call stack, \
                       help=browser help, r=invoke 'resume' restart. \
-                      Returns immediately — call `debug status` afterwards \
-                      if you need to confirm the new state.",
+                      After sending, WAITS (bounded, ~3 s) for the prompt to \
+                      settle and returns the POST-step state — so you don't \
+                      read a stale snapshot in a race. `settled: false` means \
+                      the wait timed out (e.g. `c` is running a long \
+                      computation); re-poll `debug status` in that case.",
         params: &[ParamSpec {
             name: "command",
             kind: ParamKind::Enum,
@@ -89,14 +103,19 @@ pub const ACTIONS: &[ActionSpec] = &[
         examples: &[
             ExampleSpec {
                 cmd: "rstudio debug step n",
-                explanation: "Step to the next statement at the current call level.",
+                explanation: "Step to the next statement; returns the post-step \
+                              {in_browser, function, src, settled: true}.",
             },
             ExampleSpec {
                 cmd: "rstudio debug step c",
-                explanation: "Continue evaluation; exits one browser level.",
+                explanation: "Continue; typically returns {in_browser: false} once R \
+                              leaves the debugger (or the next browser settles).",
             },
         ],
-        returns: "{sent: string}",
+        returns: "{sent: string, settled: bool, in_browser: bool, \
+                  captured_at_unix_ms: int, browse_level?: int|null, \
+                  browse_level_source?: string, function?: string|null, \
+                  src?: {file, line}}",
         errors: &[ErrorSpec {
             kind: "not_in_debugger",
             when: "R is not at a Browse[n]> prompt; sending a meta-command would either error \
@@ -165,14 +184,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         name: "exit",
         summary: "Quit the debugger entirely (equivalent to typing Q).",
         description: "Pushes `Q` to the browser reader, terminating ALL active \
-                      browser frames in one step. Function returns (or errors, \
-                      depending on R's contract) immediately. Alias of `debug step Q`.",
+                      browser frames in one step. Alias of `debug step Q`: like \
+                      `step`, it waits for the prompt to settle and returns the \
+                      post-exit state (normally {in_browser: false}).",
         params: &[],
         examples: &[ExampleSpec {
             cmd: "rstudio debug exit",
-            explanation: "Bails out of the debugger; call `debug status` to confirm.",
+            explanation: "Bails out of the debugger; returns {sent: \"Q\", in_browser: false, settled: true}.",
         }],
-        returns: "{sent: \"Q\"}",
+        returns: "{sent: \"Q\", settled: bool, in_browser: bool, captured_at_unix_ms: int}",
         errors: &[ErrorSpec {
             kind: "not_in_debugger",
             when: "R is not at a Browse[n]> prompt.",
@@ -216,6 +236,17 @@ pub fn run(cmd: &DebugCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErro
 /// Fetch and project `get_environment_state` into a debugger-centric shape.
 fn fetch_state(rpc: &RpcClient<'_>) -> Result<Value, CliError> {
     rpc.rpc("get_environment_state", vec![])
+}
+
+/// Wall-clock capture time (unix epoch ms). Surfaced as `captured_at_unix_ms`
+/// on debugger snapshots so an agent can reason about freshness: a debugger
+/// snapshot has no rsession-side generation id, and the user may step or
+/// continue between calls, so a timestamp is the pragmatic staleness signal.
+pub(crate) fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn context_depth(state: &Value) -> i64 {
@@ -265,16 +296,68 @@ fn is_in_debugger(state: &Value) -> bool {
 /// we return `None` rather than leaking an evaluator-wrapper name like
 /// `ℝ` or `eval` from the call stack. The full `call_stack` is still
 /// available for agents that want the raw frames.
-fn debugged_function(state: &Value) -> Option<String> {
+pub(crate) fn debugged_function(state: &Value) -> Option<String> {
     let env_name = state
         .get("environment_name")
         .and_then(Value::as_str)
         .unwrap_or(".GlobalEnv");
     if env_name != ".GlobalEnv" && !env_name.is_empty() {
-        Some(env_name.trim_end_matches("()").to_string())
-    } else {
-        None
+        return Some(env_name.trim_end_matches("()").to_string());
     }
+    // env_name is .GlobalEnv — which happens when the browser was reached
+    // through an instrumented `browser()` that scopes the prompt to a
+    // non-function env (e.g. `do.call(base::browser, …, envir = wrap)` as
+    // modulr / debugme do). rsession then can't name a function, but a user
+    // function IS on the stack. Walk call_frames (innermost first), skip the
+    // instrumentation frames, and report the first real user function — so
+    // `function` is not null when a user call is being debugged.
+    first_user_function(state)
+}
+
+/// True for call-stack frames that are debugger / harness instrumentation
+/// rather than the user's code. Skipping these lets `debugged_function`
+/// report the innermost *user* function even when the browser was entered
+/// through such a wrapper. Covered: the `browser()` shim and the
+/// `do.call(base::browser, …)` some wrappers (modulr, debugme) use to enter
+/// the browser with an explicit env; rsession's own `.rs.*` / `.rstudio*`
+/// internals; and the rstudio-cli `ℝ` capture helper plus the R eval
+/// machinery it (and `r send` / `r exec`) wrap user code in (`eval`,
+/// `withVisible`, `withCallingHandlers`, the `tryCatch` family,
+/// `capture.output`, `local`, `eval.parent`, `suppressWarnings`).
+fn is_instrumentation_frame(function_name: &str) -> bool {
+    matches!(
+        function_name,
+        "do.call"
+            | "browser"
+            | "base::browser"
+            | "ℝ"
+            | "eval"
+            | "eval.parent"
+            | "evalq"
+            | "withVisible"
+            | "withCallingHandlers"
+            | "tryCatch"
+            | "tryCatchList"
+            | "tryCatchOne"
+            | "doTryCatch"
+            | "capture.output"
+            | "suppressWarnings"
+            | "suppressMessages"
+            | "local"
+    ) || function_name.starts_with(".rs")
+        || function_name.starts_with(".rstudio")
+}
+
+/// First user (non-instrumentation) function name walking call_frames from
+/// the innermost outward, or `None`.
+fn first_user_function(state: &Value) -> Option<String> {
+    state
+        .get("call_frames")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|f| f.get("function_name").and_then(Value::as_str))
+        .find(|name| !name.is_empty() && !is_instrumentation_frame(name))
+        .map(str::to_string)
 }
 
 fn project_call_stack(state: &Value) -> Vec<Value> {
@@ -403,6 +486,7 @@ fn status(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
         "src": project_current_src(&state),
         "locals": project_locals(&state),
         "call_stack": project_call_stack(&state),
+        "captured_at_unix_ms": now_unix_ms(),
     })))
 }
 
@@ -468,7 +552,72 @@ fn step(rpc: &RpcClient<'_>, command: &str) -> Result<Option<Value>, CliError> {
             json!(0),
         ],
     )?;
-    Ok(Some(json!({ "sent": command })))
+
+    // Confirm the post-step state instead of returning the stale pre-step
+    // snapshot (the race the old fire-and-forget behaviour exposed). We:
+    //   1. wait a short initial delay so console_input is processed and the
+    //      new prompt has begun to settle (avoids reading the pre-step state);
+    //   2. poll until the state signature is STABLE across two consecutive
+    //      reads (avoids transient mid-step snapshots), capped by a deadline.
+    // We intentionally do NOT require the signature to *change*: a step that
+    // stays on the same source line (e.g. a one-line function, or stepping
+    // within a line) would otherwise never "change" and we'd block to the
+    // cap for nothing. Stability after the initial delay is the post-step
+    // state. `settled: false` means it never stabilized within the cap
+    // (e.g. `c` is running a long computation) — re-poll `debug status`.
+    std::thread::sleep(STEP_INITIAL_DELAY);
+    let deadline = Instant::now() + STEP_SETTLE_TIMEOUT;
+    let mut final_state = fetch_state(rpc).unwrap_or(state);
+    let mut last_sig = debug_signature(&final_state);
+    let mut settled = false;
+    while Instant::now() < deadline {
+        std::thread::sleep(STEP_POLL_INTERVAL);
+        let s = match fetch_state(rpc) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let sig = debug_signature(&s);
+        let stable = sig == last_sig;
+        last_sig = sig;
+        final_state = s;
+        if stable {
+            settled = true;
+            break;
+        }
+    }
+
+    let in_browser = is_in_debugger(&final_state);
+    let mut out = serde_json::Map::new();
+    out.insert("sent".into(), json!(command));
+    out.insert("settled".into(), json!(settled));
+    out.insert("in_browser".into(), json!(in_browser));
+    out.insert("captured_at_unix_ms".into(), json!(now_unix_ms()));
+    if in_browser {
+        let (browse_level, browse_level_source) = native_browse_level(rpc);
+        out.insert("browse_level".into(), browse_level);
+        out.insert("browse_level_source".into(), json!(browse_level_source));
+        out.insert("function".into(), json!(debugged_function(&final_state)));
+        out.insert(
+            "src".into(),
+            project_current_src(&final_state).unwrap_or(Value::Null),
+        );
+    }
+    Ok(Some(Value::Object(out)))
+}
+
+/// Compact comparable signature of a debugger snapshot: whether we're in a
+/// browser, the current function, and the current source line. Two snapshots
+/// with the same signature represent the "same place" for step-confirmation.
+fn debug_signature(state: &Value) -> (bool, Option<String>, Option<i64>) {
+    let in_browser = is_in_debugger(state);
+    let func = debugged_function(state);
+    let line = state
+        .get("call_frames")
+        .and_then(Value::as_array)
+        .and_then(|f| f.first())
+        .and_then(|f| f.get("line_number"))
+        .and_then(Value::as_i64);
+    (in_browser, func, line)
 }
 
 #[cfg(test)]
@@ -614,5 +763,68 @@ mod tests {
     #[test]
     fn debugged_function_strips_parens_for_function_debug() {
         assert_eq!(debugged_function(&state(1)), Some("debug_me".to_string()));
+    }
+
+    /// The modulr / debugme case: browser() is overridden and enters via
+    /// `do.call(base::browser, …, envir = wrap)`, so rsession reports
+    /// environment_name = .GlobalEnv (function can't be named from the env).
+    /// We must skip the do.call/browser instrumentation frames and report
+    /// the innermost USER function (variance_pop) — never null when a user
+    /// call is on the stack.
+    fn modulr_sandwich_state() -> Value {
+        json!({
+            "context_depth": 0,
+            "environment_name": ".GlobalEnv",
+            "call_frames": [
+                { "function_name": "do.call",
+                  "call_summary": "do.call(base::browser, args = list(...), envir = wrap)" },
+                { "function_name": "browser", "call_summary": "browser()" },
+                { "function_name": "variance_pop", "call_summary": "variance_pop(x)" },
+                { "function_name": "ecart_type", "call_summary": "ecart_type(d)" },
+                { "function_name": "resume_stats", "call_summary": "resume_stats(...)" },
+                { "function_name": "ℝ", "call_summary": "ℝ(~{ ... })" },
+            ],
+            "environment_list": [],
+        })
+    }
+
+    #[test]
+    fn debugged_function_skips_instrumentation_and_finds_user_fn() {
+        assert_eq!(
+            debugged_function(&modulr_sandwich_state()),
+            Some("variance_pop".to_string()),
+            "must skip do.call/browser and report the innermost user function"
+        );
+    }
+
+    #[test]
+    fn first_user_function_is_none_when_only_instrumentation() {
+        // Top-level `r send 'base::browser()'`: the only frame is the ℝ
+        // wrapper — no user function — so we must NOT leak `ℝ`.
+        let s = json!({
+            "context_depth": 0,
+            "environment_name": ".GlobalEnv",
+            "call_frames": [{ "function_name": "ℝ", "call_summary": "ℝ(~{ base::browser() })" }],
+        });
+        assert_eq!(first_user_function(&s), None);
+        assert_eq!(debugged_function(&s), None);
+    }
+
+    #[test]
+    fn is_instrumentation_frame_classifies_known_wrappers() {
+        for f in [
+            "do.call",
+            "browser",
+            "ℝ",
+            "eval",
+            "tryCatch",
+            ".rs.foo",
+            ".rstudioBar",
+        ] {
+            assert!(is_instrumentation_frame(f), "{f} should be instrumentation");
+        }
+        for f in ["variance_pop", "myfun", "ecart_type"] {
+            assert!(!is_instrumentation_frame(f), "{f} should be user code");
+        }
     }
 }

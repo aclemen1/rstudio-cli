@@ -629,12 +629,31 @@ impl McpServer {
             .map_err(|e| CliError::internal(format!("mcp: spawn {}: {e}", bin.display())))?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
 
-        // The CLI emits exactly one JSON envelope on stdout (the
-        // AI-native contract). Parse and forward.
+        // The CLI emits exactly one JSON envelope on stdout (the AI-native
+        // contract). If stdout is empty / not JSON, the subprocess failed
+        // before producing an envelope (e.g. clap rejected the args and
+        // wrote usage to stderr, or it crashed). Surface stderr + exit code
+        // as a clean tool error rather than a cryptic JSON-parse failure.
+        if stdout.trim().is_empty() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            let detail = if stderr.is_empty() {
+                format!("no output (exit {})", output.status)
+            } else {
+                stderr.to_string()
+            };
+            return Err(CliError::user(format!("{mcp_name}: {detail}")));
+        }
         let mut parsed: Value = serde_json::from_str(stdout.trim()).map_err(|e| {
-            CliError::internal(format!(
-                "mcp: subprocess output not JSON: {e}; stdout={stdout}"
-            ))
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                CliError::internal(format!(
+                    "mcp: subprocess output not JSON: {e}; stdout={stdout}"
+                ))
+            } else {
+                CliError::user(format!("{mcp_name}: {stderr}"))
+            }
         })?;
         // Propagate subprocess errors as Err so handle_tools_call sets isError=true.
         propagate_ok_false(&parsed)?;
@@ -857,6 +876,54 @@ fn build_input_schema(params: &[ParamSpec]) -> Value {
 fn build_argv(action: &ActionSpec, args: &Value) -> Result<Vec<String>, CliError> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
 
+    // Validate arguments against the action's schema BEFORE spawning, so a
+    // typo'd or missing parameter yields a clean, structured tool error
+    // instead of a confusing "subprocess output not JSON" (the CLI would
+    // otherwise reject bad args via clap on stderr, leaving stdout empty).
+    let known: std::collections::HashSet<&str> = action
+        .params
+        .iter()
+        .map(|p| p.name.trim_start_matches('-'))
+        .collect();
+    let mut unknown: Vec<&str> = args_obj
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !known.contains(k))
+        .collect();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        let valid: Vec<&str> = action
+            .params
+            .iter()
+            .map(|p| p.name.trim_start_matches('-'))
+            .collect();
+        return Err(CliError::user(format!(
+            "unknown parameter(s) for {}_{}: {}. Valid parameter(s): {}.",
+            action.category.replace('-', "_"),
+            action.name.replace('-', "_"),
+            unknown.join(", "),
+            if valid.is_empty() {
+                "(none)".to_string()
+            } else {
+                valid.join(", ")
+            },
+        )));
+    }
+    let missing: Vec<&str> = action
+        .params
+        .iter()
+        .filter(|p| p.required && !args_obj.contains_key(p.name.trim_start_matches('-')))
+        .map(|p| p.name.trim_start_matches('-'))
+        .collect();
+    if !missing.is_empty() {
+        return Err(CliError::user(format!(
+            "missing required parameter(s) for {}_{}: {}.",
+            action.category.replace('-', "_"),
+            action.name.replace('-', "_"),
+            missing.join(", "),
+        )));
+    }
+
     // The `meta` schema category is documentation-only: its actions
     // (`version`, `status`) map to TOP-LEVEL CLI commands without a
     // category prefix. So `meta_status` invokes `rstudio status`,
@@ -998,6 +1065,61 @@ mod tests {
         assert_eq!(argv, vec!["observe", "stream"]);
         let argv = build_argv(&action, &json!({})).unwrap();
         assert_eq!(argv, vec!["observe", "stream"]);
+    }
+
+    fn step_like_action() -> ActionSpec {
+        // Mirror `debug step`: one required positional `command`.
+        ActionSpec {
+            category: "debug",
+            name: "step",
+            summary: "",
+            description: "",
+            params: &[ParamSpec {
+                name: "command",
+                kind: ParamKind::Enum,
+                required: true,
+                default: None,
+                allowed: &["n", "s", "c", "Q"],
+                description: "",
+            }],
+            examples: &[],
+            returns: "",
+            errors: &[],
+            rstudioapi_fn: None,
+            rpc_method: None,
+        }
+    }
+
+    #[test]
+    fn build_argv_rejects_unknown_parameter() {
+        // The reported bug: `cmd` instead of `command` produced an empty
+        // subprocess stdout and a cryptic JSON-parse error. Now it's a clean,
+        // structured validation error naming the bad key and the valid ones.
+        let action = step_like_action();
+        let err = build_argv(&action, &json!({"cmd": "n"})).unwrap_err();
+        assert!(matches!(err.kind, crate::error::ErrorKind::UserError));
+        assert!(
+            err.message.contains("unknown parameter") && err.message.contains("cmd"),
+            "must name the unknown key: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("command"),
+            "must list the valid parameter: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn build_argv_reports_missing_required_parameter() {
+        let action = step_like_action();
+        let err = build_argv(&action, &json!({})).unwrap_err();
+        assert!(matches!(err.kind, crate::error::ErrorKind::UserError));
+        assert!(
+            err.message.contains("missing required parameter") && err.message.contains("command"),
+            "must name the missing required parameter: {}",
+            err.message
+        );
     }
 
     #[test]

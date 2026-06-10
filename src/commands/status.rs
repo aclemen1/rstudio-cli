@@ -212,25 +212,17 @@ fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
     if depth <= 0 && frames_len <= 0 {
         return Value::Null;
     }
-    // `environment_name` is "fn()" for a function-debug session (strip the
-    // parens → "fn"); for a top-level browser it's ".GlobalEnv", in which
-    // case there is no user function being debugged and we report null
-    // rather than leaking an evaluator-wrapper name.
-    let env_name = state
-        .get("environment_name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
-    let function: Option<String> = if env_name != ".GlobalEnv" && !env_name.is_empty() {
-        Some(env_name.trim_end_matches("()").to_string())
-    } else {
-        None
-    };
+    // `function` resolution (incl. skipping `do.call`/`browser`/`.rs.*`
+    // instrumentation frames so it's non-null even under an overridden
+    // browser()) is shared with `debug status` via debug::debugged_function.
+    let function = crate::commands::debug::debugged_function(&state);
     let (browse_level, browse_level_source) = crate::commands::debug::native_browse_level(rpc);
     json!({
         "in_browser": true,
         "browse_level": browse_level,
         "browse_level_source": browse_level_source,
         "function": function,
+        "captured_at_unix_ms": crate::commands::debug::now_unix_ms(),
     })
 }
 

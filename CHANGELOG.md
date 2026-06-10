@@ -4,6 +4,60 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] — 2026-06-10
+
+### Fixed
+
+- **MCP tools now return a clean, structured error for bad arguments**
+  instead of `subprocess output not JSON: EOF`. `build_argv` validates
+  the call against the action's schema BEFORE spawning: an unknown
+  parameter yields `unknown parameter(s) for <tool>: <key>. Valid
+  parameter(s): …`, a missing required one yields `missing required
+  parameter(s) …`. As defense in depth, if a subprocess ever exits with
+  empty stdout, the MCP layer now surfaces its stderr + exit status as a
+  tool error rather than a JSON-parse failure. (Reported as `debug_step`
+  called with `cmd` instead of `command`.)
+- **`debug status` reports the innermost user `function` even when
+  `browser()` is overridden** (e.g. `modulr::browser`, which enters via
+  `do.call(base::browser, …, envir = wrap)`). The frame selection now
+  skips instrumentation frames (`do.call`, `browser`, `.rs.*`, the
+  rstudio-cli `ℝ` helper, and R's `eval`/`tryCatch`/… machinery) and
+  reports the first real user function — so `function` is no longer
+  `null` when a user call is on the stack. `status.rsession.debugger`
+  uses the same resolution.
+- **`editor reload` with no arguments now reloads the active source
+  document** (mirroring `editor save`), instead of erroring with
+  "requires either <id> or --path". Returns
+  `action: "skipped-no-active-doc"` when no source document is active.
+
+### Changed
+
+- **`debug step` (and `debug exit`) now confirm the post-step state.**
+  Instead of returning `{sent}` immediately and racing a follow-up
+  `debug status`, they wait (bounded) for the prompt to settle and return
+  `{sent, settled, in_browser, captured_at_unix_ms, function?, src?,
+  browse_level?}`. `settled: false` signals the wait timed out (e.g. `c`
+  running a long computation) so the agent knows to re-poll. This also
+  makes the `modulr::browser` step-flag quirk visible: a `step n` that
+  the override turns into a continue now plainly reports
+  `in_browser: false`.
+- **Debugger snapshots carry `captured_at_unix_ms`** (`debug status` and
+  `status.rsession.debugger`) — a freshness timestamp, since a debugger
+  snapshot has no rsession-side generation id and the user may step /
+  continue between calls.
+
+### Notes (not rstudio-cli bugs)
+
+- A `browser()` overridden by `modulr::browser` consumes R's single-step
+  flag, so `debug step n` continues instead of stepping, and evaluation
+  scopes to the wrapper's sandbox env rather than the user frame. This is
+  the upstream modulr issue (a fix + regression test were provided
+  separately); with plain `base::browser()` stepping and frame/locals
+  resolution work correctly. `debug step`'s new state confirmation at
+  least makes the override's behaviour observable.
+- `ToolSearch select:` not resolving `mcp__rstudio__debug_*` is a Claude
+  Code harness matter, outside the CLI; use `tools_search` / direct calls.
+
 ## [0.20.0] — 2026-06-10
 
 ### Added (capture completeness)
