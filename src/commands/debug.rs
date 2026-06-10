@@ -23,6 +23,7 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
+use crate::r_eval;
 use crate::rpc::RpcClient;
 use crate::schema::{ActionSpec, ErrorSpec, ExampleSpec, ParamKind, ParamSpec};
 
@@ -41,18 +42,26 @@ pub const ACTIONS: &[ActionSpec] = &[
                       (null for a top-level browser), the `src` location, the \
                       typed `locals` of the current frame, and the full \
                       `call_stack` (innermost first). \
-                      `browse_level` (the N of Browse[N]>) is always null: R \
-                      does not expose it (browser() is a C primitive; rsession \
-                      reduces the prompt to a boolean), and it is never needed \
-                      to navigate (`debug exit`/`Q` leaves all levels at once). \
+                      `browse_level` is the N of Browse[N]> (the count of \
+                      active browser contexts). R does not expose it (browser() \
+                      is a C primitive; rsession reduces the prompt to a \
+                      boolean), so it is recovered via the companion package's \
+                      optional native helper that walks R's context stack in C. \
+                      `browse_level_source` is \"native\" when that integer is \
+                      authoritative, or \"unavailable\" (with browse_level null) \
+                      when the helper can't be built — e.g. no C toolchain on \
+                      the host. The level is never needed to navigate \
+                      (`debug exit`/`Q` leaves all levels at once). \
                       When R is idle, returns {in_browser: false}.",
         params: &[],
         examples: &[ExampleSpec {
             cmd: "rstudio debug status",
-            explanation: "Returns {in_browser, function?, browse_level, src?, locals?, call_stack?}.",
+            explanation: "Returns {in_browser, function?, browse_level, browse_level_source, src?, locals?, call_stack?}.",
         }],
-        returns: "{in_browser: bool, browse_level: null, function?: string|null, \
-                  src?: {file, line}, locals?: [{name, type, class, value}], \
+        returns: "{in_browser: bool, browse_level: int|null, \
+                  browse_level_source: \"native\"|\"unavailable\", \
+                  function?: string|null, src?: {file, line}, \
+                  locals?: [{name, type, class, value}], \
                   call_stack?: [{depth, function, call, src?}]}",
         errors: &[],
         rstudioapi_fn: None,
@@ -328,33 +337,68 @@ fn project_current_src(state: &Value) -> Option<Value> {
     Some(json!({ "file": file, "line": line }))
 }
 
+/// Best-effort retrieval of the `Browse[N]>` nesting level via the
+/// companion package's optional native helper (`rscli_browse_level`,
+/// see `r-package/inst/native/browse_level.c`). Returns:
+/// - `(Some(n), "native")` when the helper is built/loaded and returns N;
+/// - `(None, "unavailable")` when the helper can't be built (no toolchain),
+///   failed, or the eval errored.
+///
+/// The helper walks R's context stack in C — the only way to recover N,
+/// which R does not otherwise expose. It compiles lazily on first use and
+/// caches the shared object, so the cost is paid at most once per machine /
+/// R version. Everything degrades to `unavailable` rather than failing.
+///
+/// Shared with `status::collect_debugger` so the ambient `rsession.debugger`
+/// block and the rich `debug status` report agree on the level.
+pub(crate) fn native_browse_level(rpc: &RpcClient<'_>) -> (Value, &'static str) {
+    // `cat("null")` for an unavailable/NULL result, the integer otherwise.
+    let code = "local({ v <- tryCatch(rstudiocli::rscli_browse_level(), \
+                error = function(e) NULL); \
+                if (is.null(v)) cat(\"null\") else cat(as.integer(v)) })";
+    match r_eval::run(rpc, code) {
+        Ok(out) => {
+            let t = out.trim();
+            if t == "null" || t.is_empty() {
+                (Value::Null, "unavailable")
+            } else if let Ok(n) = t.parse::<i64>() {
+                (json!(n), "native")
+            } else {
+                (Value::Null, "unavailable")
+            }
+        }
+        Err(_) => (Value::Null, "unavailable"),
+    }
+}
+
 fn status(rpc: &RpcClient<'_>) -> Result<Option<Value>, CliError> {
     let state = fetch_state(rpc)?;
     if !is_in_debugger(&state) {
         return Ok(Some(json!({ "in_browser": false })));
     }
-    // `browse_level` is the N of the `Browse[N]>` prompt. It is NOT
-    // retrievable from R or rsession's R-accessible API: `browser()` is
-    // a C primitive whose nesting counter (a count of `CTXT_BROWSER`
-    // contexts on R's internal stack) is never exposed — it does not
-    // appear in `sys.calls()`, `sys.nframe()` returns the same value at
-    // Browse[1]> and Browse[2]>, rsession regex-matches the prompt to a
-    // boolean and discards the digits (RStdCallbacks.cpp), and no RPC
-    // surfaces it. We therefore report `null` here. (A future release may
-    // populate this via an optional native helper that walks
-    // R_GlobalContext counting CTXT_BROWSER; absent that, it stays null.)
+    // `browse_level` is the N of the `Browse[N]>` prompt — the count of
+    // active browser contexts on R's interpreter stack. R does not expose
+    // it to the language (browser() is a C primitive; sys.calls()/
+    // sys.nframe() don't reflect it; rsession regex-matches the prompt to a
+    // boolean and discards the digits), so we recover it via the companion
+    // package's optional native helper, which walks R's context stack in C.
+    // When the helper is unavailable (no C toolchain to build it, build/load
+    // failure), `browse_level` is null and `browse_level_source` is
+    // "unavailable". `browse_level_source` == "native" means the integer is
+    // authoritative.
     //
-    // Note that `context_depth` is NOT the browse level — it is rsession's
-    // selected-frame index (innermost = 1), which is 1 at both Browse[1]>
-    // and Browse[2]>. We deliberately do not expose it as a depth to avoid
-    // implying it tracks browser nesting.
+    // (Note: rsession's `context_depth` is NOT the browse level — it is the
+    // selected-frame index, 1 at both Browse[1]> and Browse[2]> — which is
+    // why we don't derive the level from it.)
     //
-    // Practical navigation note: R's `Q` exits ALL nested browsers at once
-    // (documented behaviour, see `?browser`), so the level is never needed
-    // to escape — a single `debug exit` / `debug step Q` suffices.
+    // Navigation note: R's `Q` exits ALL nested browsers at once (see
+    // `?browser`), so the level is never needed to escape — a single
+    // `debug exit` / `debug step Q` suffices regardless of N.
+    let (browse_level, browse_level_source) = native_browse_level(rpc);
     Ok(Some(json!({
         "in_browser": true,
-        "browse_level": Value::Null,
+        "browse_level": browse_level,
+        "browse_level_source": browse_level_source,
         "function": debugged_function(&state),
         "src": project_current_src(&state),
         "locals": project_locals(&state),

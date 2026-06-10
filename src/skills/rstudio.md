@@ -254,12 +254,15 @@ it's intended for debugging and solo scripts.
 ## Patterns worth knowing
 
 - **Run R visibly and capture its output**: `rstudio r send '<R code>'`.
-  Returns `{stdout: string, messages: string[], error: string|null}`.
-  The user sees `ℝ(~{ code })` appear and run in their console.
-  **Prefer this over `r exec` whenever the user should see what is
-  running** — you get the same output with full visibility. Pass
-  `--no-capture` for true fire-and-forget (nothing returned). Pass
-  `--timeout T` to bound the poll wait.
+  Returns `{stdout, messages: string[], warnings: string[], error:
+  string|null, eval_env}`. The user sees `ℝ(~{ code })` appear and run in
+  their console. **Prefer this over `r exec` whenever the user should see
+  what is running** — you get the same output with full visibility. On an
+  R error the envelope is `ok:false`/`kind=r_error` but still carries the
+  partial `stdout`/`messages`/`warnings` captured before the failure — so
+  you never lose what ran up to a `stop()`. Pass `--no-capture` for true
+  fire-and-forget (nothing returned). Pass `--timeout T` to bound the poll
+  wait.
 - **Run R silently and read its output**: `rstudio r exec '<R code>'`.
   Returns `{output: string}`. Use when silent/background execution is
   specifically required. Default elapsed limit is 2 s — pass
@@ -350,10 +353,13 @@ introspection and for evaluation — but the verbs are different from
 field (`null` at the regular prompt; populated when a browser is
 active — including a bare `browser()` or one sent via `r send`). For
 the full picture — current `function`, source location, typed locals,
-full call stack — call `rstudio debug status`. Note: the `Browse[N]>`
-level itself is not retrievable from R (it's an internal C counter), so
-`browse_level` is always `null`; you don't need it to navigate —
-`debug exit` / `debug step Q` leaves all nested browsers at once.
+full call stack — call `rstudio debug status`. It also reports
+`browse_level` (the N of `Browse[N]>`) when `browse_level_source` is
+`"native"`; on hosts without a C toolchain the level can't be computed
+(R doesn't expose it) and `browse_level` is `null` with
+`browse_level_source: "unavailable"`. You never need the level to
+navigate — `debug exit` / `debug step Q` leaves all nested browsers at
+once.
 
 **Evaluate**. `r send` and `r exec` are *browser-aware*: when called
 while a debugger is active, they automatically evaluate the user's code

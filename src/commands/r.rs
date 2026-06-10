@@ -247,8 +247,9 @@ pub const ACTIONS: &[ActionSpec] = &[
                               their console.",
             },
             ExampleSpec {
-                cmd: "rstudio r send 'message(\"hi\"); 1+1'",
-                explanation: "Returns {stdout: \"[1] 2\", messages: [\"hi\\n\"], error: null, eval_env: {...}}.",
+                cmd: "rstudio r send 'message(\"hi\"); warning(\"careful\"); 1+1'",
+                explanation: "Returns {stdout: \"[1] 2\", messages: [\"hi\\n\"], \
+                              warnings: [\"careful\"], error: null, eval_env: {...}}.",
             },
             ExampleSpec {
                 cmd: "rstudio r send 'y'   # at a Browse[n]> prompt inside debug_me()",
@@ -256,17 +257,26 @@ pub const ACTIONS: &[ActionSpec] = &[
                               eval_env: {kind: \"browser_frame\", function: \"debug_me\", depth: 1}.",
             },
             ExampleSpec {
+                cmd: "rstudio r send 'cat(\"step 1\\n\"); stop(\"boom\")'",
+                explanation: "kind=r_error with message=\"boom\", but the error envelope also \
+                              carries the partial capture: stdout=\"step 1\", messages, warnings.",
+            },
+            ExampleSpec {
                 cmd: "rstudio r send --no-capture 'print(Sys.time())'",
                 explanation: "Fire-and-forget; code runs visibly, nothing returned.",
             },
         ],
-        returns: "{stdout: string, messages: string[], error: string|null, \
+        returns: "{stdout: string, messages: string[], warnings: string[], \
+                   error: string|null, \
                    eval_env: {kind: \"global\"|\"attached\"|\"browser_frame\", ...}} \
-                  or void with --no-capture",
+                  or void with --no-capture. On an R error the kind=r_error envelope \
+                  also carries the partial stdout/messages/warnings captured before \
+                  the failure.",
         errors: &[
             ErrorSpec {
                 kind: "r_error",
-                when: "The R code raised a condition (stop, syntax error, ...).",
+                when: "The R code raised a condition (stop, syntax error, ...). The error \
+                       envelope includes partial stdout/messages/warnings.",
             },
             ErrorSpec {
                 kind: "timeout",
@@ -385,21 +395,31 @@ fn console_input(rpc: &RpcClient<'_>, code: &str) -> Result<(), CliError> {
 
 /// Where `r send`'s ℝ helper should resolve its evaluation environment.
 ///
-/// Two RPC-derived inputs drive the choice:
-/// - `get_environment_state.context_depth` — `> 0` means R is suspended in
-///   a function frame (typically a `browser()` prompt). The CLI then
-///   targets that frame so `r send 'y'` reads the debugged function's
-///   local `y`, not a global.
-/// - `get_environment_state.environment_name` — at depth 0, names the
-///   "active" environment the RStudio Environment pane currently shows
-///   (`.GlobalEnv` by default, or a search-path entry after `attach()`).
-///   `r send` follows the user's gaze so that the visible call evaluates
-///   in the same scope they're inspecting.
+/// The choice is driven by `get_environment_state`:
+/// - **Any active browser** — detected via `context_depth > 0` OR a
+///   non-empty `call_frames` stack — selects `BrowserFrame`, where ℝ
+///   evaluates in `parent.frame()`. Because ℝ is invoked from the
+///   `Browse[n]>` reader, `parent.frame()` IS the prompt's environment:
+///   the debugged function's frame for a plain `browser()`, or whatever
+///   custom env the prompt scopes to for a `do.call(browser, envir = …)`
+///   sandwich (e.g. modulr / debugme wrappers). This is exactly the env a
+///   human typing at the prompt resolves names against.
+///
+///   Why both signals: rsession increments `context_depth` only when its
+///   IDE-side debugger hook fires (debug() flag / breakpoint / step-into).
+///   A top-level `browser()`, a `browser()` reached via `r send`, or an
+///   `envir=`-sandwiched `browser()` all leave `context_depth` at 0 while
+///   the interpreter IS suspended at a Browse prompt (`call_frames`
+///   populated). Keying off `context_depth` alone evaluated those in
+///   `.GlobalEnv` — the 0.20.0 bug this fixes.
+/// - **No browser** — `environment_name` names the env the RStudio
+///   Environment pane shows: `.GlobalEnv` (→ `Global`) or a search-path
+///   entry after `attach()` (→ `Attached`). `r send` follows the user's
+///   gaze so the visible call evaluates in the scope they're inspecting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EvalTarget {
-    /// `context_depth > 0`: resolve `parent.frame()` at the time `ℝ` is
-    /// invoked. Since `ℝ` is called from the `Browse[n]>` reader,
-    /// `parent.frame()` is the frame of the function being debugged.
+    /// Active browser: resolve `parent.frame()` at the time `ℝ` is
+    /// invoked — i.e. the `Browse[n]>` prompt's own environment.
     BrowserFrame,
     /// Default: evaluate in `.GlobalEnv`.
     Global,
@@ -408,12 +428,26 @@ enum EvalTarget {
 }
 
 fn current_eval_target(rpc: &RpcClient<'_>) -> EvalTarget {
-    let v = match rpc.rpc("get_environment_state", vec![]) {
-        Ok(v) => v,
-        Err(_) => return EvalTarget::Global,
-    };
+    match rpc.rpc("get_environment_state", vec![]) {
+        Ok(v) => eval_target_from_state(&v),
+        Err(_) => EvalTarget::Global,
+    }
+}
+
+/// Pure decision from a `get_environment_state` payload (split out for
+/// testing). Any active browser (`context_depth > 0` OR non-empty
+/// `call_frames`) → `BrowserFrame`; otherwise the Environment-pane env.
+fn eval_target_from_state(v: &Value) -> EvalTarget {
     let depth = v.get("context_depth").and_then(Value::as_i64).unwrap_or(0);
-    if depth > 0 {
+    let frames_len = v
+        .get("call_frames")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0);
+    // Any active browser (however entered) → evaluate in the prompt's env
+    // via parent.frame(). See the EvalTarget doc for why call_frames must
+    // be consulted, not just context_depth.
+    if depth > 0 || frames_len > 0 {
         return EvalTarget::BrowserFrame;
     }
     let name = v
@@ -521,7 +555,18 @@ fn send_with_capture(
     }
 
     if let Some(err_msg) = result.get("error").and_then(Value::as_str) {
-        return Err(CliError::r(err_msg.to_string()));
+        // Preserve whatever the helper captured before the code raised, so
+        // an agent (typically debugging at a Browse[n]> prompt) doesn't lose
+        // the stdout / messages / warnings that ran before the failure. The
+        // error stays kind=r_error (ok:false); these extras are merged into
+        // the error envelope by `output::print_err`.
+        let details = json!({
+            "stdout": result.get("stdout").cloned().unwrap_or(Value::Null),
+            "messages": result.get("messages").cloned().unwrap_or_else(|| json!([])),
+            "warnings": result.get("warnings").cloned().unwrap_or_else(|| json!([])),
+            "eval_env": result.get("eval_env").cloned().unwrap_or(Value::Null),
+        });
+        return Err(CliError::r(err_msg.to_string()).with_details(details));
     }
 
     Ok(Some(result))
@@ -580,6 +625,7 @@ fn build_capture_fn(result_path: &str, target: &EvalTarget) -> String {
     .out <- tempfile()
     .oc <- file(.out, "w+")
     .msgs <- character()
+    .warnings <- character()
     .ok <- TRUE
     .err <- NULL
     .interrupted <- TRUE
@@ -594,6 +640,7 @@ fn build_capture_fn(result_path: &str, target: &EvalTarget) -> String {
         jsonlite::toJSON(list(
           stdout = .stdout,
           messages = as.list(.msgs),
+          warnings = as.list(.warnings),
           error = if (.ok) NULL else .err,
           eval_env = {meta_expr}
         ), auto_unbox = TRUE, null = "null")
@@ -601,17 +648,36 @@ fn build_capture_fn(result_path: &str, target: &EvalTarget) -> String {
       try(writeLines(.payload, {path_r}), silent = TRUE)
       try(suppressWarnings(rm("ℝ", envir = globalenv())), silent = TRUE)
     }}, add = TRUE)
-    tryCatch({{
-      sink(.oc, split = TRUE)
-      withCallingHandlers({{
-        .v <- withVisible(eval(.expr, envir = .eval_env))
-        if (.v$visible) print(.v$value)
-      }}, message = function(m) {{
-        .msgs <<- c(.msgs, conditionMessage(m))
-      }})
+    # `r send` is the VISIBLE channel: everything must both reach the
+    # user's console AND be captured for the agent. So none of the
+    # condition handlers muffle:
+    #   - stdout: sink(split = TRUE) → printed to console + written to .oc.
+    #   - message / warning: captured via withCallingHandlers WITHOUT
+    #     invoking muffleMessage / muffleWarning, so they propagate to R's
+    #     default handlers and still appear in the console (warnings per the
+    #     session's `warn` option).
+    #   - error: captured via a calling handler that records the message
+    #     then lets the error PROPAGATE — so the REPL prints R's native
+    #     "Error: …" and the user sees the failure, exactly as if they'd
+    #     typed the code. on.exit (below) has already run by the time the
+    #     error reaches the REPL, so the result file is written regardless.
+    # No tryCatch here: tryCatch would swallow the error and hide it from
+    # the console. The error handler sets `.interrupted <- FALSE` so on.exit
+    # writes the real payload (with the error) rather than the interrupt
+    # sentinel, since the trailing `.interrupted <- FALSE` is skipped when
+    # the error unwinds.
+    sink(.oc, split = TRUE)
+    withCallingHandlers({{
+      .v <- withVisible(eval(.expr, envir = .eval_env))
+      if (.v$visible) print(.v$value)
+    }}, message = function(m) {{
+      .msgs <<- c(.msgs, conditionMessage(m))
+    }}, warning = function(w) {{
+      .warnings <<- c(.warnings, conditionMessage(w))
     }}, error = function(e) {{
       .ok <<- FALSE
       .err <<- conditionMessage(e)
+      .interrupted <<- FALSE
     }})
     .interrupted <- FALSE
     invisible(NULL)
@@ -923,6 +989,48 @@ mod tests {
     }
 
     #[test]
+    fn eval_target_browser_frame_when_frames_present_even_at_depth_zero() {
+        // The bug fixed in 0.20.0: a browser reached at the top level / via
+        // r send / through a do.call(browser, envir = wrap) sandwich leaves
+        // context_depth at 0 but populates call_frames. Must still route to
+        // BrowserFrame (parent.frame()), NOT Global.
+        let state = json!({
+            "context_depth": 0,
+            "environment_name": ".GlobalEnv",
+            "call_frames": [
+                { "function_name": "do.call",
+                  "call_summary": "do.call(base::browser, args = list(), envir = wrap)" }
+            ],
+        });
+        assert_eq!(eval_target_from_state(&state), EvalTarget::BrowserFrame);
+    }
+
+    #[test]
+    fn eval_target_browser_frame_when_context_depth_positive() {
+        let state = json!({
+            "context_depth": 1,
+            "environment_name": "debug_me()",
+            "call_frames": [{ "function_name": "debug_me" }],
+        });
+        assert_eq!(eval_target_from_state(&state), EvalTarget::BrowserFrame);
+    }
+
+    #[test]
+    fn eval_target_global_and_attached_when_idle() {
+        let global = json!({
+            "context_depth": 0, "environment_name": ".GlobalEnv", "call_frames": []
+        });
+        assert_eq!(eval_target_from_state(&global), EvalTarget::Global);
+        let attached = json!({
+            "context_depth": 0, "environment_name": "package:foo", "call_frames": []
+        });
+        assert_eq!(
+            eval_target_from_state(&attached),
+            EvalTarget::Attached("package:foo".into())
+        );
+    }
+
+    #[test]
     fn capture_fn_attached_uses_search_path_match() {
         let code = build_capture_fn(
             "/tmp/test.json",
@@ -935,6 +1043,52 @@ mod tests {
         assert!(
             code.contains(r#"kind = "attached""#) && code.contains(r#"name = "package:foo""#),
             "Attached meta must carry kind=attached and the name verbatim"
+        );
+    }
+
+    #[test]
+    fn capture_fn_captures_warnings_without_muffling_them() {
+        let code = build_capture_fn("/tmp/t.json", &EvalTarget::Global);
+        assert!(
+            code.contains("warning = function(w)")
+                && code.contains(".warnings <<- c(.warnings, conditionMessage(w))"),
+            "ℝ must capture warnings via a withCallingHandlers warning handler: {code}"
+        );
+        // `r send` is the visible channel: warnings must STILL reach the
+        // console, so the handler must NOT invoke the muffleWarning restart.
+        assert!(
+            !code.contains("invokeRestart"),
+            "warnings must not be muffled (no invokeRestart) — they must stay visible"
+        );
+        assert!(
+            code.contains("warnings = as.list(.warnings)"),
+            "the JSON payload must include a warnings field"
+        );
+    }
+
+    #[test]
+    fn capture_fn_lets_errors_propagate_for_console_visibility() {
+        let code = build_capture_fn("/tmp/t.json", &EvalTarget::Global);
+        // The error must be captured via a calling handler (which records
+        // and lets it propagate), NOT a tryCatch (which would swallow it
+        // and hide R's native "Error: …" from the console).
+        assert!(
+            code.contains("error = function(e)") && code.contains(".err <<- conditionMessage(e)"),
+            "ℝ must capture the error via a withCallingHandlers error handler: {code}"
+        );
+        assert!(
+            !code.contains("tryCatch("),
+            "ℝ must not tryCatch the eval — the error has to reach the REPL to be visible"
+        );
+        // The error handler must clear the interrupt sentinel so on.exit
+        // writes the real (error) payload, not {\"interrupted\":true}.
+        let err_handler = code
+            .split("error = function(e)")
+            .nth(1)
+            .expect("error handler present");
+        assert!(
+            err_handler.contains(".interrupted <<- FALSE"),
+            "error handler must set .interrupted <<- FALSE before the error unwinds"
         );
     }
 

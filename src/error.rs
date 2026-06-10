@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -17,6 +18,14 @@ pub struct CliError {
     pub kind: ErrorKind,
     pub code: i32,
     pub message: String,
+    /// Optional structured extras merged into the `error` object of the
+    /// JSON envelope (alongside `code`/`kind`/`message`). Used to attach
+    /// partial output to an R error — e.g. the stdout/messages/warnings a
+    /// `r send` captured before the code raised — so an agent debugging
+    /// at a `Browse[n]>` prompt doesn't lose what ran before the failure.
+    /// `None` for the vast majority of errors. Must be a JSON object when
+    /// set (its keys are spread into `error`).
+    pub details: Option<Value>,
 }
 
 impl CliError {
@@ -25,6 +34,7 @@ impl CliError {
             kind,
             code: 1,
             message: message.into(),
+            details: None,
         }
     }
 
@@ -33,7 +43,15 @@ impl CliError {
             kind,
             code,
             message: message.into(),
+            details: None,
         }
+    }
+
+    /// Attach structured extras (a JSON object) to be merged into the
+    /// `error` envelope. Chainable.
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
     }
 
     pub fn user(message: impl Into<String>) -> Self {
@@ -76,6 +94,7 @@ impl From<anyhow::Error> for CliError {
                 kind: e.kind,
                 code: e.code,
                 message: e.message.clone(),
+                details: e.details.clone(),
             };
         }
         Self::internal(format!("{err:#}"))

@@ -192,10 +192,10 @@ fn format_as_text(v: &Value) -> String {
 /// and reports `null` while the interpreter is in fact suspended at a
 /// Browse prompt. We accept either signal.
 ///
-/// `browse_level` (the N of `Browse[N]>`) is always `null`: R does not
-/// expose it (see `debug::status` for the full rationale). It is kept as
-/// an explicit field so its shape is stable if a future release populates
-/// it via a native helper.
+/// `browse_level` (the N of `Browse[N]>`) is recovered via the companion
+/// package's optional native helper (shared with `debug status`); it is
+/// `null` with `browse_level_source: "unavailable"` when that helper can't
+/// be built (no C toolchain) — see `debug::native_browse_level`.
 fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
     let Ok(state) = rpc.rpc("get_environment_state", vec![]) else {
         return Value::Null;
@@ -225,9 +225,11 @@ fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
     } else {
         None
     };
+    let (browse_level, browse_level_source) = crate::commands::debug::native_browse_level(rpc);
     json!({
         "in_browser": true,
-        "browse_level": Value::Null,
+        "browse_level": browse_level,
+        "browse_level_source": browse_level_source,
         "function": function,
     })
 }

@@ -4,6 +4,79 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] — 2026-06-10
+
+### Added (capture completeness)
+
+- **`r send` now captures warnings** in a new `warnings: string[]` field,
+  via a `withCallingHandlers(warning = …)` that records and muffles each
+  warning. Previously `warning()` output was silently lost (neither in
+  `stdout` nor `messages`).
+- **R errors from `r send` no longer discard the partial output.** The
+  `kind=r_error` envelope (still `ok:false`) is now enriched with the
+  `stdout`, `messages`, `warnings`, and `eval_env` captured before the
+  code raised. So `r send 'cat("step1\n"); stop("boom")'` returns the
+  error *and* `stdout: "step1"`. This matters most when debugging at a
+  `Browse[n]>` prompt, where you want to see everything that ran up to the
+  failure. Implemented via a new optional `details` field on the CLI's
+  error type, merged into the `error` object by the JSON envelope writer.
+
+### Fixed
+
+- **`r send` (and `r exec`) at a `Browse[n]>` prompt now evaluate in the
+  prompt's actual environment, not `.GlobalEnv`.** The browser-frame
+  detection in `r send`'s eval-target chooser keyed off
+  `context_depth > 0` only — the same gap fixed for `debug status` in
+  0.19.3 but not propagated here. So a `browser()` reached at the top
+  level, via `r send`, or through an `envir=`-sandwiched
+  `do.call(base::browser, …, envir = wrap)` (the pattern modulr / debugme
+  use) — all of which leave `context_depth` at 0 — caused `r send 'x'` to
+  evaluate in `.GlobalEnv`: local variables read as "object not found"
+  and `eval_env.kind` wrongly reported `"global"`. Detection now also
+  consults `call_frames`, so any active browser routes to the
+  `parent.frame()` path. Since ℝ is invoked from the browser's reader,
+  `parent.frame()` IS the prompt's environment — matching exactly what a
+  human typing at the prompt resolves names against (validated against a
+  `do.call(browser, envir = wrap)` sandwich: `environment()` returns the
+  sandbox env, locals resolve through the lexical chain, `eval_env.kind`
+  is `"browser_frame"`).
+
+### Added
+
+- **`debug status` and `status.rsession.debugger` now report
+  `browse_level`** — the N of the `Browse[N]>` prompt (the count of
+  active browser contexts). R does not expose this to the language
+  (`browser()` is a C primitive; `sys.calls()`/`sys.nframe()` don't
+  reflect it; rsession regex-matches the prompt to a boolean and
+  discards the digits), so it is recovered via a new **optional native
+  helper** in the companion package: `rscli_browse_level()`, backed by
+  `inst/native/browse_level.c`, which walks R's interpreter context
+  stack counting `CTXT_BROWSER` contexts — the same computation R's own
+  internal (non-exported) `Rf_countContexts` does.
+
+  Design constraints honoured:
+  - **The `rstudiocli` package stays pure-R for installation.** The `.c`
+    ships as a data file under `inst/native/` (not a `src/` unit), so
+    `R CMD INSTALL` never compiles it and the package installs on hosts
+    without a toolchain exactly as before.
+  - **The helper compiles lazily, at runtime, only if a C compiler is
+    present**, caching the shared object under
+    `R_user_dir("rstudio-cli", "cache")` keyed by R version + arch, then
+    `dyn.load`s it. Every step is `tryCatch`-guarded; any failure
+    degrades to `browse_level: null` with `browse_level_source:
+    "unavailable"`. Never errors, never blocks install.
+  - **Works through the side channel**: walking `R_GlobalContext` sees
+    the browser contexts below the CLI's own eval frame, so the level is
+    correct whether the browser was reached via `debug()`, a breakpoint,
+    a top-level `browser()`, or `r send 'browser()'` — validated at
+    `Browse[1]>`/`[2]>`/`[3]>`.
+
+  New response fields (in addition to the 0.19.3 shape): `browse_level`
+  (int when `browse_level_source == "native"`, else null) and
+  `browse_level_source` (`"native"` | `"unavailable"`). `observe`
+  debug events are intentionally unchanged (function-identity based; no
+  per-tick native call).
+
 ## [0.19.4] — 2026-06-10
 
 ### Fixed

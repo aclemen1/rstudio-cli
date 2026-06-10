@@ -210,12 +210,14 @@ When to prefer chained `tools/call`s:
 ## Patterns worth knowing
 
 - **Run R visibly and capture its output**: `r_send({code: "..."})`.
-  Returns `{stdout: string, messages: string[], error: string|null}`.
-  The user sees `ℝ(~{ code })` appear and run in their console.
-  **Prefer this over `r_exec` whenever the user should see what is
-  running** — you get the same output with full visibility. Pass
-  `no_capture: true` for true fire-and-forget (nothing returned). Pass
-  `timeout: T` to bound the poll wait.
+  Returns `{stdout, messages: string[], warnings: string[], error:
+  string|null, eval_env}`. The user sees `ℝ(~{ code })` appear and run in
+  their console. **Prefer this over `r_exec` whenever the user should see
+  what is running** — you get the same output with full visibility. On an
+  R error the result is `isError:true`/`kind=r_error` but still carries
+  the partial `stdout`/`messages`/`warnings` captured before the failure.
+  Pass `no_capture: true` for true fire-and-forget (nothing returned).
+  Pass `timeout: T` to bound the poll wait.
 - **Run R silently and read its output**: `r_exec({code: "<R code>"})`.
   Returns `{output: string}`. Use when silent/background execution is
   specifically required. Default elapsed limit is 2s — pass
@@ -302,9 +304,11 @@ from "normal" R execution.
 (`null` at the regular prompt; populated when a browser is active —
 including a bare `browser()` or one sent via `r_send`). For the full
 picture — current `function`, source location, typed locals, full call
-stack — call `debug_status`. Note: the `Browse[N]>` level is not
-retrievable from R (internal C counter), so `browse_level` is always
-`null`; it's not needed to navigate — `debug_exit` leaves all nested
+stack — call `debug_status`. It also reports `browse_level` (the N of
+`Browse[N]>`) when `browse_level_source` is `"native"`; on hosts
+without a C toolchain the level can't be computed (R doesn't expose it)
+and `browse_level` is `null` with `browse_level_source: "unavailable"`.
+The level is not needed to navigate — `debug_exit` leaves all nested
 browsers at once.
 
 **Evaluate**. `r_send` and `r_exec` are *browser-aware*: when called

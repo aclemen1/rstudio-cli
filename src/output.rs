@@ -82,14 +82,21 @@ pub fn print_ok(result: Option<Value>, format: Format) {
 pub fn print_err(err: &CliError, format: Format) {
     match format {
         Format::Json => {
-            let envelope = json!({
-                "ok": false,
-                "error": {
-                    "code": err.code,
-                    "kind": err.kind,
-                    "message": err.message,
-                }
+            let mut error_obj = json!({
+                "code": err.code,
+                "kind": err.kind,
+                "message": err.message,
             });
+            // Merge any structured extras (e.g. partial stdout/messages/
+            // warnings captured before an R error) into the error object.
+            if let (Some(Value::Object(extra)), Some(obj)) =
+                (err.details.as_ref(), error_obj.as_object_mut())
+            {
+                for (k, v) in extra {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+            let envelope = json!({ "ok": false, "error": error_obj });
             println!("{}", serde_json::to_string(&envelope).unwrap());
         }
         Format::Text => {
