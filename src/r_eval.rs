@@ -36,7 +36,25 @@ pub fn run_with_timeout(
     let raw_str = raw
         .as_str()
         .ok_or_else(|| CliError::internal(format!("execute_r_code returned non-string: {raw}")))?;
-    parse_output(raw_str)
+    // Only callers that chose a limit expose a `--timeout` flag; the plain
+    // `run` path (status, editor, ui, …) has none, so its hint must not
+    // point at a flag clap would reject.
+    let hint = match timeout {
+        EvalTimeout::ServerDefault => TimeoutHint::NoFlag,
+        EvalTimeout::Limit(_) | EvalTimeout::NoLimit => TimeoutHint::TimeoutFlag,
+    };
+    parse_output(raw_str, hint)
+}
+
+/// Which remedy to suggest when R hits its elapsed-time limit.
+#[derive(Debug, Clone, Copy)]
+enum TimeoutHint {
+    /// The command exposes `--timeout` (`r exec`, `pane …`): name it.
+    TimeoutFlag,
+    /// The command has no such flag (`status`, `editor …`, `ui …`): the
+    /// 2 s limit is rsession's own and the work delegated to R is meant to
+    /// be quick, so the only remedy is to retry once R is idle.
+    NoFlag,
 }
 
 /// Like `run` but discards the captured output — useful for side-effect-only
@@ -76,16 +94,23 @@ fn wrap_for_eval(user_code: &str, timeout: EvalTimeout) -> String {
 /// `execute_r_code` wrappers but still want to honour this module's OK/ER
 /// status-line contract (currently `r exec`'s browser-aware wrapper).
 pub fn parse_exec_output(raw: &str) -> Result<String, CliError> {
-    parse_output(raw)
+    parse_output(raw, TimeoutHint::TimeoutFlag)
 }
 
-fn parse_output(raw: &str) -> Result<String, CliError> {
+fn parse_output(raw: &str, hint: TimeoutHint) -> Result<String, CliError> {
     let (status, payload) = raw.split_once('\n').unwrap_or((raw, ""));
     match status {
         "OK" => Ok(payload.to_string()),
-        "ER" if payload == TIMEOUT_MARKER => Err(CliError::timeout(
-            "R evaluation exceeded elapsed time limit (default 2s; pass --timeout to override)",
-        )),
+        "ER" if payload == TIMEOUT_MARKER => Err(CliError::timeout(match hint {
+            TimeoutHint::TimeoutFlag => {
+                "R evaluation exceeded elapsed time limit (default 2s; pass --timeout to override)"
+            }
+            TimeoutHint::NoFlag => {
+                "R evaluation exceeded rsession's default 2s elapsed time limit (this command \
+                 has no --timeout option: the R work it delegates is meant to be quick — \
+                 retry once R is idle, or check `status.rsession.debugger` / a running job)"
+            }
+        })),
         "ER" => Err(CliError::r(payload.to_string())),
         _ => Err(CliError::internal(format!(
             "execute_r_code returned unexpected format (no OK/ER status line): {raw:?}"
@@ -99,30 +124,49 @@ mod tests {
 
     #[test]
     fn parses_ok_payload() {
-        assert_eq!(parse_output("OK\nhello\nworld").unwrap(), "hello\nworld");
+        assert_eq!(
+            parse_output("OK\nhello\nworld", TimeoutHint::NoFlag).unwrap(),
+            "hello\nworld"
+        );
     }
 
     #[test]
     fn parses_empty_ok_payload() {
-        assert_eq!(parse_output("OK\n").unwrap(), "");
+        assert_eq!(parse_output("OK\n", TimeoutHint::NoFlag).unwrap(), "");
     }
 
     #[test]
     fn parses_error_payload() {
-        let err = parse_output("ER\nboom").unwrap_err();
+        let err = parse_output("ER\nboom", TimeoutHint::NoFlag).unwrap_err();
         assert_eq!(err.message, "boom");
         assert!(matches!(err.kind, crate::error::ErrorKind::RError));
     }
 
     #[test]
     fn maps_timeout_marker_to_timeout_kind() {
-        let err = parse_output(&format!("ER\n{TIMEOUT_MARKER}")).unwrap_err();
+        let err =
+            parse_output(&format!("ER\n{TIMEOUT_MARKER}"), TimeoutHint::TimeoutFlag).unwrap_err();
         assert!(matches!(err.kind, crate::error::ErrorKind::Timeout));
+        assert!(err.message.contains("pass --timeout"), "{}", err.message);
+    }
+
+    /// `status`, `editor …`, `ui …` reach R through `run` and have no
+    /// `--timeout` flag; their timeout message must not advertise one.
+    #[test]
+    fn timeout_without_flag_does_not_mention_timeout_option() {
+        let err = parse_output(&format!("ER\n{TIMEOUT_MARKER}"), TimeoutHint::NoFlag).unwrap_err();
+        assert!(matches!(err.kind, crate::error::ErrorKind::Timeout));
+        assert!(!err.message.contains("pass --timeout"), "{}", err.message);
+        assert!(
+            err.message.contains("no --timeout option"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
     fn rejects_unknown_format() {
-        let err = parse_output("plain text").unwrap_err();
+        let err = parse_output("plain text", TimeoutHint::NoFlag).unwrap_err();
         assert!(err.message.contains("unexpected format"));
     }
 

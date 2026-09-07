@@ -8,7 +8,8 @@ A bump touches two repos. The CLI binary and the embedded Claude Code
 skill share a single `Cargo.toml` `version` (substituted into the
 embedded skill markdown via `__VERSION__` at compile time).
 
-1. Bump `Cargo.toml`, add a `[X.Y.Z] — YYYY-MM-DD` section to
+1. Bump `Cargo.toml` **and** `r-package/DESCRIPTION` (`build.rs` fails
+   the build if they differ), add a `[X.Y.Z] — YYYY-MM-DD` section to
    `CHANGELOG.md`, update any `README.md` example that hard-codes a
    version (e.g. `rstudio version # X.Y.Z`).
 2. **Run the local preflight gauntlet** — same checks as CI on `main`,

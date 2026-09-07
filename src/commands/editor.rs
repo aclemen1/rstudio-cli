@@ -1068,6 +1068,40 @@ pub fn run(
     }
 }
 
+/// Expand a leading `~` / `~/` to the user's home directory. RStudio
+/// stores and reports document paths in aliased form (`~/proj/file.R`),
+/// so `editor list` hands agents paths that the shell never expands when
+/// they are passed back quoted (`editor read "~/proj/file.R"`), and that
+/// `Path::canonicalize` rejects with "No such file or directory". Other
+/// `~user` forms are left untouched.
+fn expand_home(path: &Path) -> PathBuf {
+    let Some(s) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    let rest = if s == "~" {
+        Some("")
+    } else {
+        s.strip_prefix("~/")
+    };
+    match (rest, dirs::home_dir()) {
+        (Some(rest), Some(home)) => {
+            if rest.is_empty() {
+                home
+            } else {
+                home.join(rest)
+            }
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// `canonicalize` after `~` expansion, with the CLI's uniform error.
+fn canonicalize_user_path(path: &Path) -> Result<PathBuf, CliError> {
+    expand_home(path)
+        .canonicalize()
+        .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))
+}
+
 fn open(
     rpc: &RpcClient<'_>,
     path: &Path,
@@ -1075,9 +1109,7 @@ fn open(
     col: Option<u32>,
     no_cursor: bool,
 ) -> Result<Option<Value>, CliError> {
-    let abs = path
-        .canonicalize()
-        .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
+    let abs = canonicalize_user_path(path)?;
     let abs_str = abs.to_string_lossy().into_owned();
 
     let line_arg = line
@@ -1102,9 +1134,7 @@ fn open(
 }
 
 fn edit_modal(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliError> {
-    let abs = path
-        .canonicalize()
-        .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
+    let abs = canonicalize_user_path(path)?;
     let abs_str = abs.to_string_lossy().into_owned();
     let pb = rpc.postback("editfile", &abs_str)?;
     Ok(Some(json!({
@@ -1114,9 +1144,7 @@ fn edit_modal(rpc: &RpcClient<'_>, path: &Path) -> Result<Option<Value>, CliErro
 }
 
 fn read(rpc: &RpcClient<'_>, path: &Path, encoding: &str) -> Result<Option<Value>, CliError> {
-    let abs = path
-        .canonicalize()
-        .map_err(|e| CliError::user(format!("cannot resolve {}: {e}", path.display())))?;
+    let abs = canonicalize_user_path(path)?;
     let abs_str = abs.to_string_lossy().into_owned();
     let raw = rpc.rpc(
         "get_file_contents",
@@ -1467,9 +1495,12 @@ fn find_open_doc_by_path(
     session: &Session,
     target: &Path,
 ) -> Result<Option<DocMeta>, CliError> {
-    let target_canon = target
-        .canonicalize()
-        .unwrap_or_else(|_| target.to_path_buf());
+    // Both sides go through `expand_home`: the user may pass `~/…`, and
+    // rsession reports open-document paths in aliased `~/…` form, which
+    // `canonicalize` alone would fail on (leaving the two unequal even
+    // when they name the same file).
+    let target_expanded = expand_home(target);
+    let target_canon = target_expanded.canonicalize().unwrap_or(target_expanded);
 
     let dir = session.resolve_sources_dir()?;
     let entries = fs::read_dir(&dir).map_err(|e| {
@@ -1499,7 +1530,7 @@ fn find_open_doc_by_path(
         if meta.path.is_empty() {
             continue;
         }
-        let candidate = PathBuf::from(&meta.path);
+        let candidate = expand_home(Path::new(&meta.path));
         let candidate_canon = candidate.canonicalize().unwrap_or(candidate);
         if candidate_canon == target_canon {
             matches.push(meta);
@@ -1915,4 +1946,35 @@ fn set_marks(
         CliError::internal(format!("editor set-marks: invalid JSON: {e}; raw: {raw}"))
     })?;
     Ok(Some(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// rsession reports open-document paths as `~/…`; agents feed those
+    /// straight back into `editor read` / `--path`. They must resolve to the
+    /// same file as the absolute form.
+    #[test]
+    fn expand_home_resolves_tilde_prefix() {
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(expand_home(Path::new("~/proj/a.R")), home.join("proj/a.R"));
+        assert_eq!(expand_home(Path::new("~")), home);
+    }
+
+    #[test]
+    fn expand_home_leaves_other_paths_alone() {
+        assert_eq!(
+            expand_home(Path::new("/abs/a.R")),
+            PathBuf::from("/abs/a.R")
+        );
+        assert_eq!(
+            expand_home(Path::new("rel/~/a.R")),
+            PathBuf::from("rel/~/a.R")
+        );
+        assert_eq!(
+            expand_home(Path::new("~bob/a.R")),
+            PathBuf::from("~bob/a.R")
+        );
+    }
 }

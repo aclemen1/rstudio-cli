@@ -198,8 +198,15 @@ fn fallback_tar_build(r_pkg_dir: &Path, target: &Path) {
     let staged_pkg = stage.join("rstudiocli");
     copy_dir_recursive(r_pkg_dir, &staged_pkg).expect("stage r-package");
 
+    // R's built-in untar() (used by install.packages on a source tarball)
+    // rejects pax extended headers that carry a NUL byte — which is exactly
+    // what macOS bsdtar emits for the `com.apple.provenance` xattr every
+    // file gets after a copy: "rawToChar: embedded nul in string". Strip
+    // xattrs / AppleDouble metadata so the archive is a plain ustar
+    // stream. Both bsdtar and GNU tar (≥ 1.27) accept --no-xattrs.
     let status = Command::new("tar")
-        .args(["-czf"])
+        .env("COPYFILE_DISABLE", "1")
+        .args(["--no-xattrs", "-czf"])
         .arg(target)
         .arg("-C")
         .arg(&stage)

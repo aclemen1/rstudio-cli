@@ -428,7 +428,7 @@ enum EvalTarget {
 }
 
 fn current_eval_target(rpc: &RpcClient<'_>) -> EvalTarget {
-    match rpc.rpc("get_environment_state", vec![]) {
+    match rpc.environment_state() {
         Ok(v) => eval_target_from_state(&v),
         Err(_) => EvalTarget::Global,
     }

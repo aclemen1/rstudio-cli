@@ -1544,7 +1544,7 @@ fn take_r_state(rpc: &RpcClient<'_>, tier: u8) -> Result<RStateSnapshot, CliErro
     // branch, agents tailing `observe` would miss browsers triggered via
     // `r send 'browser()'` and similar — a class of debugger entries
     // that LLM-driven workflows produce routinely.
-    snap.debugger = if let Ok(state) = rpc.rpc("get_environment_state", vec![]) {
+    snap.debugger = if let Ok(state) = rpc.environment_state() {
         let depth = state
             .get("context_depth")
             .and_then(Value::as_i64)

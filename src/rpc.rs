@@ -24,6 +24,18 @@ const RPC_ASYNC_QUEUED: i32 = -2;
 /// the post-`r send` Environment-pane refresh window even under CI load.
 const ASYNC_QUEUED_RETRY_DELAYS_MS: [u64; 4] = [250, 500, 1000, 1000];
 
+/// Positional params for `get_environment_state`, mirroring what the GWT
+/// client sends (`EnvironmentServerOperations.getEnvironmentState(language,
+/// environment)`): the language to report on and, for Python, the module
+/// to inspect. rsession reads both with `json::readParams`; when they are
+/// absent it falls back to these very defaults but also emits an
+/// `ERROR jsonrpc error 8 (Parameter missing)` line — visible in the
+/// user's console on RStudio 2026.09 daily builds — on every call. Sending
+/// the defaults explicitly keeps the payload identical on every supported
+/// RStudio (the signature is unchanged since Python support landed) and
+/// silences the log line.
+const ENVIRONMENT_STATE_PARAMS: [&str; 2] = ["R", "R_GlobalEnv"];
+
 pub struct RpcClient<'a> {
     session: &'a Session,
     timeout: Cell<Option<Duration>>,
@@ -175,6 +187,14 @@ impl<'a> RpcClient<'a> {
         }
     }
 
+    /// `get_environment_state` with the positional params rsession expects.
+    /// Every caller that reads the Environment-pane / debugger state must
+    /// go through here rather than `rpc("get_environment_state", vec![])`
+    /// — see `ENVIRONMENT_STATE_PARAMS` for why the params matter.
+    pub fn environment_state(&self) -> Result<Value, CliError> {
+        self.rpc("get_environment_state", environment_state_params())
+    }
+
     fn client_id(&self, force_refresh: bool) -> Result<String, CliError> {
         if !force_refresh && let Some(id) = self.cached_client_id.borrow().clone() {
             return Ok(id);
@@ -215,9 +235,53 @@ impl<'a> RpcClient<'a> {
             body.as_bytes(),
             self.timeout.get(),
         )
-        .map_err(|e| CliError::rpc(0, format!("socket error during rpc {method}: {e:#}")))?;
+        .map_err(|e| transport_error(method, self.timeout.get(), &e))?;
 
         parse_rpc_envelope(method, &resp)
+    }
+}
+
+fn environment_state_params() -> Vec<Value> {
+    ENVIRONMENT_STATE_PARAMS
+        .iter()
+        .map(|s| Value::String((*s).to_string()))
+        .collect()
+}
+
+/// Map a transport-level failure to a `CliError`.
+///
+/// The interesting case is the read timeout (`WouldBlock` / `TimedOut`,
+/// "Resource temporarily unavailable (os error 11)" on Linux): rsession
+/// accepted the request but never answered within the socket deadline.
+/// R's own elapsed-time limit (2 s by default) would have produced a clean
+/// `ER` reply for ordinary R code, so surviving to the socket deadline
+/// almost always means the call is parked in rsession's `waitForMethod`
+/// on a UI round-trip (editor context, document ids, prompts…) that only a
+/// connected RStudio client can answer — i.e. no browser tab / Desktop
+/// window is bound to the session. We say so explicitly as
+/// `session_unavailable` instead of leaking the raw socket error.
+fn transport_error(method: &str, timeout: Option<Duration>, e: &anyhow::Error) -> CliError {
+    let timed_out = e
+        .root_cause()
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )
+        });
+    match (timed_out, timeout) {
+        (true, Some(t)) => CliError::session(format!(
+            "rsession accepted the {method} call but did not answer within {}s. \
+             R's elapsed-time limit cannot interrupt a call that waits on the \
+             RStudio UI (editor context, open documents, prompts), so the most \
+             likely cause is that NO RStudio client (browser tab / Desktop window) \
+             is connected to this session. ACTION: open or refresh the RStudio tab \
+             bound to this session, wait for it to finish loading, then retry. \
+             (technical: socket read timeout during rpc {method}: {e:#})",
+            t.as_secs_f64()
+        )),
+        _ => CliError::rpc(0, format!("socket error during rpc {method}: {e:#}")),
     }
 }
 
@@ -350,6 +414,47 @@ mod tests {
             headers: Vec::new(),
             body: body.as_bytes().to_vec(),
         }
+    }
+
+    /// rsession reads `[language, environment]` from `get_environment_state`
+    /// and LOG_ERRORs "Parameter missing" (visible in the user's console on
+    /// 2026.09) when they are absent. Pin the exact wire params so no
+    /// caller regresses to an empty array.
+    #[test]
+    fn environment_state_params_match_gwt_client() {
+        assert_eq!(
+            environment_state_params(),
+            vec![
+                Value::String("R".into()),
+                Value::String("R_GlobalEnv".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn read_timeout_maps_to_explicit_no_client_hint() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable (os error 11)",
+        );
+        let e = anyhow::Error::new(io).context("read HTTP response");
+        let err = transport_error("execute_r_code", Some(Duration::from_secs(30)), &e);
+        assert!(matches!(err.kind, ErrorKind::SessionUnavailable));
+        assert!(err.message.contains("NO RStudio client"), "{}", err.message);
+        assert!(err.message.contains("30s"), "{}", err.message);
+        assert!(err.message.contains("execute_r_code"), "{}", err.message);
+    }
+
+    #[test]
+    fn non_timeout_socket_errors_stay_rpc_errors() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        let e = anyhow::Error::new(io).context("connect to /tmp/sock");
+        let err = transport_error("execute_r_code", Some(Duration::from_secs(30)), &e);
+        assert!(matches!(err.kind, ErrorKind::RpcError));
+        assert!(
+            err.message
+                .starts_with("socket error during rpc execute_r_code")
+        );
     }
 
     #[test]

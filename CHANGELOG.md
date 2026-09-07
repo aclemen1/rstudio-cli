@@ -4,6 +4,55 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.2] — 2026-09-08
+
+### Fixed
+
+- **`get_environment_state` is now called with the params rsession
+  expects** (`["R", "R_GlobalEnv"]`, exactly what the RStudio GWT client
+  sends). Every call made with an empty params array made rsession log
+  `ERROR jsonrpc error 8 (Parameter missing) … SessionEnvironment.cpp`
+  — a line that RStudio 2026.09 daily builds surface in the user's
+  console on each `status`, `env list`, `debug *`, `r send` and
+  `observe` tick. rsession fell back to the same defaults, so the
+  results were already correct; only the noise is gone. The signature
+  is unchanged since Python support landed, so the params are accepted
+  by 2025.09 (stable) as well. All six call sites go through one
+  `RpcClient::environment_state()` helper.
+- **Socket read timeout on an RPC now says what it almost certainly
+  means.** `status` (and any command whose R code needs the RStudio UI:
+  editor context, document ids, prompts) used to die with `socket error
+  during rpc execute_r_code: read HTTP response: Resource temporarily
+  unavailable (os error 11)` when no RStudio client was connected —
+  rsession parks such calls in `waitForMethod` until a client answers,
+  and R's 2 s elapsed-time limit cannot interrupt that wait. The error
+  is now `session_unavailable` with an explicit "no RStudio client
+  (browser tab / Desktop window) is connected … open or refresh the
+  RStudio tab" message; the raw socket error is kept as a technical
+  suffix. `r exec` is unaffected (it never waits on the UI).
+- **Timeout message no longer advertises a `--timeout` flag the command
+  doesn't have.** Commands that reach R through the default 2 s path
+  (`status`, `editor …`, `ui …`, …) said "pass --timeout to override",
+  which clap rejects with `unexpected argument '--timeout'`. They now
+  explain that the command has no such option and that the remedy is to
+  retry once R is idle. `r exec` / `r send` / `pane …` keep the flag
+  hint.
+- **`editor read` / `editor open` / `--path` now accept `~/…` paths.**
+  rsession reports open-document paths in aliased form (`editor list`
+  returns `~/proj/file.R`); feeding one back failed with `cannot resolve
+  ~/proj/file.R: No such file or directory`, and `--path` matching
+  against a document under the home directory silently never matched
+  (the aliased candidate could not be canonicalised). Both sides now
+  expand a leading `~` before canonicalising.
+- **`build.rs` tar fallback produces an R-installable tarball on
+  macOS.** When R is absent at build time, the plain-`tar` fallback
+  embedded pax extended headers for the `com.apple.provenance` xattr;
+  R's `untar()` rejects those (`rawToChar: embedded nul in string`), so
+  the CLI's first call failed with `r_package: failed to install
+  rstudiocli`. The fallback now runs `tar --no-xattrs` with
+  `COPYFILE_DISABLE=1`. Builds with R on the host (`R CMD build`, the
+  release CI path) were never affected.
+
 ## [0.20.1] — 2026-06-10
 
 ### Fixed

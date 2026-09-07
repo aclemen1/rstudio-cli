@@ -86,7 +86,9 @@ to pretty JSON.
 condition — see `message` for the conditionMessage), `rpc_error` (the
 RStudio JSON-RPC layer rejected the call), `timeout` (R evaluation
 exceeded the elapsed-time limit), `session_unavailable` (no live RStudio
-session reachable), `internal` (CLI bug, please report).
+session reachable, or none with a browser tab / Desktop window bound to it —
+calls that need the UI, `status` included, cannot complete until one is
+open; `r exec` still works), `internal` (CLI bug, please report).
 
 Exit codes: `0` ok, `1` runtime error, `2` bad CLI args.
 

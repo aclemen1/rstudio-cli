@@ -125,7 +125,7 @@ fn list(rpc: &RpcClient<'_>, pattern: Option<&str>) -> Result<Option<Value>, Cli
         None => None,
     };
 
-    let raw = rpc.rpc("get_environment_state", vec![])?;
+    let raw = rpc.environment_state()?;
     let env_list = raw
         .get("environment_list")
         .and_then(|v| v.as_array())

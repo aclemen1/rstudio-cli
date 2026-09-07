@@ -1,7 +1,7 @@
 Package: rstudiocli
 Type: Package
 Title: R-Side Bridge for rstudio-cli
-Version: 0.20.1
+Version: 0.20.2
 Authors@R: person(
     given = "Alain",
     family = "Clement",

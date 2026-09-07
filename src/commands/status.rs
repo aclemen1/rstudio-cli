@@ -197,7 +197,7 @@ fn format_as_text(v: &Value) -> String {
 /// `null` with `browse_level_source: "unavailable"` when that helper can't
 /// be built (no C toolchain) — see `debug::native_browse_level`.
 fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
-    let Ok(state) = rpc.rpc("get_environment_state", vec![]) else {
+    let Ok(state) = rpc.environment_state() else {
         return Value::Null;
     };
     let depth = state

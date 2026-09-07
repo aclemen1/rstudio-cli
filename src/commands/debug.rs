@@ -235,7 +235,7 @@ pub fn run(cmd: &DebugCmd, rpc: &RpcClient<'_>) -> Result<Option<Value>, CliErro
 
 /// Fetch and project `get_environment_state` into a debugger-centric shape.
 fn fetch_state(rpc: &RpcClient<'_>) -> Result<Value, CliError> {
-    rpc.rpc("get_environment_state", vec![])
+    rpc.environment_state()
 }
 
 /// Wall-clock capture time (unix epoch ms). Surfaced as `captured_at_unix_ms`
