@@ -45,9 +45,14 @@ Run once, before anything else:
 This returns a single-call snapshot: CLI version + auto-detected mode
 (Server / Desktop), transport (Unix socket or TCP loopback), user
 identity, session id, active client id, sources directory, R version,
-RStudio version, active project, and the open-document count + the
-active doc id and path. It saves a chain of `session info` + `editor
-list` + `editor active-id` calls and gives you the full context the
+RStudio version, active project, ambient debugger state, and the
+open-document count. It never waits on a browser tab — every call it
+makes is client-independent. The **active document** is deliberately not
+in `status`: reading it (`editor active-id` / `editor context`) needs a
+connected RStudio tab, because `documentId()` blocks the R console until
+a client answers. So call `editor active-id` only when a tab is open;
+`r exec`, `env *`, `debug *` work with no client. It saves a chain of
+`session info` + `editor list` calls and gives you the full context the
 user is working in.
 
 ## How to use

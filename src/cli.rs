@@ -89,8 +89,17 @@ enum Command {
     Version,
 
     /// Snapshot of the CLI ↔ session wiring (mode, transport, ids, R version, open docs).
-    /// Single round-trip; ideal call at the start of an agent session.
-    Status,
+    /// Ideal first call of an agent session. Never waits on a RStudio tab: every
+    /// call status makes is client-independent, so a closed tab can't make it hang.
+    /// The active document is NOT reported here (that needs a client) — use
+    /// `editor active-id`.
+    Status {
+        /// Seconds to bound status's own R queries (versions, project,
+        /// debugger — all client-independent). Guards only against a busy or
+        /// stuck rsession, not a missing client. Default 10.
+        #[arg(long, default_value_t = 10.0)]
+        timeout: f64,
+    },
 
     /// Editor manipulation (open, navigate, read, context, insert, select, ...).
     #[command(subcommand)]
@@ -231,7 +240,7 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
     let policy = Policy::load();
     let policy_key: Option<&str> = match &cli.command {
         Command::Version
-        | Command::Status
+        | Command::Status { .. }
         | Command::Schema(_)
         | Command::Skill(_)
         | Command::Policy(_) => None,
@@ -323,10 +332,16 @@ fn dispatch(cli: Cli) -> Result<Reply, CliError> {
             text: format!("{VERSION}\n"),
             default_text: true,
         }),
-        Command::Status => {
+        Command::Status { timeout } => {
             let session = Session::detect(overrides)?;
             let rpc = RpcClient::new(&session);
-            status::run(&rpc, &session)
+            // `--timeout 0` disables the bound (effectively unbounded).
+            let bound = if timeout > 0.0 {
+                Duration::from_secs_f64(timeout)
+            } else {
+                Duration::from_secs(3600)
+            };
+            status::run(&rpc, &session, bound)
         }
         Command::Editor(cmd) => {
             let session = Session::detect(overrides)?;
@@ -419,7 +434,7 @@ fn needs_write_lock(cmd: &Command) -> bool {
     match cmd {
         // Meta-CLI: no session, no lock.
         Command::Version
-        | Command::Status
+        | Command::Status { .. }
         | Command::Schema(_)
         | Command::Skill(_)
         | Command::Policy(_) => false,

@@ -7,14 +7,22 @@
 //! - **Transport**: Unix socket path (Server) or TCP loopback address (Desktop).
 //! - **Session**: user identity, session id (Server-derived from sources_dir),
 //!   active client id, sources directory, active project.
-//! - **R-side**: R version, RStudio version.
-//! - **Documents**: open count and active doc id/path.
+//! - **R-side**: R version, RStudio version, ambient debugger state.
+//! - **Documents**: open count only.
 //!
-//! One R round-trip pulls everything that needs the rsession; the rest
-//! comes from `Session` and the local sources directory listing.
+//! Every rsession call `status` makes is CLIENT-INDEPENDENT — `execute_r_code`
+//! (versions, project) and `get_environment_state` (debugger), both serviced by
+//! rsession whether or not a browser tab is connected — plus a local sources-dir
+//! listing for the open-document count. It deliberately does NOT read the active
+//! document: `rstudioapi::documentId()` round-trips through the RStudio client
+//! (`get_editor_context` → `waitForMethod`) and blocks the R console until a tab
+//! answers, a call that cannot be cancelled once dispatched. So `status` — often
+//! the first call of a session, before any tab is open — never hangs and never
+//! wedges the console. Active-document reads live in `editor active-id` / `editor
+//! context`, invoked when a client is present.
 
 use std::fs;
-use std::path::Path;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -28,8 +36,20 @@ use crate::rpc::RpcClient;
 use crate::session::{Mode, Session};
 use crate::transport::Backend;
 
-pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
+/// Default bound on status's own (client-independent) R round-trips.
+/// Generous: those calls are normally sub-second, so this only trips when
+/// rsession is genuinely busy or stuck. Overridable with `--timeout`.
+pub const DEFAULT_R_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub fn run(rpc: &RpcClient<'_>, session: &Session, r_timeout: Duration) -> Result<Reply, CliError> {
+    // Bound status's own R round-trips. They are all client-INDEPENDENT
+    // (see `collect_r_info` / `collect_debugger`), so a closed RStudio tab
+    // never makes status hang; this only guards against a genuinely busy or
+    // stuck rsession.
+    let prev = rpc.set_timeout(Some(r_timeout));
     let r_info = collect_r_info(rpc)?;
+    let debugger = collect_debugger(rpc);
+    rpc.set_timeout(prev);
     let open_count = count_open_docs(session);
 
     let cli = json!({
@@ -70,13 +90,22 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session) -> Result<Reply, CliError> {
         // Debugger awareness at the start of a session — `null` when R is
         // at the top-level prompt, populated when a `browser()` / `debug()` /
         // `recover()` frame is active. Cheap: one RPC, no R eval.
-        "debugger": collect_debugger(rpc),
+        "debugger": debugger,
     });
 
+    // `status` reports only the open-document COUNT, read from the sources
+    // directory with no RPC. The ACTIVE document id/path is deliberately
+    // NOT probed here: `rstudioapi::documentId()` round-trips through the
+    // RStudio client (`get_editor_context` → `waitForMethod`) and BLOCKS
+    // the R console until a connected tab answers — a call that cannot be
+    // cancelled once dispatched, so a timed-out probe would leave the
+    // console wedged. Agents that need the active document call
+    // `editor active-id` / `editor context` deliberately, when a client is
+    // present. This keeps `status` — the first call of a session, often
+    // made before any tab is open — non-blocking and side-effect-free.
     let documents = json!({
         "open_count": open_count,
-        "active_id": r_info.get("active_doc_id").cloned().unwrap_or(Value::Null),
-        "active_path": r_info.get("active_doc_path").cloned().unwrap_or(Value::Null),
+        "active_note": "run `editor active-id` (needs a connected RStudio client)",
     });
 
     let update_available =
@@ -138,9 +167,6 @@ fn format_as_text(v: &Value) -> String {
         .pointer("/documents/open_count")
         .and_then(|x| x.as_u64())
         .unwrap_or(0);
-    let active_basename = s(v, "/documents/active_path")
-        .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
-        .unwrap_or("none");
 
     // Debugger line: only shown when active, to avoid noise in the
     // common idle case. Format mirrors the JSON projection. We don't print
@@ -170,7 +196,7 @@ fn format_as_text(v: &Value) -> String {
          client_id       {client_id}\n\
          project         {project}\n\
          R / RStudio     {r_version} / {rstudio_version}\n\
-         documents open  {open_count} (active: {active_basename})\n\
+         documents open  {open_count} (active: `editor active-id`, needs a client)\n\
          {debugger_line}"
     )
 }
@@ -226,7 +252,8 @@ fn collect_debugger(rpc: &RpcClient<'_>) -> Value {
     })
 }
 
-/// Single R round-trip that collects everything we need from the rsession.
+/// Single R round-trip that collects everything the rsession can answer
+/// without a connected client: R / RStudio version, active project.
 fn collect_r_info(rpc: &RpcClient<'_>) -> Result<serde_json::Map<String, Value>, CliError> {
     // Delegated to the rstudiocli R package: see `r-package/R/status.R`.
     let r_code = r#"cat(jsonlite::toJSON(
@@ -234,7 +261,11 @@ fn collect_r_info(rpc: &RpcClient<'_>) -> Result<serde_json::Map<String, Value>,
         auto_unbox = TRUE, null = "null"
     ))"#;
     let raw = r_eval::run(rpc, r_code)?;
-    let parsed: Value = serde_json::from_str(&raw).map_err(|e| {
+    parse_object(&raw)
+}
+
+fn parse_object(raw: &str) -> Result<serde_json::Map<String, Value>, CliError> {
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| {
         CliError::internal(format!(
             "status: invalid JSON from rsession: {e}; raw: {raw}"
         ))
@@ -306,4 +337,45 @@ fn count_open_docs(session: &Session) -> usize {
             is_document_id(&name)
         })
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `documents` block must carry only the client-independent
+    /// open-count and a pointer to `editor active-id`; it must never carry
+    /// an active-document field that would imply a UI round-trip.
+    #[test]
+    fn documents_block_has_no_ui_probe_fields() {
+        let v = json!({
+            "cli": {"version": "0.0.0", "mode": "server"},
+            "transport": {"type": "unix-socket", "path": "/s"},
+            "session": {"active_project": null},
+            "rsession": {"r_version": "R version 4.5.0", "debugger": null},
+            "documents": {"open_count": 2, "active_note": "run `editor active-id` (needs a connected RStudio client)"},
+        });
+        let text = format_as_text(&v);
+        assert!(text.contains("documents open  2"), "{text}");
+        assert!(text.contains("editor active-id"), "{text}");
+        // No claim about client connectivity or an active document path.
+        assert!(!text.contains("client "), "{text}");
+        assert!(!text.contains("active: none"), "{text}");
+    }
+
+    #[test]
+    fn text_rendering_shows_debugger_when_active() {
+        let v = json!({
+            "cli": {"version": "0.0.0", "mode": "server"},
+            "transport": {"type": "unix-socket", "path": "/s"},
+            "session": {},
+            "rsession": {"debugger": {"function": "f"}},
+            "documents": {"open_count": 0},
+        });
+        let text = format_as_text(&v);
+        assert!(
+            text.contains("debugger        active (Browse> inside f())"),
+            "{text}"
+        );
+    }
 }

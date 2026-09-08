@@ -12,13 +12,18 @@ A named list with components:
 \item \code{r_version}: R version string (always present).
 \item \code{rstudio_version}: RStudio version string (\code{NULL} if unavailable).
 \item \code{active_project}: project root path (\code{NULL} if no project).
-\item \code{active_doc_id}: id of the active Source pane document
-(\code{NULL} if none, allowConsole = FALSE).
-\item \code{active_doc_path}: path of the active document (\code{NULL} if none).
 }
 }
 \description{
 Tolerant inspection used by \verb{rstudio status}: every field is wrapped
 in \code{tryCatch} so a missing/old RStudio doesn't fail the whole call.
 Returns whatever it can.
+
+Deliberately asks only for what rsession can answer WITHOUT a connected
+client. The active document is intentionally excluded:
+\code{rstudioapi::documentId()} / \code{documentPath()} round-trip through the
+RStudio client and block the R console until a browser tab / Desktop
+window answers — a call that cannot be cancelled once dispatched. Agents
+that need the active document call \verb{editor active-id} / \verb{editor context}
+deliberately, when a client is present.
 }

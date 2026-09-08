@@ -363,8 +363,14 @@ wrapper evaluates `n` as a symbol and errors out. Use `debug_step`.
 
 ## Discovery
 
-- `meta_status` — current session info, R version, open documents, lock
-  state. Good first call to confirm the bridge is healthy.
+- `meta_status` — current session info, R version, open-document count,
+  lock state, ambient debugger. Good first call to confirm the bridge is
+  healthy. Never waits on a browser tab: every call it makes is
+  client-independent. It does NOT report the active document — that needs
+  a connected RStudio tab (`editor_active_id` / `editor_context`), because
+  `documentId()` blocks the R console until a client answers. UI-dependent
+  tools (`editor_context`, `ui_*`, `pane_*`) wait for a tab; `r_exec`,
+  `env_*`, `debug_*` work without one.
 - `tools_search` — find tools by keyword or category (see the
   "Discovering tools" section above). This is the canonical way to
   reach the ~85 tools that aren't in the core `tools/list`.

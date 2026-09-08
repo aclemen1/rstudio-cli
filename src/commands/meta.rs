@@ -11,7 +11,7 @@
 //! from a single `--help`: when to use tx, what `RSTUDIO_TX_HELD`
 //! means, what NOT to put inside it.
 
-use crate::schema::{ActionSpec, ExampleSpec};
+use crate::schema::{ActionSpec, ExampleSpec, ParamKind, ParamSpec};
 
 pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
@@ -41,19 +41,36 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         category: "meta",
         name: "status",
-        summary: "Snapshot of the CLI ↔ session wiring (mode, transport, ids, R version, open docs, lock).",
-        description: "Single round-trip for the agent at the start of a session — verifies that a \
-             session is reachable, returns transport details (Server vs Desktop, socket vs \
-             TCP), session id and client id, R / RStudio version, count and identity of \
-             open documents, active project, and the per-session lock state \
-             (`session.lock.state` = `free` | `held`, `holder` = {pid, command, started_ms} \
-             when held, `inside_tx` = whether we're called from inside a `rstudio tx --`). \
+        summary: "Snapshot of the CLI ↔ session wiring (mode, transport, ids, R version, open-doc count, lock).",
+        description: "First call of an agent session — verifies that a session is reachable, \
+             returns transport details (Server vs Desktop, socket vs TCP), session id and \
+             client id, R / RStudio version, open-document count, active project, ambient \
+             debugger state, and the per-session lock state (`session.lock.state` = `free` \
+             | `held`, `holder` = {pid, command, started_ms} when held, `inside_tx` = \
+             whether we're called from inside a `rstudio tx --`). \
+             \
+             Never waits on a browser tab: every call status makes is client-independent \
+             (`execute_r_code`, `get_environment_state`, a sources-dir listing), so a \
+             closed tab cannot make it hang. The ACTIVE document is deliberately NOT \
+             reported here — `rstudioapi::documentId()` blocks the R console until a \
+             client answers and cannot be cancelled once dispatched — use `editor \
+             active-id` / `editor context` when a client is present. `--timeout` bounds \
+             status's own R queries against a busy/stuck rsession, not a missing client. \
              \
              The lock state is informational. An agent should NOT gate behaviour on it — \
              the holder can release between the read and the next call. For atomicity, \
              use `rstudio tx --`. The field exists for debugging timeouts, auditing, and \
              situational awareness.",
-        params: &[],
+        params: &[ParamSpec {
+            name: "--timeout",
+            kind: ParamKind::Number,
+            required: false,
+            default: Some("10"),
+            allowed: &[],
+            description: "Seconds to bound status's own R queries (versions, project, \
+                          debugger — all client-independent). 0 disables the bound. \
+                          Guards against a busy/stuck rsession, not a missing client.",
+        }],
         examples: &[
             ExampleSpec {
                 cmd: "rstudio status",
@@ -68,7 +85,7 @@ pub const ACTIONS: &[ActionSpec] = &[
                 explanation: "Inspect just the lock state.",
             },
         ],
-        returns: "{cli, transport, user, session: {id, client_id, sources_dir, state_path, active_project, lock}, rsession, documents}",
+        returns: "{cli, transport, user, session: {id, client_id, sources_dir, state_path, active_project, lock}, rsession: {r_version, rstudio_version, debugger}, documents: {open_count, active_note}}",
         errors: &[],
         rstudioapi_fn: None,
         rpc_method: None,

@@ -36,6 +36,12 @@ const ASYNC_QUEUED_RETRY_DELAYS_MS: [u64; 4] = [250, 500, 1000, 1000];
 /// silences the log line.
 const ENVIRONMENT_STATE_PARAMS: [&str; 2] = ["R", "R_GlobalEnv"];
 
+/// `details.reason` attached to the `session_unavailable` error produced
+/// when an RPC hits the socket read deadline. Lets callers (`status`'s UI
+/// probe) tell "no client answered in time" apart from other session
+/// failures without matching on message text.
+pub const SOCKET_READ_TIMEOUT_REASON: &str = "socket_read_timeout";
+
 pub struct RpcClient<'a> {
     session: &'a Session,
     timeout: Cell<Option<Duration>>,
@@ -278,9 +284,16 @@ fn transport_error(method: &str, timeout: Option<Duration>, e: &anyhow::Error) -
              likely cause is that NO RStudio client (browser tab / Desktop window) \
              is connected to this session. ACTION: open or refresh the RStudio tab \
              bound to this session, wait for it to finish loading, then retry. \
+             Client-independent commands (`r exec`, `env`, `debug`, `status`) work \
+             without a tab; `editor`, `ui` and `pane` need one. \
              (technical: socket read timeout during rpc {method}: {e:#})",
             t.as_secs_f64()
-        )),
+        ))
+        .with_details(json!({
+            "reason": SOCKET_READ_TIMEOUT_REASON,
+            "timeout_s": t.as_secs_f64(),
+            "method": method,
+        })),
         _ => CliError::rpc(0, format!("socket error during rpc {method}: {e:#}")),
     }
 }

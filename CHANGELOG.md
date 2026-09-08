@@ -4,6 +4,39 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.3] — 2026-09-08
+
+### Changed
+
+- **`status` no longer hangs when no RStudio tab is connected.** It
+  used to read the active Source document via `rstudioapi::documentId()`,
+  which round-trips through the browser client and blocks the R console
+  in rsession's `waitForMethod` until a tab answers — so with no tab open
+  (a fresh session, a closed tab) `status` waited out the full 30 s
+  socket deadline, while `r exec` answered in milliseconds. That probe is
+  **removed**: `status` now issues only client-independent calls
+  (`execute_r_code` for versions/project, `get_environment_state` for the
+  ambient debugger, a sources-dir listing for the open-document count),
+  so it always returns promptly whether or not a tab is connected.
+  Reported from a container where `status` hung until expiry with no tab
+  open. (Crucially, a timed-out `documentId` probe could not be cancelled
+  and left the R console **permanently wedged** — even `r interrupt`
+  could not clear it — so a socket-timeout-bounded probe was not a safe
+  option; the field had to go.)
+- **`documents.active_id` / `active_path` are no longer in `status`.**
+  Reading the active document needs a connected client; call `editor
+  active-id` / `editor context` for it, when a tab is open. `status`
+  keeps `documents.open_count` (from the sources dir, no RPC) and adds
+  `documents.active_note` pointing at `editor active-id`.
+- **`status` gains `--timeout <secs>` (default 10, 0 disables)**,
+  bounding its own client-independent R queries against a busy or stuck
+  rsession. It is not a client-wait timeout — `status` never waits on a
+  client.
+- Socket-deadline errors (`session_unavailable`) now carry
+  `details.reason = "socket_read_timeout"`, `details.timeout_s` and
+  `details.method` in the JSON envelope, and their message points at
+  `editor` / `ui` / `pane` being the commands that need a connected tab.
+
 ## [0.20.2] — 2026-09-08
 
 ### Fixed

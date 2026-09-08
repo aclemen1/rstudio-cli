@@ -836,11 +836,24 @@ fn project_current_returns_path_or_null() {
 fn status_returns_full_payload() {
     let (session, _guard) = require_live!();
     let rpc = RpcClient::new(&session);
-    let reply = status_cmd::run(&rpc, &session).expect("status");
+    let reply = status_cmd::run(&rpc, &session, status_cmd::DEFAULT_R_TIMEOUT).expect("status");
     let value = match reply {
         rstudio_cli::output::Reply::Adaptive { value, .. } => value,
         rstudio_cli::output::Reply::Wrapped(v) => v.expect("some"),
     };
+
+    // status must NOT probe the active document: that call blocks on a
+    // connected client and can wedge the R console. The documents block
+    // carries only the client-independent open-count.
+    let docs = value.get("documents").expect("documents block");
+    assert!(
+        docs.get("open_count").and_then(|v| v.as_u64()).is_some(),
+        "documents.open_count must be present: {value}"
+    );
+    assert!(
+        docs.get("active_id").is_none() && docs.get("active_path").is_none(),
+        "status must not report an active document (UI-dependent): {value}"
+    );
 
     // CLI block: version + mode.
     let cli = value.get("cli").expect("cli block");
