@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.21.1** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.21.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -270,7 +270,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.21.1
+rstudio version                 # 0.21.2
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -446,7 +446,7 @@ works whether the agent runs on the laptop or inside the container:
 ```toml
 [mcp]
 via = "docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide"
-via_unless_local = true
+via_unless_local = "server"
 ```
 
 A user-level default is read from `<config-dir>/rstudio-cli/config.toml`
@@ -454,17 +454,29 @@ A user-level default is read from `<config-dir>/rstudio-cli/config.toml`
 highest first: `--via <prefix>` (or `--no-via` / `--via ""` to force
 local), the project `.rstudio-cli.toml`, then the user file.
 
-`via_unless_local = true` makes the configured `via` a **fallback**:
-if a local rsession is already reachable, serve it and skip the tunnel;
-tunnel only when nothing local answers. Set it whenever the same repo
-(and the same committed config) is also opened *inside* the container —
-e.g. an agent launched from the RStudio terminal runs a plain `rstudio
-mcp` and would otherwise read `via` and try to `docker` its way out of a
-place that has no `docker`. On the host there is no local session, so it
-tunnels; inside the container the local rsession answers, so it serves
-local. Leave it off (the default) and a config `via` always tunnels. An
-explicit `--via` is always unconditional; `--no-via` always forces
-local.
+`via_unless_local` makes the configured `via` a **fallback**: if a local
+rsession is already reachable, serve it and skip the tunnel; tunnel only
+when nothing local answers. Set it whenever the same repo (and the same
+committed config) is also opened *inside* the container — e.g. an agent
+launched from the RStudio terminal runs a plain `rstudio mcp` and would
+otherwise read `via` and try to `docker` its way out of a place that has
+no `docker`. On the host there is no local session, so it tunnels; inside
+the container the local rsession answers, so it serves local.
+
+Its value chooses **what counts as local**:
+
+- `"server"` — only a local RStudio **Server** socket counts. Use this
+  for a project whose session lives in a container. **A RStudio Desktop
+  running on your host does not count**, so the host still tunnels to the
+  container instead of silently serving Desktop.
+- `true` — **any** local session counts, Desktop included. If Desktop is
+  open on your machine it is served; only choose this when that is what
+  you want.
+- `"desktop"` — only a local Desktop counts (the mirror case).
+
+Leave `via_unless_local` off (the default) and a config `via` always
+tunnels. An explicit `--via` is always unconditional; `--no-via` always
+forces local.
 
 Two re-entrancy guards keep the tunnel from looping back on itself.
 Against the tunnel re-entering its own exec, `--via` appends `--no-via`

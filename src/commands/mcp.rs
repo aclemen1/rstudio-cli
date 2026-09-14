@@ -64,7 +64,7 @@ use serde_json::{Map, Value, json};
 use crate::error::CliError;
 use crate::lock::{SessionLock, TX_ENV};
 use crate::schema::{ActionSpec, ParamKind, ParamSpec, registry};
-use crate::session::{Session, SessionOverrides};
+use crate::session::{Mode, Session, SessionOverrides};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -116,10 +116,23 @@ pub fn run(cmd: &McpCmd, overrides: SessionOverrides) -> Result<i32, CliError> {
         &cwd,
         dirs::config_dir().as_deref(),
     )? {
-        // Only pay for local detection when the plan is a fallback: a reachable
-        // local session (server socket or Desktop) then wins over the tunnel,
-        // which is what lets one committed config serve both host and container.
-        let local_reachable = plan.unless_local && Session::detect(overrides.clone()).is_ok();
+        // Only pay for local detection when the plan is a fallback. The scope
+        // decides what counts as "local": Server restricts detection to a
+        // server socket (so a RStudio Desktop on the host does NOT count and we
+        // still tunnel to the container), Desktop restricts to Desktop, Any
+        // keeps auto-detection.
+        let local_reachable = match plan.fallback {
+            None => false,
+            Some(scope) => {
+                let mut ov = overrides.clone();
+                match scope {
+                    crate::via::LocalScope::Any => {}
+                    crate::via::LocalScope::Server => ov.mode = Some(Mode::Server),
+                    crate::via::LocalScope::Desktop => ov.mode = Some(Mode::Desktop),
+                }
+                Session::detect(ov).is_ok()
+            }
+        };
         if crate::via::should_tunnel(&plan, local_reachable) {
             crate::via::exec_tunnel(&plan.prefix)?; // returns only if exec fails
         }

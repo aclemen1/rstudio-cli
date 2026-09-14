@@ -46,25 +46,39 @@ const PROJECT_CONFIG: &str = ".rstudio-cli.toml";
 /// reads `.rstudio-cli.toml`. The probe compares the remote version to this.
 const NO_VIA_MIN_VERSION: (u64, u64, u64) = (0, 21, 0);
 
-/// A resolved tunnel plan: the transport prefix, plus whether it should be
-/// skipped when a local rsession is already reachable.
+/// Which kind of local session counts as "already there" for a fallback `via`.
+///
+/// `via_unless_local` in the config selects this: `true` → `Any`, `"server"` →
+/// `Server`, `"desktop"` → `Desktop`. `Server` is the one to use for a project
+/// whose session lives in a container: a RStudio Desktop running on the host
+/// must NOT count as local, or the host would serve Desktop instead of
+/// tunnelling to the container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalScope {
+    Any,
+    Server,
+    Desktop,
+}
+
+/// A resolved tunnel plan: the transport prefix, plus the fallback scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViaPlan {
     pub prefix: String,
-    /// From `[mcp] via_unless_local` in a config file. When true, `via` is a
-    /// fallback: serve the local session if one is reachable, tunnel only
-    /// otherwise. This lets one committed `.rstudio-cli.toml` work both on the
-    /// host (no local session → tunnel) and inside the container (local
-    /// rsession reachable → serve local), including when the in-container agent
-    /// runs `rstudio mcp` from the same repo. Always false for an explicit
-    /// `--via`, which is an unconditional "tunnel now".
-    pub unless_local: bool,
+    /// `None` → tunnel unconditionally (explicit `--via`, or a config `via`
+    /// without `via_unless_local`). `Some(scope)` → tunnel only when no local
+    /// session of that scope is reachable; otherwise serve local. This lets one
+    /// committed `.rstudio-cli.toml` work both on the host (no local session →
+    /// tunnel) and inside the container (local rsession reachable → serve
+    /// local), including when the in-container agent runs `rstudio mcp` from the
+    /// same repo.
+    pub fallback: Option<LocalScope>,
 }
 
-/// Decide whether to tunnel. Serve local only when the plan is `unless_local`
-/// AND a local session is reachable; otherwise tunnel.
+/// Decide whether to tunnel. Tunnel unconditionally when the plan has no
+/// fallback; with a fallback, serve local (don't tunnel) only when a local
+/// session of the fallback's scope is reachable.
 pub fn should_tunnel(plan: &ViaPlan, local_reachable: bool) -> bool {
-    !(plan.unless_local && local_reachable)
+    plan.fallback.is_none() || !local_reachable
 }
 
 /// Resolve the effective tunnel plan from the flags and config files.
@@ -86,7 +100,7 @@ pub fn resolve(
         Some(v) => {
             return Ok(Some(ViaPlan {
                 prefix: v.to_string(),
-                unless_local: false, // explicit --via is unconditional
+                fallback: None, // explicit --via is unconditional
             }));
         }
         None => {}
@@ -137,14 +151,36 @@ fn read_via(path: &Path) -> Result<Option<ViaPlan>, CliError> {
     else {
         return Ok(None);
     };
-    let unless_local = mcp
-        .and_then(|m| m.get("via_unless_local"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    Ok(Some(ViaPlan {
-        prefix,
-        unless_local,
-    }))
+    let fallback = match mcp.and_then(|m| m.get("via_unless_local")) {
+        None => None,
+        Some(v) => parse_fallback(v).map_err(|e| {
+            CliError::user(format!(
+                "invalid `via_unless_local` in {}: {e}",
+                path.display()
+            ))
+        })?,
+    };
+    Ok(Some(ViaPlan { prefix, fallback }))
+}
+
+/// Parse a `via_unless_local` TOML value: `true` → `Any`, `false` → none,
+/// `"server"` / `"desktop"` → that scope. Anything else is an error.
+fn parse_fallback(v: &toml::Value) -> Result<Option<LocalScope>, String> {
+    match v {
+        toml::Value::Boolean(true) => Ok(Some(LocalScope::Any)),
+        toml::Value::Boolean(false) => Ok(None),
+        toml::Value::String(s) => match s.as_str() {
+            "server" => Ok(Some(LocalScope::Server)),
+            "desktop" => Ok(Some(LocalScope::Desktop)),
+            other => Err(format!(
+                "expected true, false, \"server\" or \"desktop\", got \"{other}\""
+            )),
+        },
+        other => Err(format!(
+            "expected a boolean or \"server\"/\"desktop\", got {}",
+            other.type_str()
+        )),
+    }
 }
 
 /// Split a transport prefix into argv, honouring single and double quotes and
@@ -403,17 +439,17 @@ mod tests {
     fn should_tunnel_unconditional_plan_always_tunnels() {
         let p = ViaPlan {
             prefix: "ssh host".into(),
-            unless_local: false,
+            fallback: None,
         };
         assert!(should_tunnel(&p, true));
         assert!(should_tunnel(&p, false));
     }
 
     #[test]
-    fn should_tunnel_unless_local_serves_local_when_reachable() {
+    fn should_tunnel_fallback_serves_local_when_reachable() {
         let p = ViaPlan {
             prefix: "docker ide".into(),
-            unless_local: true,
+            fallback: Some(LocalScope::Server),
         };
         assert!(!should_tunnel(&p, true)); // local reachable -> serve local
         assert!(should_tunnel(&p, false)); // nothing local -> tunnel
@@ -421,10 +457,10 @@ mod tests {
 
     // --- resolve precedence ---------------------------------------------
 
-    fn plan(prefix: &str, unless_local: bool) -> Option<ViaPlan> {
+    fn plan(prefix: &str, fallback: Option<LocalScope>) -> Option<ViaPlan> {
         Some(ViaPlan {
             prefix: prefix.to_string(),
-            unless_local,
+            fallback,
         })
     }
 
@@ -448,7 +484,7 @@ mod tests {
         let d = tmp();
         assert_eq!(
             resolve(Some("ssh host"), false, d.path(), None).unwrap(),
-            plan("ssh host", false)
+            plan("ssh host", None)
         );
     }
 
@@ -462,12 +498,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             resolve(None, false, d.path(), None).unwrap(),
-            plan("docker compose exec -T ide", false)
+            plan("docker compose exec -T ide", None)
         );
     }
 
     #[test]
-    fn resolve_project_file_via_unless_local() {
+    fn resolve_via_unless_local_true_is_any() {
         let d = tmp();
         fs::write(
             d.path().join(PROJECT_CONFIG),
@@ -476,8 +512,62 @@ mod tests {
         .unwrap();
         assert_eq!(
             resolve(None, false, d.path(), None).unwrap(),
-            plan("docker compose exec -T ide", true)
+            plan("docker compose exec -T ide", Some(LocalScope::Any))
         );
+    }
+
+    #[test]
+    fn resolve_via_unless_local_server_scope() {
+        let d = tmp();
+        fs::write(
+            d.path().join(PROJECT_CONFIG),
+            "[mcp]\nvia = \"docker ide\"\nvia_unless_local = \"server\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve(None, false, d.path(), None).unwrap(),
+            plan("docker ide", Some(LocalScope::Server))
+        );
+    }
+
+    #[test]
+    fn resolve_via_unless_local_desktop_scope() {
+        let d = tmp();
+        fs::write(
+            d.path().join(PROJECT_CONFIG),
+            "[mcp]\nvia = \"ssh host\"\nvia_unless_local = \"desktop\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve(None, false, d.path(), None).unwrap(),
+            plan("ssh host", Some(LocalScope::Desktop))
+        );
+    }
+
+    #[test]
+    fn resolve_via_unless_local_false_is_unconditional() {
+        let d = tmp();
+        fs::write(
+            d.path().join(PROJECT_CONFIG),
+            "[mcp]\nvia = \"ssh host\"\nvia_unless_local = false\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve(None, false, d.path(), None).unwrap(),
+            plan("ssh host", None)
+        );
+    }
+
+    #[test]
+    fn resolve_via_unless_local_bad_value_errors() {
+        let d = tmp();
+        fs::write(
+            d.path().join(PROJECT_CONFIG),
+            "[mcp]\nvia = \"ssh host\"\nvia_unless_local = \"remote\"\n",
+        )
+        .unwrap();
+        let err = resolve(None, false, d.path(), None).unwrap_err();
+        assert!(err.message.contains("via_unless_local"), "{}", err.message);
     }
 
     #[test]
@@ -488,7 +578,7 @@ mod tests {
         fs::write(d.path().join(PROJECT_CONFIG), "[mcp]\nvia = \"ssh host\"\n").unwrap();
         assert_eq!(
             resolve(None, false, &deep, None).unwrap(),
-            plan("ssh host", false)
+            plan("ssh host", None)
         );
     }
 
@@ -504,7 +594,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             resolve(None, false, proj.path(), Some(xdg.path())).unwrap(),
-            plan("ssh dev", true)
+            plan("ssh dev", Some(LocalScope::Any))
         );
     }
 
@@ -521,7 +611,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             resolve(None, false, proj.path(), Some(xdg.path())).unwrap(),
-            plan("proj", false)
+            plan("proj", None)
         );
     }
 
@@ -555,7 +645,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             resolve(None, false, proj.path(), Some(xdg.path())).unwrap(),
-            plan("user", false)
+            plan("user", None)
         );
     }
 }

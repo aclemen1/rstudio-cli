@@ -4,6 +4,22 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.2] — 2026-09-14
+
+### Changed
+
+- **`[mcp] via_unless_local` now takes a scope**, so a RStudio Desktop
+  running on the host no longer silently wins over a container-backed
+  project. Accepts `"server"` (only a local Server socket counts as
+  local — the right choice when the session lives in a container),
+  `"desktop"` (only a local Desktop counts), or `true` (any local
+  session, Desktop included — the 0.21.1 meaning). Before this, `true`
+  counted Desktop, so on a Mac with Desktop open `rstudio mcp` served
+  Desktop instead of tunnelling to the container, and the workaround was
+  `--mode server` in `.mcp.json`. With `via_unless_local = "server"` the
+  committed `.mcp.json` can stay a plain `rstudio mcp`. A bad value is a
+  clear config error. Reported by the appdir26 integration.
+
 ## [0.21.1] — 2026-09-14
 
 ### Added
