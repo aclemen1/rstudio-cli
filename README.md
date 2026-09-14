@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.20.3** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.21.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -101,6 +101,7 @@ will correct it promptly.
 | Direct socket — no HTTP server, no open port | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Zero runtime dependency (single static binary) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Runs from any external terminal, outside RStudio | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Native remote/container transport (`--via` / config, no wrapper) | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Homebrew or binary install, no R/Python required | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Embedded R companion package, auto-installed on first RPC | ✓ | ✗ | ✗ | ✗ | ✗ |
 | R package also usable standalone from any R prompt | ✓ | ✗ | ✗ | ✗ | ✗ |
@@ -269,7 +270,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.20.3
+rstudio version                 # 0.21.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -421,7 +422,53 @@ sockets across the network — you wrap `rstudio mcp` in a transport
 that relays stdin/stdout verbatim, and the MCP client on your laptop
 speaks JSON-RPC straight through it.
 
-`kubectl exec -i` is the canonical example. Drop this into your
+**Native transport with `--via` (recommended when `rstudio` is
+installed locally).** Instead of a wrapper script or a verbose
+`.mcp.json`, give `rstudio mcp` the transport prefix and it execs
+`<prefix> rstudio mcp --no-via` for you, relaying stdio:
+
+```json
+{
+  "mcpServers": {
+    "rstudio": {
+      "type": "stdio",
+      "command": "rstudio",
+      "args": ["mcp", "--via", "docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide"]
+    }
+  }
+}
+```
+
+Or keep `.mcp.json` as plain `rstudio mcp` and put the prefix in a
+per-project `.rstudio-cli.toml` at the repo root — the same file then
+works whether the agent runs on the laptop or inside the container:
+
+```toml
+[mcp]
+via = "docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide"
+```
+
+A user-level default is read from `<config-dir>/rstudio-cli/config.toml`
+(`$XDG_CONFIG_HOME/rstudio-cli/config.toml` on Linux). Precedence,
+highest first: `--via <prefix>` (or `--no-via` / `--via ""` to force
+local), the project `.rstudio-cli.toml`, then the user file. The
+appended `--no-via` stops the tunnel re-entering itself when the same
+config file is present inside the container — a command-line flag, not
+an environment variable, because `docker exec` and `ssh` do not forward
+environment by default. It is appended only when the remote is
+0.21.0 or newer: `--via` first probes with `<prefix> rstudio version`,
+so an older remote binary (which does not understand `--no-via`, and
+never reads the config file, so cannot loop) is not broken. No
+version-ordering dance is needed when upgrading. The same three
+operational rules below still apply to the prefix (no PTY, `-u <user>`,
+`-e USER=<user>`).
+
+`--via` needs the `rstudio` binary on the client machine (to bootstrap
+the exec). When the client has no local binary, use one of the manual
+transports below, which run entirely through `kubectl` / `docker` /
+`ssh`.
+
+`kubectl exec -i` is the canonical manual example. Drop this into your
 client's `.mcp.json` (or equivalent) and the JSON-RPC frames flow
 through the tunnel unchanged — handshake, tool calls, notifications,
 all of it:
@@ -481,6 +528,50 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 # → the rstudio-cli server name, no error.
 ```
 
+**Docker Compose.** The native `.rstudio-cli.toml` above already gives
+you one committed `.mcp.json` (`rstudio mcp`) that works both on the
+host and inside the container. If the client has no local `rstudio`
+binary and you still want a single `.mcp.json`, a switch script does
+the same job in pure shell — direct inside the container, through
+Compose otherwise:
+
+```sh
+#!/bin/sh
+# .mcp/rstudio-mcp.sh — one entry point, host or container.
+set -eu
+if [ -f /.dockerenv ]; then
+  exec rstudio mcp "$@"                      # already inside the container
+fi
+cd "$(dirname "$0")/.."                       # repo root, where compose.yaml lives
+exec docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide \
+  rstudio mcp "$@"
+```
+
+Either way, `docker compose exec` carries one operational rule beyond
+the two below (each learned from a silent failure):
+
+- **`-T`** — no PTY, for the reason in constraint 1. `docker compose
+  exec` allocates a TTY by default; `-T` disables it. Without it the
+  JSON-RPC stream is corrupted.
+- **`-u <user>`** — run as the session user. The rsession socket is
+  owned by that user only; the service's default user (often root)
+  cannot reach it. Symptom: `no … rsession found`.
+- **`-e USER=<user>`** — `docker exec` does not set `$USER`, and
+  rstudio-cli derives the session identity from it. Without it:
+  `cannot determine user`.
+
+**SSH.** Same shape, one line — `ssh` allocates no PTY without `-t`, so
+constraint 1 is satisfied by default:
+
+```sh
+ssh <user>@<host> rstudio mcp
+```
+
+Put that as `command: "ssh"`, `args: ["<user>@<host>", "rstudio mcp"]`
+in `.mcp.json`. A login shell sets `$USER` and `PATH`, so constraints 2
+and 3 usually take care of themselves; if `rstudio` is not on the login
+`PATH`, use its absolute path.
+
 **Other transports.** The recipe isn't kubectl-specific: anything that
 launches `rstudio mcp` in the rsession's context and shuttles
 stdin/stdout without a PTY works the same way — `docker exec -i`,
@@ -488,6 +579,14 @@ stdin/stdout without a PTY works the same way — `docker exec -i`,
 (explicit `USER`, absolute binary path) hold for every transport;
 constraint 1 generalises to "do not allocate a TTY" on whatever tool
 you're using.
+
+**First check: `meta_status` (or `rstudio status`).** Run it before
+anything else — it confirms the tunnel reaches a live rsession. A
+freshly started container has **no rsession until an RStudio browser
+tab has been opened at least once** since it started; the socket is
+created only when a client authenticates. Until then every call fails
+with `no … rsession found`. Open the RStudio web UI once to spawn the
+rsession, then reconnect the MCP server.
 
 **After editing `.mcp.json`** the client must (re)connect the server
 to pick up the change — in Claude Code, `/mcp` → Reconnect. Same

@@ -370,7 +370,11 @@ wrapper evaluates `n` as a symbol and errors out. Use `debug_step`.
   a connected RStudio tab (`editor_active_id` / `editor_context`), because
   `documentId()` blocks the R console until a client answers. UI-dependent
   tools (`editor_context`, `ui_*`, `pane_*`) wait for a tab; `r_exec`,
-  `env_*`, `debug_*` work without one.
+  `env_*`, `debug_*` work without one. If `meta_status` errors with
+  `no … rsession found`, the session has not started yet: on RStudio
+  Server there is no rsession until an RStudio browser tab has been opened
+  at least once since the server (or container) started. Ask the user to
+  open the RStudio web UI once, then retry.
 - `tools_search` — find tools by keyword or category (see the
   "Discovering tools" section above). This is the canonical way to
   reach the ~85 tools that aren't in the core `tools/list`.

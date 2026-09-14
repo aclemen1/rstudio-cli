@@ -85,9 +85,40 @@ pub struct McpCmd {
     /// the per-session writer lock. Default 30s.
     #[arg(long, default_value_t = 30.0)]
     pub lock_timeout: f64,
+
+    /// Transport prefix that runs `rstudio mcp` where the rsession lives, for
+    /// RStudio Server in a container or on a remote host. The CLI execs
+    /// `<PREFIX> rstudio mcp --no-via` and relays stdio verbatim, so the MCP
+    /// client on this machine speaks JSON-RPC straight through. Example:
+    /// `--via "docker compose exec -T -u ds -e USER=ds ide"` or
+    /// `--via "ssh user@host"`. The prefix must not allocate a PTY. An empty
+    /// string forces local mode. Overrides `[mcp] via` in the config files.
+    #[arg(long)]
+    pub via: Option<String>,
+
+    /// Ignore any configured `via` and serve the MCP server locally. `--via`
+    /// appends this flag to the remote command so the tunnel does not re-enter
+    /// itself from the same config file inside the container.
+    #[arg(long)]
+    pub no_via: bool,
 }
 
 pub fn run(cmd: &McpCmd, overrides: SessionOverrides) -> Result<i32, CliError> {
+    // Resolve a transport prefix from --via / --no-via / config files. When
+    // one applies, exec the tunnel and relay stdio: this process is replaced,
+    // so nothing below runs. Done before any session detection — the point of
+    // --via is that this machine has no local rsession.
+    let cwd = std::env::current_dir()
+        .map_err(|e| CliError::internal(format!("mcp: cannot read current directory: {e}")))?;
+    if let Some(via) = crate::via::resolve(
+        cmd.via.as_deref(),
+        cmd.no_via,
+        &cwd,
+        dirs::config_dir().as_deref(),
+    )? {
+        crate::via::exec_tunnel(&via)?; // returns only if exec fails
+    }
+
     let mut server = McpServer::new(overrides, Duration::from_secs_f64(cmd.lock_timeout));
     server.run_loop()
 }

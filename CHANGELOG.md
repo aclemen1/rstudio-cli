@@ -4,6 +4,49 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-09-14
+
+### Added
+
+- **`rstudio mcp --via "<transport prefix>"`** runs the MCP server where
+  the rsession lives, for RStudio Server in a container or on a remote
+  host. The local binary execs `<prefix> rstudio mcp --no-via` and
+  relays stdin/stdout verbatim, so the MCP client on the user's machine
+  speaks JSON-RPC straight through. The prefix is any command that runs
+  its trailing arguments in the session's context without a PTY, e.g.
+  `--via "docker compose exec -T -u ds -e USER=ds ide"` or
+  `--via "ssh user@host"`. Replaces the hand-written wrapper script the
+  README previously documented. `--via ""` forces local mode.
+- **Per-project and per-user config for the transport prefix.** `rstudio
+  mcp` reads `[mcp] via` from a `.rstudio-cli.toml` found by walking up
+  from the current directory, or from
+  `<config-dir>/rstudio-cli/config.toml`
+  (`$XDG_CONFIG_HOME/rstudio-cli/config.toml` on Linux). One committed
+  `.mcp.json` of plain `rstudio mcp` then works both on the host and
+  inside the container. Precedence, highest first: `--no-via` (or
+  `--via ""`), `--via <prefix>`, the project file, the user file.
+- **`--no-via`** forces local mode, ignoring any configured prefix.
+  `--via` appends it to the remote command so the tunnel does not
+  re-enter itself from the same config file inside the container. It is
+  a command-line flag, not an environment variable, because `docker
+  exec` and `ssh` do not forward environment by default while arguments
+  always cross the transport. To avoid breaking a remote binary older
+  than 0.21.0 (which rejects the unknown flag), `--via` first probes
+  `<prefix> rstudio version` and appends `--no-via` only for a remote
+  0.21.0 or newer; an older remote never reads the config file, so it
+  cannot loop. Upgrading needs no version-ordering between the two
+  sides.
+
+### Changed
+
+- README `Remote / containerized MCP` section: leads with the native
+  `--via` / `.rstudio-cli.toml` recipe; the manual `kubectl` / `docker`
+  / `ssh` transports remain for clients with no local `rstudio` binary.
+- MCP skill: `meta_status` guidance now explains that a `no … rsession
+  found` error means the session has not started, and that on RStudio
+  Server no rsession exists until an RStudio browser tab has been opened
+  once since the server/container started.
+
 ## [0.20.3] — 2026-09-08
 
 ### Changed
