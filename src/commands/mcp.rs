@@ -104,19 +104,25 @@ pub struct McpCmd {
 }
 
 pub fn run(cmd: &McpCmd, overrides: SessionOverrides) -> Result<i32, CliError> {
-    // Resolve a transport prefix from --via / --no-via / config files. When
-    // one applies, exec the tunnel and relay stdio: this process is replaced,
-    // so nothing below runs. Done before any session detection — the point of
-    // --via is that this machine has no local rsession.
+    // Resolve a transport plan from --via / --no-via / config files. When one
+    // applies (and isn't overridden by a reachable local session under
+    // `via_unless_local`), exec the tunnel and relay stdio: this process is
+    // replaced, so nothing below runs.
     let cwd = std::env::current_dir()
         .map_err(|e| CliError::internal(format!("mcp: cannot read current directory: {e}")))?;
-    if let Some(via) = crate::via::resolve(
+    if let Some(plan) = crate::via::resolve(
         cmd.via.as_deref(),
         cmd.no_via,
         &cwd,
         dirs::config_dir().as_deref(),
     )? {
-        crate::via::exec_tunnel(&via)?; // returns only if exec fails
+        // Only pay for local detection when the plan is a fallback: a reachable
+        // local session (server socket or Desktop) then wins over the tunnel,
+        // which is what lets one committed config serve both host and container.
+        let local_reachable = plan.unless_local && Session::detect(overrides.clone()).is_ok();
+        if crate::via::should_tunnel(&plan, local_reachable) {
+            crate::via::exec_tunnel(&plan.prefix)?; // returns only if exec fails
+        }
     }
 
     let mut server = McpServer::new(overrides, Duration::from_secs_f64(cmd.lock_timeout));

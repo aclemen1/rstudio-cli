@@ -4,6 +4,28 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1] — 2026-09-14
+
+### Added
+
+- **`[mcp] via_unless_local = true`** makes a config-derived `via` a
+  fallback: when a local rsession is already reachable, serve it and
+  skip the tunnel; tunnel only when nothing local answers. This closes a
+  gap in 0.21.0's `--via` for the case where the same committed
+  `.rstudio-cli.toml` is also opened *inside* the container: an agent
+  launched from the RStudio terminal runs a plain `rstudio mcp`, which
+  would otherwise read `via` and fail trying to `docker` out of a
+  container that has no `docker`. With the flag, the host (no local
+  session) tunnels and the in-container client serves local. The
+  appended-`--no-via` guard cannot cover this case — the in-container
+  server is launched fresh, not through a `--via` exec. Default off
+  (a config `via` still always tunnels); an explicit `--via` stays
+  unconditional; `--no-via` still forces local. Reported by the
+  appdir26 integration.
+- The failed-to-exec error from `--via` now points at `--no-via` and
+  `via_unless_local` when the transport binary is missing (the typical
+  symptom of tunnelling from inside the target).
+
 ## [0.21.0] — 2026-09-14
 
 ### Added

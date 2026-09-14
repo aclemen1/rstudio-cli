@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.21.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.21.1** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -270,7 +270,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.21.0
+rstudio version                 # 0.21.1
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -446,22 +446,37 @@ works whether the agent runs on the laptop or inside the container:
 ```toml
 [mcp]
 via = "docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide"
+via_unless_local = true
 ```
 
 A user-level default is read from `<config-dir>/rstudio-cli/config.toml`
 (`$XDG_CONFIG_HOME/rstudio-cli/config.toml` on Linux). Precedence,
 highest first: `--via <prefix>` (or `--no-via` / `--via ""` to force
-local), the project `.rstudio-cli.toml`, then the user file. The
-appended `--no-via` stops the tunnel re-entering itself when the same
-config file is present inside the container — a command-line flag, not
-an environment variable, because `docker exec` and `ssh` do not forward
-environment by default. It is appended only when the remote is
-0.21.0 or newer: `--via` first probes with `<prefix> rstudio version`,
-so an older remote binary (which does not understand `--no-via`, and
-never reads the config file, so cannot loop) is not broken. No
-version-ordering dance is needed when upgrading. The same three
-operational rules below still apply to the prefix (no PTY, `-u <user>`,
-`-e USER=<user>`).
+local), the project `.rstudio-cli.toml`, then the user file.
+
+`via_unless_local = true` makes the configured `via` a **fallback**:
+if a local rsession is already reachable, serve it and skip the tunnel;
+tunnel only when nothing local answers. Set it whenever the same repo
+(and the same committed config) is also opened *inside* the container —
+e.g. an agent launched from the RStudio terminal runs a plain `rstudio
+mcp` and would otherwise read `via` and try to `docker` its way out of a
+place that has no `docker`. On the host there is no local session, so it
+tunnels; inside the container the local rsession answers, so it serves
+local. Leave it off (the default) and a config `via` always tunnels. An
+explicit `--via` is always unconditional; `--no-via` always forces
+local.
+
+Two re-entrancy guards keep the tunnel from looping back on itself.
+Against the tunnel re-entering its own exec, `--via` appends `--no-via`
+to the remote command — a command-line flag, not an environment
+variable, because `docker exec` and `ssh` do not forward environment by
+default. It is appended only when the remote is 0.21.0 or newer: `--via`
+first probes with `<prefix> rstudio version`, so an older remote binary
+(which does not understand `--no-via`, and never reads the config file,
+so cannot loop) is not broken — no version-ordering dance when
+upgrading. Against a fresh in-container `rstudio mcp` from the same
+config, use `via_unless_local` above. The same three operational rules
+below still apply to the prefix (no PTY, `-u <user>`, `-e USER=<user>`).
 
 `--via` needs the `rstudio` binary on the client machine (to bootstrap
 the exec). When the client has no local binary, use one of the manual
