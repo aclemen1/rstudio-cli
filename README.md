@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.21.2** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.21.3** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -270,7 +270,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.21.2
+rstudio version                 # 0.21.3
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -477,6 +477,18 @@ Its value chooses **what counts as local**:
 Leave `via_unless_local` off (the default) and a config `via` always
 tunnels. An explicit `--via` is always unconditional; `--no-via` always
 forces local.
+
+**Version note.** The string values (`"server"` / `"desktop"`) need
+rstudio-cli **0.21.2 or newer on every side that reads the config** —
+including the binary *inside* the container, since it reads the same
+committed `.rstudio-cli.toml`. A 0.21.1 binary accepts only the boolean
+form and silently treats a string as off (so it tunnels and, inside a
+container with no `docker`, fails); a pre-0.21.0 binary ignores the file
+entirely. Keep the in-container binary current (a Homebrew bootstrap
+that installs the latest is the simplest). An unknown value (a typo) is a
+hard config error: the MCP server refuses to start rather than guess a
+scope and risk serving the wrong session — the error names
+`via_unless_local` and the file.
 
 Two re-entrancy guards keep the tunnel from looping back on itself.
 Against the tunnel re-entering its own exec, `--via` appends `--no-via`

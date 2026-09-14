@@ -374,7 +374,12 @@ wrapper evaluates `n` as a symbol and errors out. Use `debug_step`.
   `no … rsession found`, the session has not started yet: on RStudio
   Server there is no rsession until an RStudio browser tab has been opened
   at least once since the server (or container) started. Ask the user to
-  open the RStudio web UI once, then retry.
+  open the RStudio web UI once, then retry. If the server fails to start
+  with a `via_unless_local` config error, the project's `.rstudio-cli.toml`
+  has an unknown value (a typo) or the binary predates the value: the
+  string scopes `"server"` / `"desktop"` need rstudio-cli >= 0.21.2 on
+  every side that reads the config, the container included. Tell the user
+  to fix the value or upgrade the in-container binary.
 - `tools_search` — find tools by keyword or category (see the
   "Discovering tools" section above). This is the canonical way to
   reach the ~85 tools that aren't in the core `tools/list`.

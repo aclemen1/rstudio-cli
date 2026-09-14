@@ -4,6 +4,19 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.3] — 2026-09-14
+
+### Documentation
+
+- Document the version compatibility of `via_unless_local`'s string
+  scopes: `"server"` / `"desktop"` need rstudio-cli 0.21.2 or newer on
+  every side that reads the config, the container included. A 0.21.1
+  binary accepts only the boolean form and silently treats a string as
+  off; a pre-0.21.0 binary ignores the file. An unknown value is a hard
+  config error (the MCP server refuses to start rather than guess a
+  scope). Added to the README and the embedded MCP skill. Raised by the
+  appdir26 integration.
+
 ## [0.21.2] — 2026-09-14
 
 ### Changed
