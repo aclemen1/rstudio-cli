@@ -69,7 +69,7 @@ rscli_browse_level <- function() {
   # (or a different arch on a shared home dir) recompiles cleanly.
   key <- paste0("R", getRversion(), "-", R.version$arch)
   cache_dir <- file.path(
-    tools::R_user_dir("rstudio-cli", "cache"), "native", key
+    .rscli_user_dir("cache"), "native", key
   )
   so <- file.path(cache_dir, paste0("browse_level", .Platform$dynlib.ext))
 

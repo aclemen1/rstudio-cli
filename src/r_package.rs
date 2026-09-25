@@ -60,8 +60,14 @@ const R_PACKAGE_NAME: &str = "rstudiocli";
 /// first call (dir already exists, lib path already prepended thanks
 /// to `unique()`). Cheap enough to inline at the top of every R probe
 /// so freshly-restarted rsessions self-heal.
+// `tools::R_user_dir()` exists only in R >= 4.0. This snippet runs before the
+// companion package is loaded, so it inlines the same fallback as the package's
+// `.rscli_user_dir()` (kept in sync): on R < 4.0 (e.g. 3.6.3) resolve the XDG
+// data dir directly instead of erroring on every command.
 const RSTUDIOCLI_LIB_PREPEND: &str = "{ \
-    .rstudiocli_lib <- tools::R_user_dir('rstudio-cli', 'data'); \
+    .rstudiocli_lib <- if (exists('R_user_dir', envir = asNamespace('tools'))) \
+        tools::R_user_dir('rstudio-cli', 'data') \
+        else path.expand(file.path(Sys.getenv('XDG_DATA_HOME', '~/.local/share'), 'R', 'rstudio-cli')); \
     dir.create(.rstudiocli_lib, recursive = TRUE, showWarnings = FALSE); \
     .libPaths(unique(c(.rstudiocli_lib, .libPaths()))); \
 }";
@@ -376,6 +382,23 @@ mod tests {
     #[test]
     fn version_constant_matches_cargo() {
         assert_eq!(R_PACKAGE_VERSION, env!("CARGO_PKG_VERSION"));
+    }
+
+    // The lib-prepend snippet runs at the top of every R probe, before the
+    // companion package is loaded, so it cannot call a package helper. It must
+    // NOT call `tools::R_user_dir()` unconditionally: that function only exists
+    // in R >= 4.0, and on R 3.6.3 an unguarded call errors on the very first
+    // command (`'R_user_dir' is not an exported object from 'namespace:tools'`).
+    #[test]
+    fn lib_prepend_guards_r_user_dir_for_old_r() {
+        assert!(
+            RSTUDIOCLI_LIB_PREPEND.contains("exists('R_user_dir'"),
+            "prepend must guard R_user_dir with an exists() check: {RSTUDIOCLI_LIB_PREPEND}"
+        );
+        assert!(
+            RSTUDIOCLI_LIB_PREPEND.contains("XDG_DATA_HOME"),
+            "prepend must fall back to XDG_DATA_HOME on R < 4.0: {RSTUDIOCLI_LIB_PREPEND}"
+        );
     }
 
     #[test]

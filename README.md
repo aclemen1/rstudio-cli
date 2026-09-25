@@ -40,7 +40,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.21.3** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.21.4** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -270,7 +270,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.21.3
+rstudio version                 # 0.21.4
 ```
 
 This keeps the agent's context window lean — no tool descriptions are

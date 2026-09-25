@@ -4,7 +4,22 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.21.3] — 2026-09-14
+## [0.21.4] — 2026-09-25
+
+### Fixed
+
+- **Works again on R older than 4.0.** Since 0.19.0 the bootstrap placed
+  the embedded library under `tools::R_user_dir()`, which exists only in
+  R >= 4.0, so on R 3.6.3 every command failed on the first R call with
+  `'R_user_dir' is not an exported object from 'namespace:tools'`. Both
+  call sites now fall back when the function is absent: the lib-prepend
+  snippet in `src/r_package.rs` and the native-helper cache dir in
+  `r-package/R/native.R` (via a new internal `.rscli_user_dir()` in the R
+  package). The fallback resolves the XDG base directory exactly as R 4.0
+  would (`XDG_DATA_HOME` / `XDG_CACHE_HOME`, default `~/.local/share` /
+  `~/.cache`, then `/R/rstudio-cli`), so the path is unchanged on R >= 4.0
+  and correct on older R. Verified on a real R 3.6.3 container. Reported
+  by a UNISIS user on a dojo pod running R 3.6.3.
 
 ### Documentation
 
