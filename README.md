@@ -12,8 +12,10 @@ open files, run R code, list and read terminals, inspect the live R
 environment, surface lint-style markers, manage background jobs,
 install a Claude Code skill, and more.
 
-The binary is named `rstudio`. It auto-detects which RStudio it's
-talking to:
+The binary is named `rstudio`, and also installs under the
+collision-proof alias `rstudio-cli` (prefer it for MCP config and in an
+RStudio Server terminal — see *MCP server*). It auto-detects which
+RStudio it's talking to:
 
 - **RStudio Server** (Linux): the rsession Unix socket. Works from
   inside the embedded terminal *or* any other shell on the same host
@@ -40,7 +42,7 @@ disrupting your browser tab.
 
 ## Status
 
-**v0.21.4** — covers ~50 of the 117 functions exported by `rstudioapi`,
+**v0.22.0** — covers ~50 of the 117 functions exported by `rstudioapi`,
 across 16 categories and 106 actions. First-class support for R's
 debugger (`browser()`, `debug()`, `recover()`): `r send` / `r exec`
 auto-target the active browser frame, every response carries an
@@ -270,7 +272,7 @@ discoverable without reading the source code.
 ```sh
 rstudio skill install           # writes ./.claude/skills/rstudio/SKILL.md
 rstudio skill show              # prints the embedded skill markdown
-rstudio version                 # 0.21.4
+rstudio version                 # 0.22.0
 ```
 
 This keeps the agent's context window lean — no tool descriptions are
@@ -346,10 +348,20 @@ server over stdio. The agent's MCP client spawns the server, lists
 its tools, and invokes them like any other native tool — no shell
 quoting, no JSON parsing, automatic schema validation.
 
+> **Use `rstudio-cli`, not `rstudio`, for MCP.** The binary installs
+> under both names (`rstudio-cli` is an alias). RStudio Server 2026.10
+> ships its own `rstudio` script under
+> `/usr/lib/rstudio-server/bin/postback` and prepends that directory to
+> the PATH of its terminal, so a `.mcp.json` using `rstudio mcp` there
+> hits Posit's script — which creates an empty file named `mcp` and exits
+> 0 — and the client reports `CONNECTION_CLOSED` with no error. The
+> `rstudio-cli` name cannot collide. `rstudio status` warns
+> (`cli.path_shadow`) when a different `rstudio` precedes this one in PATH.
+
 **Claude Code** (CLI):
 
 ```sh
-claude mcp add rstudio --scope user -- rstudio mcp
+claude mcp add rstudio --scope user -- rstudio-cli mcp
 ```
 
 **Claude Desktop** — edit
@@ -360,7 +372,7 @@ claude mcp add rstudio --scope user -- rstudio mcp
 {
   "mcpServers": {
     "rstudio": {
-      "command": "rstudio",
+      "command": "rstudio-cli",
       "args": ["mcp"]
     }
   }
@@ -369,7 +381,7 @@ claude mcp add rstudio --scope user -- rstudio mcp
 
 **Cline / Continue / Cursor** — most MCP-aware extensions accept the
 same `command` + `args` shape in their settings panel. Refer to the
-extension's docs; the entry point is always `rstudio mcp`.
+extension's docs; the entry point is always `rstudio-cli mcp`.
 
 **What you get** after configuration: the LLM sees ~90 tools in its
 catalog (`editor_open`, `editor_read_buffer`, `r_exec`, `meta_status`,
@@ -432,14 +444,18 @@ installed locally).** Instead of a wrapper script or a verbose
   "mcpServers": {
     "rstudio": {
       "type": "stdio",
-      "command": "rstudio",
+      "command": "rstudio-cli",
       "args": ["mcp", "--via", "docker compose exec -T -u ds -e USER=ds -w /home/ds/project ide"]
     }
   }
 }
 ```
 
-Or keep `.mcp.json` as plain `rstudio mcp` and put the prefix in a
+(`rstudio-cli`, not `rstudio` — see the collision note under *MCP server*.
+The prefix's trailing `rstudio mcp` runs through `docker compose exec`,
+whose PATH has no postback dir, so it is unaffected.)
+
+Or keep `.mcp.json` as plain `rstudio-cli mcp` and put the prefix in a
 per-project `.rstudio-cli.toml` at the repo root — the same file then
 works whether the agent runs on the laptop or inside the container:
 

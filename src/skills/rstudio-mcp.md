@@ -379,7 +379,11 @@ wrapper evaluates `n` as a symbol and errors out. Use `debug_step`.
   has an unknown value (a typo) or the binary predates the value: the
   string scopes `"server"` / `"desktop"` need rstudio-cli >= 0.21.2 on
   every side that reads the config, the container included. Tell the user
-  to fix the value or upgrade the in-container binary.
+  to fix the value or upgrade the in-container binary. `meta_status` also
+  reports `cli.path_shadow`: non-null means another `rstudio` precedes this
+  binary in PATH (RStudio Server 2026.10 ships one in the terminal PATH).
+  A `.mcp.json` using `rstudio mcp` there silently fails
+  (`CONNECTION_CLOSED`); tell the user to invoke the `rstudio-cli` alias.
 - `tools_search` — find tools by keyword or category (see the
   "Discovering tools" section above). This is the canonical way to
   reach the ~85 tools that aren't in the core `tools/list`.

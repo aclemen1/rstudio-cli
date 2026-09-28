@@ -4,6 +4,28 @@ All notable changes to **rstudio-cli** are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-09-28
+
+### Added
+
+- **`rstudio-cli` alias, to survive RStudio Server 2026.10's `rstudio`
+  name collision.** 2026.10 ships its own `rstudio` script under
+  `/usr/lib/rstudio-server/bin/postback` and prepends that dir to the
+  terminal PATH, so a `.mcp.json` (or shell) using `rstudio mcp` there
+  hits Posit's script — which creates an empty file named `mcp` and exits
+  0 — and the MCP client reports `CONNECTION_CLOSED` with no error. The
+  binary now also installs under the collision-proof name `rstudio-cli`
+  (a symlink to `rstudio`) in the release archives and the Homebrew
+  formula. Docs and both skills recommend `rstudio-cli mcp` for MCP
+  config and for shells in an RStudio Server terminal. `docker compose
+  exec` / `ssh` transports are unaffected (no postback dir in their PATH),
+  so `--via`'s internal `rstudio mcp` is unchanged.
+- **`rstudio status` reports `cli.path_shadow`**: non-null (with the
+  shadowing path and the fix) when the first `rstudio` in PATH is not this
+  binary. `--format text` shows a one-line warning. Helps diagnose the
+  collision when the tool is reached as `rstudio-cli`. Reported by the
+  appdir26 integration.
+
 ## [0.21.4] — 2026-09-25
 
 ### Fixed

@@ -54,7 +54,11 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf rstudio-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz rstudio
+          # Ship a collision-proof alias alongside `rstudio`: RStudio Server
+          # 2026.10 puts its own `rstudio` script first in the terminal PATH,
+          # which shadows this binary. `rstudio-cli` is the safe invocation.
+          ln -sf rstudio rstudio-cli
+          tar czf rstudio-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz rstudio rstudio-cli
           mv rstudio-cli-${{ github.ref_name }}-${{ matrix.target }}.tar.gz $GITHUB_WORKSPACE/
 
       - name: Upload artifact

@@ -22,6 +22,7 @@
 //! context`, invoked when a client is present.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -58,6 +59,15 @@ pub fn run(rpc: &RpcClient<'_>, session: &Session, r_timeout: Duration) -> Resul
             Mode::Server => "server",
             Mode::Desktop => "desktop",
         },
+        // Warn when the first `rstudio` in PATH is NOT this binary. RStudio
+        // Server 2026.10 ships its own `rstudio` script under
+        // `/usr/lib/rstudio-server/bin/postback` and prepends that dir to the
+        // PATH of its terminal, so a `.mcp.json` or shell using `rstudio mcp`
+        // hits Posit's script (which just creates an empty file and exits 0),
+        // and the MCP client reports CONNECTION_CLOSED with no clue. `null`
+        // when we are first (or PATH can't be read); otherwise the shadowing
+        // path plus the fix.
+        "path_shadow": detect_path_shadow(),
     });
 
     let transport = match &session.transport {
@@ -189,8 +199,17 @@ fn format_as_text(v: &Value) -> String {
         _ => String::new(),
     };
 
+    // Shadow warning: only shown when another `rstudio` shadows us in PATH.
+    let shadow_line = match s(v, "/cli/path_shadow/path") {
+        Some(p) => {
+            format!("⚠ PATH shadow    `{p}` shadows rstudio-cli — use `rstudio-cli` (see below)\n")
+        }
+        None => String::new(),
+    };
+
     format!(
         "rstudio-cli {cli_version} — {mode_label} ({transport_str})\n\
+         {shadow_line}\
          user            {user}\n\
          session         {session_id}\n\
          client_id       {client_id}\n\
@@ -339,9 +358,92 @@ fn count_open_docs(session: &Session) -> usize {
         .count()
 }
 
+/// First `rstudio` found by scanning `path_var` left to right, accepted by
+/// `is_exec`. Mirrors how a shell resolves a bare command name. Pure (the
+/// filesystem check is injected) so it can be tested without a real PATH.
+fn first_rstudio_in_path(path_var: &str, is_exec: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    std::env::split_paths(path_var)
+        .map(|dir| dir.join("rstudio"))
+        .find(|cand| is_exec(cand))
+}
+
+/// `null` when the first `rstudio` in PATH is this binary (or PATH is
+/// unreadable); otherwise `{path, fix}` naming the shadowing binary. See the
+/// `cli.path_shadow` comment for why this matters (RStudio Server 2026.10).
+fn detect_path_shadow() -> Value {
+    let Ok(path_var) = std::env::var("PATH") else {
+        return Value::Null;
+    };
+    let Some(found) = first_rstudio_in_path(&path_var, is_executable_file) else {
+        return Value::Null;
+    };
+    // Compare resolved targets: we may have been invoked as the `rstudio-cli`
+    // alias (a symlink to `rstudio`), and the PATH hit may itself be a symlink.
+    let ours = std::env::current_exe().and_then(|p| p.canonicalize()).ok();
+    let found_real = found.canonicalize().ok();
+    if ours.is_some() && ours == found_real {
+        return Value::Null;
+    }
+    json!({
+        "path": found.display().to_string(),
+        "fix": "a different `rstudio` is earlier in PATH (e.g. RStudio Server's \
+                postback script); invoke this tool as `rstudio-cli` instead of \
+                `rstudio` in MCP config and shells",
+    })
+}
+
+/// Whether `p` is a regular file with an execute bit set.
+fn is_executable_file(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(p)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- PATH shadow detection ------------------------------------------
+
+    #[test]
+    fn first_rstudio_scans_path_left_to_right() {
+        let path = "/a:/b:/c";
+        // Only /b and /c have an executable rstudio; /b wins (leftmost).
+        let found = first_rstudio_in_path(path, |p| {
+            p == Path::new("/b/rstudio") || p == Path::new("/c/rstudio")
+        });
+        assert_eq!(found, Some(PathBuf::from("/b/rstudio")));
+    }
+
+    #[test]
+    fn first_rstudio_none_when_absent() {
+        assert_eq!(first_rstudio_in_path("/a:/b", |_| false), None);
+    }
+
+    #[test]
+    fn shadow_line_shown_only_when_present() {
+        let base = json!({
+            "cli": {"version": "0.0.0", "mode": "server"},
+            "transport": {"type": "unix-socket", "path": "/s"},
+            "session": {},
+            "rsession": {"debugger": null},
+            "documents": {"open_count": 0},
+        });
+        assert!(!format_as_text(&base).contains("PATH shadow"));
+
+        let mut shadowed = base.clone();
+        shadowed["cli"]["path_shadow"] = json!({
+            "path": "/usr/lib/rstudio-server/bin/postback/rstudio",
+            "fix": "use rstudio-cli",
+        });
+        let text = format_as_text(&shadowed);
+        assert!(text.contains("PATH shadow"), "{text}");
+        assert!(
+            text.contains("/usr/lib/rstudio-server/bin/postback/rstudio"),
+            "{text}"
+        );
+    }
 
     /// The `documents` block must carry only the client-independent
     /// open-count and a pointer to `editor active-id`; it must never carry

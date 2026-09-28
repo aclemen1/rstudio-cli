@@ -116,10 +116,16 @@ run in parallel — total wall time ≈ sum of per-call time. Implications:
 `rstudio mcp` exposes the entire CLI surface as MCP tools over stdio.
 A user configures their MCP client once. Variants per client:
 
+Use the `rstudio-cli` alias (not `rstudio`) in MCP config. RStudio
+Server 2026.10 ships its own `rstudio` script in the terminal PATH that
+shadows this binary and makes `rstudio mcp` create an empty file and exit
+(client shows `CONNECTION_CLOSED`). `rstudio status` flags this as
+`cli.path_shadow`.
+
 **Claude Code** (CLI):
 
 ```sh
-claude mcp add rstudio --scope user -- rstudio mcp
+claude mcp add rstudio --scope user -- rstudio-cli mcp
 ```
 
 **Claude Desktop** — edit `claude_desktop_config.json`
@@ -128,7 +134,7 @@ claude mcp add rstudio --scope user -- rstudio mcp
 ```json
 {
   "mcpServers": {
-    "rstudio": { "command": "rstudio", "args": ["mcp"] }
+    "rstudio": { "command": "rstudio-cli", "args": ["mcp"] }
   }
 }
 ```
