@@ -205,9 +205,16 @@ EOF
 cmd_up() {
   log "starting bridge"
 
-  # Cleanup any previous state
-  docker stop "$CONTAINER" 2>/dev/null || true
-  sleep 1
+  # Cleanup any previous state. `docker stop` on a `--rm` container triggers
+  # asynchronous removal: a following `docker run --name` can then race the
+  # still-"Removing" container and fail with `Conflict. The container name
+  # "/rstudio-bridge" is already in use` (exit 125) — seen between the live and
+  # destructive CI steps. Force-remove and wait until the name is actually free.
+  docker rm -f "$CONTAINER" 2>/dev/null || true
+  for _ in $(seq 1 60); do
+    docker inspect "$CONTAINER" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
 
   log "spawning $IMAGE"
   docker run -d --rm --name "$CONTAINER" \
